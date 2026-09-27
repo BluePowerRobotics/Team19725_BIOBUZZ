@@ -42,7 +42,46 @@ public class HypParams {
      * todo:红队自动停车姿态（单位：英寸，弧度）
      */
     public static Pose2d StopPoseRed = new Pose2d(0, 24, Math.PI);
-
+    /**
+     * todo:红队首个自动发射区域（单位：英寸）
+     */
+    public static Pose2d ShootFirstAreaRed = new Pose2d(60, -24, Math.PI);
+    /**
+     * todo:蓝队首个自动发射区域（单位：英寸）
+     */
+    public static Pose2d ShootFirstAreaBlue = new Pose2d(-60, 24, -Math.PI);
+    /**
+     * todo:红队第二自动发射区域（单位：英寸）
+     */
+    public static Pose2d ShootSecondAreaRed = new Pose2d(-60, -24, Math.PI);
+    /**
+     * todo:蓝队第二自动发射区域（单位：英寸）
+     */
+    public static Pose2d ShootSecondAreaBlue = new Pose2d(60, 24, -Math.PI);
+    /**
+     * todo:红队首个自动吃球区域（单位：英寸）
+     */
+    public static Pose2d EatFirstAreaRed = new Pose2d(60, -24, -Math.PI/2);
+    /**
+     * todo:蓝队首个自动吃球区域（单位：英寸）
+     */
+    public static Pose2d EatFirstAreaBlue = new Pose2d(-60, 24, Math.PI/2);
+    /**
+     * todo:红队第二自动吃球区域（单位：英寸）
+     */
+    public static Pose2d EatSecondAreaRed = new Pose2d(60, -24, Math.PI);
+    /**
+     * todo:蓝队第二自动吃球区域（单位：英寸）
+     */
+    public static Pose2d EatSecondAreaBlue = new Pose2d(-60, 24, Math.PI);
+    /**
+     * todo:红队第三自动吃球区域（单位：英寸）
+     */
+    public static Pose2d EatThirdAreaRed = new Pose2d(60, -24, -Math.PI/2);
+    /**
+     * todo:蓝队第三自动吃球区域（单位：英寸）
+     */
+    public static Pose2d EatThirdAreaBlue = new Pose2d(-60, 24, Math.PI/2);
     /**
      * todo:红队重置姿态（单位：英寸，弧度）
      * 包含初始位置(x, y)和初始朝向(theta)
