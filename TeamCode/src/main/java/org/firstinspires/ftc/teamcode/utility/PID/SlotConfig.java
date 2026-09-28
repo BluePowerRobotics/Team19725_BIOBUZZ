@@ -46,10 +46,10 @@ public class SlotConfig {
     public double kV = 0;
     /** 加速度系数 */
     public double kA = 0;
-    /** 输出最小值 */
-    public double outputMin = -14;
-    /** 输出最大值 */
-    public double outputMax = 14;
+    /** 输出最小值（对应 setPower 的 -1） */
+    public double outputMin = -1;
+    /** 输出最大值（对应 setPower 的 1） */
+    public double outputMax = 1;
 
     /**
      * 设置比例系数

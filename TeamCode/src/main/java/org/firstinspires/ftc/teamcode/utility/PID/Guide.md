@@ -116,6 +116,25 @@ SlotConfig config = new SlotConfig()
     .withOutputLimits(-1.0, 1.0); // 输出限幅
 ```
 
+### 5. 输出分量读取
+
+`PIDSVAController` 在每次 `calculate` 后会记录各分量贡献，可通过 getter 实时读取，用于遥测显示与整定诊断：
+
+```java
+// 读取最近一次总输出（限幅后）
+double output = controller.getLastOutput();
+
+// 读取各分量贡献（限幅前的原始值）
+double pTerm = controller.getLastPTerm();  // kP * error
+double iTerm = controller.getLastITerm();  // kI * integral
+double dTerm = controller.getLastDTerm();  // kD * derivative
+double sTerm = controller.getLastSTerm();  // kS * sign(velocity)
+double vTerm = controller.getLastVTerm();  // kV * velocity
+double aTerm = controller.getLastATerm();  // kA * acceleration
+```
+
+整定时将各分量加入 FTC Dashboard plot，可直观判断哪一项主导输出、积分是否饱和、前馈是否充足。
+
 ---
 
 ## 典型用法示例
@@ -159,7 +178,7 @@ motor.setPower(output);
 
 ## 注意事项
 
-1. `SlotConfig` 的默认输出限幅为 `-14.0 ~ 14.0`，请根据实际驱动能力用 `withOutputLimits` 调整
+1. `SlotConfig` 的默认输出限幅为 `-1.0 ~ 1.0`（对应 `setPower` 的功率范围）；如需电压控制（`setVoltage`），可用 `withOutputLimits(-14.0, 14.0)` 调整
 2. `resetSlot` 会用新构建的 `SlotConfig` 整体替换原配置；未被 `withXxx` 覆盖的字段会回到默认值，更新个别参数时请先构建包含完整参数的 `SlotConfig`
 3. 切换 slot 会重置积分与微分状态
 4. `PIDController` 没有 4 参数构造函数，需同时指定 `maxI` 和 `iZone` 时使用 5 参数版本

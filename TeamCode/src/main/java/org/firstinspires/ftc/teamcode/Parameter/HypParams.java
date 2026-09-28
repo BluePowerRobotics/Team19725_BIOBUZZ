@@ -43,21 +43,49 @@ public class HypParams {
      */
     public static Pose2d StopPoseRed = new Pose2d(0, 24, Math.PI);
     /**
-     * todo:红队首个自动发射区域（单位：英寸）
+     * 红队首个自动发射区域（单位：英寸，凸多边形顶点）。
+     * 顶点：(24,-12)、(48,-30)、(48,-3)、(72,-30)、(72,-3)。
      */
-    public static Pose2d ShootFirstAreaRed = new Pose2d(60, -24, Math.PI);
+    public static ConvexPolygon ShootFirstAreaRed = new ConvexPolygon(
+            new Vector2D(24, -12),
+            new Vector2D(48, -30),
+            new Vector2D(48, -3),
+            new Vector2D(72, -30),
+            new Vector2D(72, -3)
+    );
     /**
-     * todo:蓝队首个自动发射区域（单位：英寸）
+     * 蓝队首个自动发射区域：红队首个发射区域的 x 轴镜像（y 取反）。
+     * 顶点：(24,12)、(48,30)、(48,3)、(72,30)、(72,3)。
      */
-    public static Pose2d ShootFirstAreaBlue = new Pose2d(-60, 24, -Math.PI);
+    public static ConvexPolygon ShootFirstAreaBlue = new ConvexPolygon(
+            new Vector2D(24, 12),
+            new Vector2D(48, 30),
+            new Vector2D(48, 3),
+            new Vector2D(72, 30),
+            new Vector2D(72, 3)
+    );
     /**
-     * todo:红队第二自动发射区域（单位：英寸）
+     * 红队第二自动发射区域：红队首个发射区域的 y 轴镜像（x 取反）。
+     * 顶点：(-24,-12)、(-48,-30)、(-48,-3)、(-72,-30)、(-72,-3)。
      */
-    public static Pose2d ShootSecondAreaRed = new Pose2d(-60, -24, Math.PI);
+    public static ConvexPolygon ShootSecondAreaRed = new ConvexPolygon(
+            new Vector2D(-24, -12),
+            new Vector2D(-48, -30),
+            new Vector2D(-48, -3),
+            new Vector2D(-72, -30),
+            new Vector2D(-72, -3)
+    );
     /**
-     * todo:蓝队第二自动发射区域（单位：英寸）
+     * 蓝队第二自动发射区域：蓝队首个发射区域的 y 轴镜像（x 取反）。
+     * 顶点：(-24,12)、(-48,30)、(-48,3)、(-72,30)、(-72,3)。
      */
-    public static Pose2d ShootSecondAreaBlue = new Pose2d(60, 24, -Math.PI);
+    public static ConvexPolygon ShootSecondAreaBlue = new ConvexPolygon(
+            new Vector2D(-24, 12),
+            new Vector2D(-48, 30),
+            new Vector2D(-48, 3),
+            new Vector2D(-72, 30),
+            new Vector2D(-72, 3)
+    );
     /**
      * todo:红队首个自动吃球区域（单位：英寸）
      */

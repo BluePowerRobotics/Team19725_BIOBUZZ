@@ -17,6 +17,22 @@ public class PIDSVAController {
     /** 上一次的误差值 */
     private double previousError = 0;
 
+    // ==================== 最近一次输出的分量（供实时显示/诊断） ====================
+    /** 最近一次总输出 */
+    private double lastOutput = 0;
+    /** 最近一次 P 项贡献 */
+    private double lastPTerm = 0;
+    /** 最近一次 I 项贡献 */
+    private double lastITerm = 0;
+    /** 最近一次 D 项贡献 */
+    private double lastDTerm = 0;
+    /** 最近一次 S 项贡献 */
+    private double lastSTerm = 0;
+    /** 最近一次 V 项贡献 */
+    private double lastVTerm = 0;
+    /** 最近一次 A 项贡献 */
+    private double lastATerm = 0;
+
     /**
      * 快速设置默认slot(0号slot)的PID和SVA参数
      * @param config SlotConfig配置对象
@@ -127,6 +143,14 @@ public class PIDSVAController {
         // 输出限幅
         if (output > cfg.outputMax) output = cfg.outputMax;
         if (output < cfg.outputMin) output = cfg.outputMin;
+        // 记录各分量，供实时显示/诊断
+        lastOutput = output;
+        lastPTerm = cfg.kP * error;
+        lastITerm = cfg.kI * integral;
+        lastDTerm = cfg.kD * derivative;
+        lastSTerm = cfg.kS * Math.signum(velocity);
+        lastVTerm = cfg.kV * velocity;
+        lastATerm = cfg.kA * acceleration;
         // 返回输出
         return output;
     }
@@ -138,4 +162,21 @@ public class PIDSVAController {
         integral = 0;
         previousError = 0;
     }
+
+    // ==================== 输出分量读取（供实时显示/诊断） ====================
+
+    /** @return 最近一次总输出（限幅后） */
+    public double getLastOutput() { return lastOutput; }
+    /** @return 最近一次 P 项贡献 */
+    public double getLastPTerm() { return lastPTerm; }
+    /** @return 最近一次 I 项贡献 */
+    public double getLastITerm() { return lastITerm; }
+    /** @return 最近一次 D 项贡献 */
+    public double getLastDTerm() { return lastDTerm; }
+    /** @return 最近一次 S 项贡献 */
+    public double getLastSTerm() { return lastSTerm; }
+    /** @return 最近一次 V 项贡献 */
+    public double getLastVTerm() { return lastVTerm; }
+    /** @return 最近一次 A 项贡献 */
+    public double getLastATerm() { return lastATerm; }
 }

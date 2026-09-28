@@ -141,6 +141,24 @@ public class PrototypeShooter {
         motor.setPower(power);
     }
 
+    // ==================== 标定辅助 ====================
+
+    /**
+     * 直接开环设定功率，绕过闭环（供 kS/kV 标定使用，见 ShooterTuningTester）。
+     * 调用后下一帧闭环 {@link #update()} 会重新接管输出；切回闭环前请先调用 {@link #resetController()}。
+     *
+     * @param power 电机功率 [-1, 1]
+     */
+    public void setOpenLoopPower(double power) {
+        this.power = power;
+        motor.setPower(power);
+    }
+
+    /** 重置闭环控制器的积分与微分状态（从开环切回闭环前调用） */
+    public void resetController() {
+        controller.reset();
+    }
+
     // ==================== 读取 ====================
 
     /** @return 当前转速 (tick/s) */
@@ -175,5 +193,11 @@ public class PrototypeShooter {
         telemetry.addData("Shooter error (tick/s)", "%.0f", getError());
         telemetry.addData("Shooter power", "%.3f", power);
         telemetry.addData("Shooter current (A)", "%.2f", getCurrent());
+        // 输出分量分解，便于整定时判断各项贡献
+        telemetry.addData("Shooter P term", "%.4f", controller.getLastPTerm());
+        telemetry.addData("Shooter I term", "%.4f", controller.getLastITerm());
+        telemetry.addData("Shooter D term", "%.4f", controller.getLastDTerm());
+        telemetry.addData("Shooter S term", "%.4f", controller.getLastSTerm());
+        telemetry.addData("Shooter V term", "%.4f", controller.getLastVTerm());
     }
 }

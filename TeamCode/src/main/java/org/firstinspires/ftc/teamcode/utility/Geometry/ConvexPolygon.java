@@ -5,10 +5,32 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import org.firstinspires.ftc.teamcode.utility.Vector2D;
 
+/**
+ * 凸多边形类，用于描述平面凸多边形并基于其几何性质提供常用运算。
+ *
+ * <p>每个凸多边形由一组顶点定义，顶点总数 {@code n >= 3}，否则构造时抛出异常。
+ * 构造函数会将传入顶点按<b>逆时针</b>顺序排序，并校验多边形的凸性；
+ * 若顶点不能构成凸多边形则抛出 {@link IllegalArgumentException}。
+ *
+ * <p>支持的能力包括：坐标转换（绝对坐标 ↔ 相对坐标）、点/多边形包含检测、
+ * 多边形相交判定、多边形交集计算（Sutherland-Hodgman 裁剪算法）、
+ * 以及点到多边形边界的最近向量计算。
+ */
 public class ConvexPolygon {
+    /** 多边形顶点数组，已按逆时针顺序排列 */
     private Vector2D[] vertices;
+    /** 顶点数量 */
     private int n;
 
+    /**
+     * 构造凸多边形。
+     *
+     * <p>将传入的顶点数组克隆后按逆时针方向排序，并校验凸性。
+     * 若顶点数不足 3 个或不构成凸多边形则抛出异常。
+     *
+     * @param vertices 顶点数组，长度必须 >= 3
+     * @throws IllegalArgumentException 顶点为空、数量不足 3，或不构成凸多边形时抛出
+     */
     public ConvexPolygon(Vector2D[] vertices) {
         if (vertices == null || vertices.length < 3) {
             throw new IllegalArgumentException("ConvexPolygon requires at least 3 vertices");
@@ -20,22 +42,32 @@ public class ConvexPolygon {
         }
     }
 
+    /** 三角形便捷构造函数 */
     public ConvexPolygon(Vector2D p1, Vector2D p2, Vector2D p3) {
         this(new Vector2D[]{p1, p2, p3});
     }
 
+    /** 四边形便捷构造函数 */
     public ConvexPolygon(Vector2D p1, Vector2D p2, Vector2D p3, Vector2D p4) {
         this(new Vector2D[]{p1, p2, p3, p4});
     }
 
+    /** 五边形便捷构造函数 */
     public ConvexPolygon(Vector2D p1, Vector2D p2, Vector2D p3, Vector2D p4, Vector2D p5) {
         this(new Vector2D[]{p1, p2, p3, p4, p5});
     }
 
+    /** 六边形便捷构造函数 */
     public ConvexPolygon(Vector2D p1, Vector2D p2, Vector2D p3, Vector2D p4, Vector2D p5, Vector2D p6) {
         this(new Vector2D[]{p1, p2, p3, p4, p5, p6});
     }
 
+    /**
+     * 将顶点按逆时针（CCW）方向排序。
+     *
+     * <p>先计算所有顶点的几何中心，再按各顶点相对中心的极角升序排列；
+     * 最后通过有符号面积判断方向，若为顺时针则反转数组，确保结果为逆时针。
+     */
     private Vector2D[] sortVerticesCCW(Vector2D[] verts) {
         double centerX = 0, centerY = 0;
         for (Vector2D p : verts) {
@@ -61,6 +93,11 @@ public class ConvexPolygon {
         return verts;
     }
 
+    /**
+     * 计算多边形的有符号面积（鞋带公式）。
+     *
+     * <p>逆时针多边形返回正值，顺时针返回负值，绝对值为面积的两倍。
+     */
     private double signedArea(Vector2D[] verts) {
         double area = 0;
         int m = verts.length;
@@ -72,6 +109,7 @@ public class ConvexPolygon {
         return area / 2;
     }
 
+    /** 原地反转数组 */
     private void reverseArray(Vector2D[] verts) {
         int i = 0, j = verts.length - 1;
         while (i < j) {
@@ -83,6 +121,14 @@ public class ConvexPolygon {
         }
     }
 
+    /**
+     * 判断当前顶点序列是否构成凸多边形。
+     *
+     * <p>依次计算每三个连续顶点的叉积：若叉积同时出现正负号则存在凹角，返回 false；
+     * 若所有叉积均接近零（共线）也返回 false。
+     *
+     * @return 是否为凸多边形
+     */
     public boolean isConvex() {
         if (n < 3) return false;
 
@@ -108,6 +154,11 @@ public class ConvexPolygon {
         return true;
     }
 
+    /**
+     * 计算三个点 p1→p2→p3 的叉积，用于判断转向。
+     *
+     * @return 正值表示左转（逆时针），负值表示右转（顺时针），零表示共线
+     */
     private double crossProduct(Vector2D p1, Vector2D p2, Vector2D p3) {
         double vx1 = p2.getX() - p1.getX();
         double vy1 = p2.getY() - p1.getY();
@@ -116,6 +167,17 @@ public class ConvexPolygon {
         return vx1 * vy2 - vy1 * vx2;
     }
 
+    /**
+     * 将当前多边形从<b>绝对坐标系</b>转换到以 {@code (x, y)} 为原点、
+     * 坐标轴旋转 {@code theta} 的<b>相对坐标系</b>。
+     *
+     * <p>变换顺序：先平移 {@code (-x, -y)}，再旋转 {@code theta} 角度。
+     *
+     * @param x     相对坐标系原点在绝对坐标系中的 x 坐标
+     * @param y     相对坐标系原点在绝对坐标系中的 y 坐标
+     * @param theta 相对坐标系相对绝对坐标系的旋转角（弧度）
+     * @return 变换后的新凸多边形
+     */
     public ConvexPolygon inRelative(double x, double y, double theta) {
         Vector2D[] transformed = new Vector2D[n];
         for (int i = 0; i < n; i++) {
@@ -127,10 +189,29 @@ public class ConvexPolygon {
         return new ConvexPolygon(transformed);
     }
 
+    /**
+     * 将当前多边形从绝对坐标系转换到以位姿 {@code p} 为参考的相对坐标系。
+     *
+     * <p>等价于 {@code inRelative(p.position.x, p.position.y, p.heading)}。
+     *
+     * @param p 参考位姿（原点 + 朝向）
+     * @return 变换后的新凸多边形
+     */
     public ConvexPolygon inRelative(Pose2d p) {
         return inRelative(p.position.x, p.position.y, p.heading.toDouble());
     }
 
+    /**
+     * 将当前多边形从<b>相对坐标系</b>转换回<b>绝对坐标系</b>。
+     *
+     * <p>变换顺序：先旋转 {@code -theta}，再平移 {@code (x, y)}。
+     * 即 {@link #inRelative(double, double, double)} 的逆变换。
+     *
+     * @param x     相对坐标系原点在绝对坐标系中的 x 坐标
+     * @param y     相对坐标系原点在绝对坐标系中的 y 坐标
+     * @param theta 相对坐标系相对绝对坐标系的旋转角（弧度）
+     * @return 变换后的新凸多边形
+     */
     public ConvexPolygon inAbsolute(double x, double y, double theta) {
         Vector2D[] transformed = new Vector2D[n];
         for (int i = 0; i < n; i++) {
@@ -140,14 +221,40 @@ public class ConvexPolygon {
         return new ConvexPolygon(transformed);
     }
 
+    /**
+     * 将当前多边形从相对坐标系转换回以位姿 {@code p} 为参考的绝对坐标系。
+     *
+     * <p>等价于 {@code inAbsolute(p.position.x, p.position.y, p.heading)}。
+     *
+     * @param p 参考位姿（原点 + 朝向）
+     * @return 变换后的新凸多边形
+     */
     public ConvexPolygon inAbsolute(Pose2d p) {
         return inAbsolute(p.position.x, p.position.y, p.heading.toDouble());
     }
 
+    /**
+     * 计算由点 {@code (x, y)} 指向当前多边形上离其最近点的向量。
+     *
+     * <p>若点在多边形内部（含边界），返回零向量。
+     *
+     * @param x 点的 x 坐标
+     * @param y 点的 y 坐标
+     * @return 指向多边形最近点的向量
+     */
     public Vector2D NearestVectorFrom(double x, double y) {
         return NearestVectorFrom(new Vector2D(x, y));
     }
 
+    /**
+     * 计算由点 {@code p} 指向当前多边形上离其最近点的向量。
+     *
+     * <p>遍历每条边，求点到线段的最近点，取距离最小者。
+     * 若点在多边形内部（含边界），返回零向量。
+     *
+     * @param p 输入点
+     * @return 指向多边形最近点的向量
+     */
     public Vector2D NearestVectorFrom(Vector2D p) {
         if (Contains(p)) {
             return new Vector2D(0, 0);
@@ -173,6 +280,9 @@ public class ConvexPolygon {
         return new Vector2D(nearest.getX() - p.getX(), nearest.getY() - p.getY());
     }
 
+    /**
+     * 求点 {@code p} 在线段 {@code v1-v2} 上的最近点（投影并夹到 [0,1]）。
+     */
     private Vector2D closestPointOnSegment(Vector2D p, Vector2D v1, Vector2D v2) {
         double dx = v2.getX() - v1.getX();
         double dy = v2.getY() - v1.getY();
@@ -185,10 +295,26 @@ public class ConvexPolygon {
         return new Vector2D(v1.getX() + t * dx, v1.getY() + t * dy);
     }
 
+    /**
+     * 判断点 {@code (x, y)} 是否在当前凸多边形内部（含边界）。
+     *
+     * <p>对严格逆时针凸多边形，点在内部（含边界）的充要条件是：
+     * 对每条边 ViVi+1，点 P 均在边的左侧，即叉积 (ViVi+1) × (ViP) >= 0（允许数值误差）。
+     *
+     * @param x 点的 x 坐标
+     * @param y 点的 y 坐标
+     * @return 点是否在多边形内（含边界）
+     */
     public boolean Contains(double x, double y) {
         return Contains(new Vector2D(x, y));
     }
 
+    /**
+     * 判断点 {@code p} 是否在当前凸多边形内部（含边界）。
+     *
+     * @param p 输入点
+     * @return 点是否在多边形内（含边界）
+     */
     public boolean Contains(Vector2D p) {
         for (int i = 0; i < n; i++) {
             Vector2D v1 = vertices[i];
@@ -201,6 +327,14 @@ public class ConvexPolygon {
         return true;
     }
 
+    /**
+     * 判断另一个凸多边形 {@code other} 是否完全包含在当前多边形内（含边界）。
+     *
+     * <p>实现方法：逐一检查 {@code other} 的所有顶点是否都在当前多边形内。
+     *
+     * @param other 待检测的凸多边形
+     * @return other 是否完全包含于当前多边形
+     */
     public boolean Contains(ConvexPolygon other) {
         for (int i = 0; i < other.n; i++) {
             if (!Contains(other.vertices[i])) {
@@ -210,6 +344,14 @@ public class ConvexPolygon {
         return true;
     }
 
+    /**
+     * 判断当前凸多边形与 {@code other} 是否相交（含边界接触）。
+     *
+     * <p>判定方式：任一多边形的顶点落在另一多边形内，或两边的线段相交。
+     *
+     * @param other 另一个凸多边形
+     * @return 是否相交
+     */
     public boolean IsIntersected(ConvexPolygon other) {
         for (int i = 0; i < n; i++) {
             if (other.Contains(vertices[i])) {
@@ -240,6 +382,9 @@ public class ConvexPolygon {
         return false;
     }
 
+    /**
+     * 判断两条线段 p1p2 与 p3p4 是否相交（含端点接触与共线重叠）。
+     */
     private boolean segmentsIntersect(Vector2D p1, Vector2D p2, Vector2D p3, Vector2D p4) {
         double d1 = isLeft(p3, p4, p1);
         double d2 = isLeft(p3, p4, p2);
@@ -259,6 +404,9 @@ public class ConvexPolygon {
         return false;
     }
 
+    /**
+     * 判断点 q 是否在线段 p1p2 的轴对齐包围盒内（共线时用于判定点是否落在线段上）。
+     */
     private boolean onSegment(Vector2D p1, Vector2D p2, Vector2D q) {
         return Math.min(p1.getX(), p2.getX()) - 1e-10 <= q.getX() &&
                q.getX() <= Math.max(p1.getX(), p2.getX()) + 1e-10 &&
@@ -266,6 +414,19 @@ public class ConvexPolygon {
                q.getY() <= Math.max(p1.getY(), p2.getY()) + 1e-10;
     }
 
+    /**
+     * 计算当前凸多边形与 {@code clip} 的交集多边形。
+     *
+     * <p>采用 <b>Sutherland-Hodgman</b> 多边形裁剪算法：依次用裁剪多边形（clip）
+     * 的每条边作为裁剪线，对被裁剪多边形（subject）进行裁剪。由于两个多边形均为凸，
+     * 交集仍为凸多边形。处理完所有裁剪边后，移除顶点序列中的共线点，得到严格凸的交集。
+     *
+     * <p>若两个多边形不相交，或交集退化为点/线段（最终顶点数 < 3），抛出异常。
+     *
+     * @param clip 裁剪多边形
+     * @return 交集凸多边形
+     * @throws IllegalStateException 多边形不相交或交集退化时抛出
+     */
     public ConvexPolygon IntersectWith(ConvexPolygon clip) {
         if (!this.IsIntersected(clip)) {
             throw new IllegalStateException("Polygons do not intersect");
@@ -322,11 +483,21 @@ public class ConvexPolygon {
         return new ConvexPolygon(result);
     }
 
+    /**
+     * 计算点 p 在有向边 v1→v2 的左侧还是右侧。
+     *
+     * @return 正值表示 p 在边左侧，负值表示右侧，零表示共线
+     */
     private double isLeft(Vector2D v1, Vector2D v2, Vector2D p) {
         return (v2.getX() - v1.getX()) * (p.getY() - v1.getY()) -
                (v2.getY() - v1.getY()) * (p.getX() - v1.getX());
     }
 
+    /**
+     * 计算直线 p1p2 与直线 p3p4 的交点。
+     *
+     * <p>若两直线平行（分母接近零），返回 p1 作为退化结果。
+     */
     private Vector2D lineIntersection(Vector2D p1, Vector2D p2, Vector2D p3, Vector2D p4) {
         double x1 = p1.getX(), y1 = p1.getY();
         double x2 = p2.getX(), y2 = p2.getY();
@@ -343,6 +514,9 @@ public class ConvexPolygon {
         return new Vector2D(x1 + t * (x2 - x1), y1 + t * (y2 - y1));
     }
 
+    /**
+     * 移除顶点序列中前后共线的中间点，得到严格凸的顶点列表。
+     */
     private Vector2D[] removeCollinearPoints(Vector2D[] pts) {
         int n = pts.length;
         if (n <= 3) return pts;
@@ -361,14 +535,23 @@ public class ConvexPolygon {
         return result.toArray(new Vector2D[0]);
     }
 
+    /** @return 顶点数量 */
     public int getVertexCount() {
         return n;
     }
 
+    /** @return 顶点数组的拷贝（逆时针顺序） */
     public Vector2D[] getVertices() {
         return vertices.clone();
     }
 
+    /**
+     * 获取指定索引的顶点。
+     *
+     * @param index 顶点索引
+     * @return 对应的顶点
+     * @throws IndexOutOfBoundsException 索引越界时抛出
+     */
     public Vector2D getVertex(int index) {
         if (index < 0 || index >= n) {
             throw new IndexOutOfBoundsException("Vertex index out of bounds");
