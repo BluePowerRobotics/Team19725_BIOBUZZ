@@ -21,6 +21,18 @@ android {
     packagingOptions {
         jniLibs.useLegacyPackaging true
     }
+
+    testOptions {
+        unitTests.returnDefaultValues = true
+        unitTests.all {
+            // JDK 16+ 模块访问限制：Mockito inline mock maker（mockito-inline）
+            // 需要字节码 instrument，需开放 java.base 内部包，否则无法 mock 普通类/final 类。
+            jvmArgs '--add-opens', 'java.base/java.lang=ALL-UNNAMED'
+            jvmArgs '--add-opens', 'java.base/java.lang.reflect=ALL-UNNAMED'
+            jvmArgs '--add-opens', 'java.base/java.util=ALL-UNNAMED'
+            jvmArgs '--add-opens', 'java.base/java.io=ALL-UNNAMED'
+        }
+    }
 }
 
 repositories {
@@ -37,4 +49,18 @@ dependencies {
     implementation "com.acmerobotics.roadrunner:actions:1.0.1"
     implementation "com.acmerobotics.dashboard:dashboard:0.5.1"
     implementation "org.ejml:ejml-simple:0.43.1"
+
+    // 单元测试
+    testImplementation 'junit:junit:4.13.2'
+    // Mockito 5.x：内置 inline mock maker（无需 mockito-inline），原生支持 JDK 17/21
+    testImplementation 'org.mockito:mockito-core:5.12.0'
+}
+
+// JDK 16+ 模块访问限制：Mockito inline mock maker 需 instrument java.lang.Object 等，
+// 必须开放 java.base 内部包。直接作用于所有 Test 任务，确保 AGP 单元测试也生效。
+tasks.withType(org.gradle.api.tasks.testing.Test).configureEach {
+    jvmArgs '--add-opens', 'java.base/java.lang=ALL-UNNAMED'
+    jvmArgs '--add-opens', 'java.base/java.lang.reflect=ALL-UNNAMED'
+    jvmArgs '--add-opens', 'java.base/java.util=ALL-UNNAMED'
+    jvmArgs '--add-opens', 'java.base/java.io=ALL-UNNAMED'
 }

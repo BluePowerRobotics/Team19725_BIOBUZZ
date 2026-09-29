@@ -111,6 +111,22 @@ public class HypParams {
      */
     public static Pose2d EatThirdAreaBlue = new Pose2d(-60, 24, Math.PI/2);
     /**
+     * 底盘半长（英寸）：底盘中心到最后端 / 最前端中点的距离。
+     * 用于在「最后端中点坐标」与「底盘中心坐标」之间换算，以及由 intake 目标点反推中心位姿。
+     * todo: 实机测量标定
+     */
+    public static double chassisHalfLengthIn = 9.0;
+
+    /**
+     * 第一个取球点（intake 目标点，单位：英寸）。
+     */
+    public static Vector2D EatPoint1 = new Vector2D(24, -72);
+    /**
+     * 第二个取球点（intake 目标点，单位：英寸）。
+     */
+    public static Vector2D EatPoint2 = new Vector2D(-72, -24);
+
+    /**
      * todo:红队重置姿态（单位：英寸，弧度）
      * 包含初始位置(x, y)和初始朝向(theta)
      */

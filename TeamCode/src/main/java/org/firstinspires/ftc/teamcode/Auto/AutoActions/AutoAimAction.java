@@ -116,7 +116,7 @@ public class AutoAimAction implements Action {
         drive.setDrivePowers(new PoseVelocity2d(new Vector2d(0, 0), omega));
 
         // ---- 收敛判定：航向误差与实际角速度同时持续小于容差 ----
-        long elapsedMs = timer.milliseconds();
+        long elapsedMs = (long) timer.milliseconds();
         boolean aligned = Math.abs(error) <= headingTol
                 && Math.abs(robotPosition.getOmega()) <= omegaTol;
         if (aligned) {

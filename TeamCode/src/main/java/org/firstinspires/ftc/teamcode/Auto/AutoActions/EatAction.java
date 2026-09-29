@@ -46,7 +46,7 @@ public class EatAction implements Action {
             initialized = true;
         }
 
-        long elapsedMs = timer.milliseconds();
+        long elapsedMs = (long) timer.milliseconds();
         if (elapsedMs >= durationMs) {
             // 到时停转，避免 Sweeper 在 Action 结束后继续维持吃球速度
             sweeper.setStop();
