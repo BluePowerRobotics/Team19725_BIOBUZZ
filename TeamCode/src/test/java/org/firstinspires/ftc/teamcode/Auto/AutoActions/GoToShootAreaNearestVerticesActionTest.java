@@ -8,6 +8,7 @@ import static org.mockito.Mockito.when;
 import com.acmerobotics.dashboard.telemetry.TelemetryPacket;
 import com.acmerobotics.roadrunner.Pose2d;
 
+import org.firstinspires.ftc.teamcode.Parameter.HypParams;
 import org.firstinspires.ftc.teamcode.Parameter.TeamColor;
 import org.junit.Test;
 
@@ -15,11 +16,11 @@ import org.junit.Test;
 public class GoToShootAreaNearestVerticesActionTest {
 
     @Test
-    public void construct_redAndBlue_succeeds() {
+    public void construct_redAndBlue_succeed() {
         Pose2d start = new Pose2d(0, 0, 0);
         try (MockRobot m = new MockRobot(start)) {
-            new GoToShootAreaNearestVerticesAction(TeamColor.RED);
-            new GoToShootAreaNearestVerticesAction(TeamColor.BLUE);
+            new GoToShootAreaNearestVerticesAction(TeamColor.RED, HypParams.RedAudienceUp);
+            new GoToShootAreaNearestVerticesAction(TeamColor.BLUE, HypParams.BlueAudienceDown);
         }
     }
 
@@ -31,7 +32,7 @@ public class GoToShootAreaNearestVerticesActionTest {
             when(m.trajectoryAction.run(any(TelemetryPacket.class)))
                     .thenReturn(true, false, false);
             GoToShootAreaNearestVerticesAction action =
-                    new GoToShootAreaNearestVerticesAction(TeamColor.RED);
+                    new GoToShootAreaNearestVerticesAction(TeamColor.RED, HypParams.RedAudienceUp);
 
             assertTrue(action.run(new TelemetryPacket()));   // 第一段运行中
             assertFalse(action.run(new TelemetryPacket()));  // 第一段结束 + 第二段结束
@@ -46,7 +47,7 @@ public class GoToShootAreaNearestVerticesActionTest {
             when(m.trajectoryAction.run(any(TelemetryPacket.class)))
                     .thenReturn(false, true, true, false);
             GoToShootAreaNearestVerticesAction action =
-                    new GoToShootAreaNearestVerticesAction(TeamColor.BLUE);
+                    new GoToShootAreaNearestVerticesAction(TeamColor.BLUE, HypParams.BlueAudienceUp);
 
             assertTrue(action.run(new TelemetryPacket()));   // 第一段结束，第二段运行中
             assertTrue(action.run(new TelemetryPacket()));   // 第二段运行中
