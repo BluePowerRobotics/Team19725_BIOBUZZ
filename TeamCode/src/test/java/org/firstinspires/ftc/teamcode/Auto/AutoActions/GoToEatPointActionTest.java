@@ -8,25 +8,31 @@ import static org.mockito.Mockito.when;
 import com.acmerobotics.dashboard.telemetry.TelemetryPacket;
 import com.acmerobotics.roadrunner.Pose2d;
 
-import org.firstinspires.ftc.teamcode.Parameter.TeamColor;
 import org.junit.Test;
 
-/** {@link GoToThirdEatPointAction} 单元测试。 */
-public class GoToThirdEatPointActionTest {
+/** {@link GoToEatPointAction} 单元测试。 */
+public class GoToEatPointActionTest {
 
     @Test
-    public void construct_redAndBlue_succeeds() {
+    public void construct_firstAndSecond_succeed() {
+        try (MockRobot m = new MockRobot(new Pose2d(81, -12, 0))) {
+            new GoToEatPointAction(GoToEatPointAction.FIRST);
+            new GoToEatPointAction(GoToEatPointAction.SECOND);
+        }
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void construct_invalidPointIndex_throws() {
         try (MockRobot m = new MockRobot(new Pose2d(0, 0, 0))) {
-            new GoToThirdEatPointAction(TeamColor.RED);
-            new GoToThirdEatPointAction(TeamColor.BLUE);
+            new GoToEatPointAction(3);
         }
     }
 
     @Test
     public void run_delegatesToTrajectory() {
-        try (MockRobot m = new MockRobot(new Pose2d(0, 0, 0))) {
+        try (MockRobot m = new MockRobot(new Pose2d(81, -12, 0))) {
             when(m.trajectoryAction.run(any(TelemetryPacket.class))).thenReturn(true);
-            GoToThirdEatPointAction action = new GoToThirdEatPointAction(TeamColor.RED);
+            GoToEatPointAction action = new GoToEatPointAction(GoToEatPointAction.FIRST);
             assertTrue(action.run(new TelemetryPacket()));
 
             when(m.trajectoryAction.run(any(TelemetryPacket.class))).thenReturn(false);
