@@ -14,6 +14,7 @@ import org.firstinspires.ftc.teamcode.Parameter.TeamColor;
 import org.firstinspires.ftc.teamcode.Processors.RobotPosition.RobotPosition;
 import org.firstinspires.ftc.teamcode.RoadRunner.MecanumDrive;
 import org.firstinspires.ftc.teamcode.utility.ActionRunner;
+import org.firstinspires.ftc.teamcode.utility.RobotStateStore;
 
 //todo：实现完整的状态机
 /**
@@ -60,6 +61,9 @@ public class AutoBlue extends LinearOpMode {
 
         waitForStart();
 
+        // ===== 自动阶段开始：清空上一局遗留的机器状态，避免手动阶段读到陈旧数据 =====
+        RobotStateStore.clear();
+
         // 比赛计时从 START 按下后开始
         ElapsedTime matchTime = new ElapsedTime();
 
@@ -102,6 +106,10 @@ public class AutoBlue extends LinearOpMode {
             telemetry.addData("Remaining(ms)", remainingMs);
             telemetry.update();
         }
+
+        // ===== 自动阶段结束：记录结束时刻的机器状态（位姿），供手动阶段初始化时读回；
+        // 状态写入文件并落盘，机器人断电后仍然有效 =====
+        RobotStateStore.savePose(RobotPosition.getInstance().getPose2d());
 
         // 确保底盘停稳
         chassis.stop();

@@ -13,6 +13,7 @@ import org.firstinspires.ftc.teamcode.RoadRunner.Drawing;
 import org.firstinspires.ftc.teamcode.utility.ActionRunner;
 import org.firstinspires.ftc.teamcode.Parameter.HypParams;
 import org.firstinspires.ftc.teamcode.Parameter.TeamColor;
+import org.firstinspires.ftc.teamcode.utility.RobotStateStore;
 
 @com.qualcomm.robotcore.eventloop.opmode.TeleOp(name = "TeleOpRed", group = "TeleOp")
 public class TeleOpRed extends LinearOpMode {
@@ -37,12 +38,21 @@ public class TeleOpRed extends LinearOpMode {
 
         teamColor = TeamColor.RED;
 
+        // ---- 读回自动阶段结束时刻持久化的机器状态，作为手动阶段的初始位姿 ----
+        // 机器人自动结束后的实际位置就是手动阶段的起点，无需人工重新摆放/重置定位；
+        // 无有效记录时（未跑自动 / 自动未完成 / 手动调试）回退到默认停车位姿
+        Pose2d storedPose = RobotStateStore.loadPose();
+        Pose2d initPose = (storedPose != null) ? storedPose : HypParams.StopPoseRed;
+
         actionRunner = new ActionRunner();
-        chassis = new Chassis(hardwareMap, teamColor, actionRunner, telemetry, true);
+        chassis = new Chassis(hardwareMap, teamColor, actionRunner, telemetry, initPose);
         sweeper = new Sweeper(hardwareMap, telemetry);
 
         telemetry.addData("Status", "Initialized");
         telemetry.addData("Team Color", teamColor == TeamColor.BLUE ? "BLUE" : "RED");
+        telemetry.addData("Init Pose Source", storedPose != null ? "Stored robot state" : "Default StopPose");
+        telemetry.addData("Init Pose", "%.2f, %.2f, %.1f deg",
+                initPose.position.x, initPose.position.y, Math.toDegrees(initPose.heading.toDouble()));
         telemetry.addData("--- P1 Controls ---", "");
         telemetry.addData("Left Stick", "Chassis Drive");
         telemetry.addData("Right Stick X", "Chassis Rotation (disabled while aiming)");
