@@ -98,6 +98,8 @@ public class Shooter {
 
     private final Params params;
     private final Telemetry telemetry;
+    /** 飞轮电机设备名，同时用作遥测条目的前缀（大球/小球两个实例的 caption 必须可区分） */
+    private final String name;
     /** 复用同一个 slot：每帧用 withXxx 刷新参数后 resetSlot（见 SlotConfig 类注释） */
     private final PIDSVAController controller = new PIDSVAController();
     private final SlotConfig slot = new SlotConfig();
@@ -132,6 +134,7 @@ public class Shooter {
                    String pitchServoName, String triggerServoName, Params params) {
         this.telemetry = telemetry;
         this.params = params;
+        this.name = motorName;
         this.motor = hardwareMap.get(DcMotorEx.class, motorName);
         this.pitchServo = hardwareMap.get(Servo.class, pitchServoName);
         this.triggerServo = hardwareMap.get(Servo.class, triggerServoName);
@@ -256,13 +259,17 @@ public class Shooter {
         return power;
     }
 
-    /** 输出遥测（调用方需自行 telemetry.update()） */
+    /**
+     * 输出遥测（调用方需自行 telemetry.update()）。
+     * caption 以设备名为前缀，避免大球/小球两个实例的条目互相覆盖
+     * （FTC Dashboard 以 caption 为键，重名时后者覆盖前者）。
+     */
     public void setTelemetry() {
-        telemetry.addData("Shooter speed target (tick/s)", targetSpeed);
-        telemetry.addData("Shooter speed current (tick/s)", "%.0f", motor.getVelocity());
-        telemetry.addData("Shooter power", "%.3f", power);
-        telemetry.addData("Shooter pitch", "%.3f", targetPitch);
-        telemetry.addData("Shooter trigger released", triggerReleased);
-        telemetry.addData("Shooter ready", isReady());
+        telemetry.addData(name + " speed target (tick/s)", targetSpeed);
+        telemetry.addData(name + " speed current (tick/s)", "%.0f", motor.getVelocity());
+        telemetry.addData(name + " power", "%.3f", power);
+        telemetry.addData(name + " pitch", "%.3f", targetPitch);
+        telemetry.addData(name + " trigger released", triggerReleased);
+        telemetry.addData(name + " ready", isReady());
     }
 }

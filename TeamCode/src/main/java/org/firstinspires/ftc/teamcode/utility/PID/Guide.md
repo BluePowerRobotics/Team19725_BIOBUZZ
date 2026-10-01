@@ -86,14 +86,11 @@ controller.setSlot(1);
 controller.resetSlot(new SlotConfig().withKP(0.3));          // 更新0号slot
 controller.resetSlot(1, new SlotConfig().withKP(0.25));     // 更新1号slot
 
-// 简单位置闭环
+// 位置闭环（参考速度/加速度由控制器内部按 setpoint 变化率推导）
 double output = controller.calculate(setpoint, measurement, dt, false);
 
-// 简单速度闭环（setpoint作为前馈速度项）
+// 速度闭环（setpoint 即参考速度）
 double output = controller.calculate(setpoint, measurement, dt, true);
-
-// 完整PIDSVA闭环
-double output = controller.calculate(setpoint, measurement, velocity, acceleration, dt);
 
 // 重置状态
 controller.reset();
@@ -128,9 +125,9 @@ double output = controller.getLastOutput();
 double pTerm = controller.getLastPTerm();  // kP * error
 double iTerm = controller.getLastITerm();  // kI * integral
 double dTerm = controller.getLastDTerm();  // kD * derivative
-double sTerm = controller.getLastSTerm();  // kS * sign(velocity)
-double vTerm = controller.getLastVTerm();  // kV * velocity
-double aTerm = controller.getLastATerm();  // kA * acceleration
+double sTerm = controller.getLastSTerm();  // kS * sign(参考速度)
+double vTerm = controller.getLastVTerm();  // kV * 参考速度
+double aTerm = controller.getLastATerm();  // kA * 参考加速度
 ```
 
 整定时将各分量加入 FTC Dashboard plot，可直观判断哪一项主导输出、积分是否饱和、前馈是否充足。
@@ -152,8 +149,7 @@ PIDSVAController motorController = new PIDSVAController().withSlot0(
 // 在循环中
 double targetPos = 1000; // 目标编码器位置
 double currentPos = motor.getCurrentPosition();
-double currentVel = motor.getVelocity(); // 需自行计算
-double output = motorController.calculate(targetPos, currentPos, currentVel, 0, dt);
+double output = motorController.calculate(targetPos, currentPos, dt, false);
 motor.setPower(output);
 ```
 
@@ -180,5 +176,7 @@ motor.setPower(output);
 
 1. `SlotConfig` 的默认输出限幅为 `-1.0 ~ 1.0`（对应 `setPower` 的功率范围）；如需电压控制（`setVoltage`），可用 `withOutputLimits(-14.0, 14.0)` 调整
 2. `resetSlot` 会用新构建的 `SlotConfig` 整体替换原配置；未被 `withXxx` 覆盖的字段会回到默认值，更新个别参数时请先构建包含完整参数的 `SlotConfig`
-3. 切换 slot 会重置积分与微分状态
+3. 切换 slot 会重置积分、微分状态与 setpoint 历史
 4. `PIDController` 没有 4 参数构造函数，需同时指定 `maxI` 和 `iZone` 时使用 5 参数版本
+5. `PIDSVAController.calculate` 只接收 `setpoint` 与 `measurement`：SVA 前馈的参考速度/加速度由控制器内部按 `setpoint` 的变化率推导（速度闭环时 `setpoint` 即参考速度），因此**不要再传入实测速度**，否则会与微分项相互抵消
+6. 调用 `calculate` 前必须已配置当前 slot（至少 `withSlot0(...)`），否则抛出 `IllegalArgumentException("Slot not configured")`

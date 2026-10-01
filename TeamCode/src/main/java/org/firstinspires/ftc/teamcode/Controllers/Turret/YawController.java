@@ -128,7 +128,6 @@ public class YawController {
 
         double targetTicks = yawZeroTicks + targetYaw * tickPerRad;
         double currentTicks = motor.getCurrentPosition();
-        double currentVelocity = motor.getVelocity();
 
         // 每帧刷新参数，使 Dashboard 上的改动即时生效
         slot.withKP(kP).withKI(kI).withKD(kD)
@@ -137,8 +136,8 @@ public class YawController {
                 .withOutputLimits(outputMin, outputMax);
         controller.resetSlot(slot);
 
-        // 完整 PIDSVA 位置闭环：以实测速度作为 SVA 前馈速度项（见 PID/Guide.md）
-        power = controller.calculate(targetTicks, currentTicks, currentVelocity, 0.0, dt);
+        // PIDSVA 位置闭环：SVA 前馈的参考速度/加速度由控制器内部按 setpoint 变化率推导（见 PID/Guide.md）
+        power = controller.calculate(targetTicks, currentTicks, dt, false);
         motor.setPower(power);
 
         onTarget = Math.abs(targetTicks - currentTicks) < onTargetTolerance * Math.abs(tickPerRad);

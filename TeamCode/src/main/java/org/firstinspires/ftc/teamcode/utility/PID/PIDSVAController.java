@@ -16,6 +16,10 @@ public class PIDSVAController {
     private double integral = 0;
     /** 上一次的误差值 */
     private double previousError = 0;
+    /** 上一次的 setpoint，用于由 setpoint 变化率推导参考速度（位置闭环）；NaN 表示尚无历史 */
+    private double previousSetpoint = Double.NaN;
+    /** 上一次的参考速度，用于推导参考加速度；NaN 表示尚无历史 */
+    private double previousRefVelocity = Double.NaN;
 
     // ==================== 最近一次输出的分量（供实时显示/诊断） ====================
     /** 最近一次总输出 */
@@ -63,8 +67,7 @@ public class PIDSVAController {
     public void setSlot(int slot) {
         if (!slots.containsKey(slot)) throw new IllegalArgumentException("Slot not configured");
         currentSlot = slot;
-        integral = 0;
-        previousError = 0;
+        reset();
     }
 
     /**
@@ -89,40 +92,50 @@ public class PIDSVAController {
     }
 
     /**
-     * 快捷方法：简单速度闭环 / 简单位置闭环
-     * VelCycle 为真：setpoint 作为前馈速度项，忽略加速度项
-     * VelCycle 为假：前馈速度和加速度项均为0
-     * @param setpoint 目标值（速度或位置）
-     * @param measurement 当前值（速度或位置）
-     * @param dt 时间间隔（秒）
-     * @param VelCycle 是否为速度闭环
+     * PIDSVA闭环计算输出（速度闭环，{@code velocityLoop = true} 的简写）。
+     * @param setpoint 目标速度
+     * @param measurement 当前速度  
+     * @param dt 时间间隔（秒），必须大于0
      * @return 控制器输出
      */
-    public double calculate(double setpoint, double measurement, double dt, boolean VelCycle) {
-        if(VelCycle){
-            return calculate(setpoint, measurement, setpoint, 0.0, dt);
-        }
-        else{
-            return calculate(setpoint, measurement, 0.0, 0.0, dt);
-        }
+    public double calculate(double setpoint, double measurement, double dt) {
+        return calculate(setpoint, measurement, dt, true);
     }
 
     /**
-     * 完整PIDSVA闭环，计算输出
-     * @param setpoint 目标值（位置或速度）
-     * @param measurement 当前值（位置或速度）
-     * @param velocity 当前速度（用于SVA前馈）
-     * @param acceleration 当前加速度（用于SVA前馈）
-     * @param dt 时间间隔（秒）
+     * 完整PIDSVA闭环，计算输出。
+     * 输入仅需 setpoint 与 measurement：SVA 前馈所需的参考速度/参考加速度由控制器
+     * 内部根据 setpoint 的变化率推导，不使用实测速度，避免前馈与微分项相互抵消。
+     * @param setpoint 目标值（速度闭环时为速度，位置闭环时为位置）
+     * @param measurement 当前值（速度或位置）
+     * @param dt 时间间隔（秒），必须大于0
+     * @param velocityLoop true=速度闭环（setpoint 即参考速度）；false=位置闭环（参考速度由 setpoint 变化率推导）
      * @return 控制器输出
+     * @throws IllegalArgumentException 当前slot未配置
      */
-    public double calculate(double setpoint, double measurement, double velocity, double acceleration, double dt) {
-        // 获取当前slot的配置
+    public double calculate(double setpoint, double measurement, double dt, boolean velocityLoop) {
+        // 获取当前slot的配置；未配置时快速失败，避免空指针
         SlotConfig cfg = slots.get(currentSlot);
+        if (cfg == null) throw new IllegalArgumentException("Slot not configured: " + currentSlot);
+
+        // 由 setpoint 推导参考速度/参考加速度，作为 SVA 前馈量（不使用实测速度）
+        double refVelocity;
+        if (velocityLoop) {
+            // 速度闭环：setpoint 本身即参考速度
+            refVelocity = setpoint;
+        } else {
+            // 位置闭环：参考速度 = d(setpoint)/dt，首帧无历史时取 0
+            refVelocity = Double.isNaN(previousSetpoint) ? 0.0 : (setpoint - previousSetpoint) / dt;
+        }
+        // 参考加速度 = d(参考速度)/dt，首帧无历史时取 0
+        double refAcceleration = Double.isNaN(previousRefVelocity) ? 0.0 : (refVelocity - previousRefVelocity) / dt;
+        previousSetpoint = setpoint;
+        previousRefVelocity = refVelocity;
+
         // 计算误差
         double error = setpoint - measurement;
         // 仅在误差小于Izone时才累加积分
-        if (cfg != null && Math.abs(error) < cfg.iZone) {
+        if (Math.abs(error) < cfg.iZone) {
             integral += error * dt;
             // 积分限幅
             if (integral > cfg.maxI) integral = cfg.maxI;
@@ -136,8 +149,8 @@ public class PIDSVAController {
         previousError = error;
         // 计算PID输出
         double pid = cfg.kP * error + cfg.kI * integral + cfg.kD * derivative;
-        // 计算SVA前馈输出
-        double sva = cfg.kS * Math.signum(velocity) + cfg.kV * velocity + cfg.kA * acceleration;
+        // 计算SVA前馈输出（使用参考速度/加速度）
+        double sva = cfg.kS * Math.signum(refVelocity) + cfg.kV * refVelocity + cfg.kA * refAcceleration;
         // 计算总输出
         double output = pid + sva;
         // 输出限幅
@@ -148,19 +161,21 @@ public class PIDSVAController {
         lastPTerm = cfg.kP * error;
         lastITerm = cfg.kI * integral;
         lastDTerm = cfg.kD * derivative;
-        lastSTerm = cfg.kS * Math.signum(velocity);
-        lastVTerm = cfg.kV * velocity;
-        lastATerm = cfg.kA * acceleration;
+        lastSTerm = cfg.kS * Math.signum(refVelocity);
+        lastVTerm = cfg.kV * refVelocity;
+        lastATerm = cfg.kA * refAcceleration;
         // 返回输出
         return output;
     }
 
     /**
-     * 重置积分和微分状态（不切换slot）
+     * 重置积分、微分状态以及 setpoint 历史（不切换slot）
      */
     public void reset() {
         integral = 0;
         previousError = 0;
+        previousSetpoint = Double.NaN;
+        previousRefVelocity = Double.NaN;
     }
 
     // ==================== 输出分量读取（供实时显示/诊断） ====================
