@@ -2,7 +2,7 @@
 
 ## 概述
 
-本目录包含代数计算相关的工具类，主要用于方程求解、复数运算和单位转换。
+本目录包含代数计算相关的工具类，主要用于方程求解、复数运算、线性统计与单位转换。
 
 ## 文件列表
 
@@ -10,6 +10,7 @@
 |------|----------|
 | `EquationSolver.java` | 多项式方程求解器（实数/复数），及单位转换、平均值计算 |
 | `ComplexNumber.java` | 复数类，提供四则运算、开方/开立方、幅值等操作 |
+| `LinearStatistics.java` | 线性二元数据统计类，计算均值、方差、协方差、相关系数及一元线性回归 |
 
 ## EquationSolver 使用说明
 
@@ -116,3 +117,58 @@ boolean isReal = z1.isReal();          // false
 
 1. 复数除法未对除数为零做保护，调用前需保证分母幅值非零
 2. `isReal()` 以 `1e-10` 作为虚部阈值判断是否为实数
+
+## LinearStatistics 使用说明
+
+### 功能特性
+
+- 逐个添加数据点 `add(x, y)`，增量累积求和量
+- 统计量：样本数、均值、总体方差、总体协方差、相关系数
+- 一元线性回归：斜率 `weight`、截距 `bias`、决定系数 `calculateR2`
+- 所有方差/协方差均采用总体公式（分母为 `n`）
+
+### 使用示例
+
+```java
+import org.firstinspires.ftc.teamcode.utility.Algebra.LinearStatistics;
+
+LinearStatistics stats = new LinearStatistics();
+stats.add(1.0, 2.0);
+stats.add(2.0, 4.1);
+stats.add(3.0, 5.9);
+
+int n = stats.sampleCount();     // 3
+double avgX = stats.avgX();      // x 均值
+double avgY = stats.avgY();      // y 均值
+double varX = stats.varX();      // x 总体方差
+double varY = stats.varY();      // y 总体方差
+double cov = stats.covXY();      // 协方差
+double corr = stats.corrXY();    // 相关系数
+double k = stats.weight();       // 回归斜率
+double b = stats.bias();         // 回归截距
+double r2 = stats.calculateR2(); // 决定系数 R²
+
+// 预测：y ≈ k * x + b
+double yHat = k * 4.0 + b;
+```
+
+### 方法签名
+
+| 方法 | 说明 | 返回值 |
+|------|------|--------|
+| `add(x, y)` | 添加一个数据点 | `void` |
+| `sampleCount()` | 数据点数量 | `int` |
+| `avgX()` / `avgY()` | x / y 的均值 | `double` |
+| `varX()` / `varY()` | x / y 的总体方差 | `double` |
+| `covXY()` | x 与 y 的总体协方差 | `double` |
+| `corrXY()` | 相关系数 | `double` |
+| `weight()` | 线性回归斜率 | `double` |
+| `bias()` | 线性回归截距 | `double` |
+| `calculateR2()` | 决定系数 R² | `double` |
+
+### 注意事项
+
+1. 无数据点时（`n == 0`）所有统计量返回 `0`
+2. 方差接近零（`< 1e-12`）时，`weight()` 与 `corrXY()` 返回 `0`，避免除零产生 `NaN`
+3. 一元线性回归下 `calculateR2()` 等于 `corrXY()` 的平方
+4. 类内累积求和，`add` 为 O(1)，所有统计量为 O(1) 实时计算

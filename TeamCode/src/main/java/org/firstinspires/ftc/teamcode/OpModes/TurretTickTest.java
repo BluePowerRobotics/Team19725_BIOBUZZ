@@ -23,10 +23,10 @@ import com.qualcomm.robotcore.hardware.Servo;
  * <p><b>手柄映射</b>
  * <ul>
  *   <li>一操 左摇杆 左右 → yaw 电机功率（开环；符号与大小直接映射，经 maxYawPower 限幅）</li>
- *   <li>一操 左摇杆 上下 → 大球俯仰舵机位置（上 → 1，下 → 0）</li>
- *   <li>一操 右摇杆 上下 → 小球俯仰舵机位置（上 → 1，下 → 0）</li>
- *   <li>二操 左摇杆 上下 → 大球扳机舵机位置（上 → 1，下 → 0）</li>
- *   <li>二操 右摇杆 上下 → 小球扳机舵机位置（上 → 1，下 → 0）</li>
+ *   <li>一操 左摇杆 上下 → 小球俯仰舵机位置（上 → 1，下 → 0）</li>
+ *   <li>一操 右摇杆 上下 → 大球俯仰舵机位置（上 → 1，下 → 0）</li>
+ *   <li>二操 左摇杆 上下 → 小球扳机舵机位置（上 → 1，下 → 0）</li>
+ *   <li>二操 右摇杆 上下 → 大球扳机舵机位置（上 → 1，下 → 0）</li>
  *   <li>一操 A 键 → yaw 电机编码器清零（作为 tick 标定基准）</li>
  * </ul>
  *
@@ -78,8 +78,8 @@ public class TurretTickTest extends LinearOpMode {
         triggerBig = hardwareMap.get(Servo.class, BIG_TRIGGER_SERVO);
         triggerSmall = hardwareMap.get(Servo.class, SMALL_TRIGGER_SERVO);
 
-        telemetry.addLine("GP1 LstickX: yaw power | LstickY: big pitch | RstickY: small pitch");
-        telemetry.addLine("GP2 LstickY: big trigger | RstickY: small trigger");
+        telemetry.addLine("GP1 LstickX: yaw power | LstickY: small pitch | RstickY: big pitch");
+        telemetry.addLine("GP2 LstickY: small trigger | RstickY: big trigger");
         telemetry.addLine("GP1 A: zero yaw encoder");
         telemetry.update();
 
@@ -99,10 +99,10 @@ public class TurretTickTest extends LinearOpMode {
 
             // ---- 4 个舵机：摇杆位置直接映射到 [0, 1] ----
             // 摇杆上推时 axis = -1（FTC 约定），取负号使"上 → 1"
-            double bigPitchPos = positionFromAxis(-gamepad1.left_stick_y);
-            double smallPitchPos = positionFromAxis(-gamepad1.right_stick_y);
-            double bigTriggerPos = positionFromAxis(-gamepad2.left_stick_y);
-            double smallTriggerPos = positionFromAxis(-gamepad2.right_stick_y);
+            double smallPitchPos = positionFromAxis(-gamepad1.left_stick_y);
+            double bigPitchPos = positionFromAxis(-gamepad1.right_stick_y);
+            double smallTriggerPos = positionFromAxis(-gamepad2.left_stick_y);
+            double bigTriggerPos = positionFromAxis(-gamepad2.right_stick_y);
 
             pitchBig.setPosition(bigPitchPos);
             pitchSmall.setPosition(smallPitchPos);

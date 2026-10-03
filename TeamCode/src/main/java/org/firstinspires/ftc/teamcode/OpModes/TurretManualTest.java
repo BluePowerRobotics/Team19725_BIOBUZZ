@@ -16,18 +16,18 @@ import org.firstinspires.ftc.teamcode.Controllers.Turret.YawController;
  *
  * <p><b>手柄映射（二操）</b>
  * <ul>
- *   <li>左摇杆 上下 → 大球 Shooter 仰角（映射到
- *       {@code [Shooter.BIG_PARAMS.pitchMin, pitchMax]}）</li>
- *   <li>右摇杆 上下 → 小球 Shooter 仰角（映射到
+ *   <li>左摇杆 上下 → 小球 Shooter 仰角（映射到
  *       {@code [Shooter.SMALL_PARAMS.pitchMin, pitchMax]}）</li>
+ *   <li>右摇杆 上下 → 大球 Shooter 仰角（映射到
+ *       {@code [Shooter.BIG_PARAMS.pitchMin, pitchMax]}）</li>
  *   <li>左摇杆 左右 → yaw 平转（映射到 {@code [-yawRange, +yawRange]}；
  *       约定"推右 → 顺时针（负 yaw）"）</li>
  *   <li>方向键 上 / 下 → 大球飞轮目标转速 ±{@link #speedStep}，范围 0 至
  *       {@code Shooter.BIG_PARAMS.speedMax}</li>
  *   <li>方向键 右 / 左 → 小球飞轮目标转速 ±{@link #speedStep}，范围 0 至
  *       {@code Shooter.SMALL_PARAMS.speedMax}</li>
- *   <li>左 bumper → 大球扳机（按住释放）</li>
- *   <li>右 bumper → 小球扳机（按住释放）</li>
+ *   <li>左 bumper → 小球扳机（按住释放）</li>
+ *   <li>右 bumper → 大球扳机（按住释放）</li>
  * </ul>
  * 方向键为"按下即走一步，长按每 {@link #repeatPeriodMs} 毫秒再走一步"。
  *
@@ -59,19 +59,19 @@ public class TurretManualTest extends LinearOpMode {
         turret = new Turret(hardwareMap, telemetry);
         turret.stop();
 
-        telemetry.addLine("GP2 LstickY: big pitch | RstickY: small pitch | LstickX: yaw");
+        telemetry.addLine("GP2 LstickY: small pitch | RstickY: big pitch | LstickX: yaw");
         telemetry.addLine("GP2 Dpad U/D: big speed | Dpad L/R: small speed");
-        telemetry.addLine("GP2 LB: big trigger | RB: small trigger");
+        telemetry.addLine("GP2 LB: small trigger | RB: big trigger");
         telemetry.update();
 
         waitForStart();
 
         while (opModeIsActive()) {
             // ---- 摇杆：上推时 axis = -1，取负号使"上 → 增大" ----
-            double pitchBig = axisToRange(-gamepad2.left_stick_y,
-                    Shooter.BIG_PARAMS.pitchMin, Shooter.BIG_PARAMS.pitchMax);
-            double pitchSmall = axisToRange(-gamepad2.right_stick_y,
+            double pitchSmall = axisToRange(-gamepad2.left_stick_y,
                     Shooter.SMALL_PARAMS.pitchMin, Shooter.SMALL_PARAMS.pitchMax);
+            double pitchBig = axisToRange(-gamepad2.right_stick_y,
+                    Shooter.BIG_PARAMS.pitchMin, Shooter.BIG_PARAMS.pitchMax);
             // 推右（axis = +1）→ 顺时针，对应负 yaw
             targetYaw = -gamepad2.left_stick_x * YawController.yawRange;
 
@@ -82,8 +82,8 @@ public class TurretManualTest extends LinearOpMode {
             targetSpeedSmall = clamp(targetSpeedSmall + h * speedStep, 0, Shooter.SMALL_PARAMS.speedMax);
 
             // ---- 扳机：按住释放 ----
-            boolean triggerBig = gamepad2.left_bumper;
-            boolean triggerSmall = gamepad2.right_bumper;
+            boolean triggerBig = gamepad2.right_bumper;
+            boolean triggerSmall = gamepad2.left_bumper;
 
             // ---- 下发炮台目标 ----
             Turret.FireReady ready = turret.update(targetYaw, pitchBig, pitchSmall,
