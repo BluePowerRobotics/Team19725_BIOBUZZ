@@ -1,6 +1,6 @@
 # Team19725\_BIOBUZZ赛季
 
-FTC19725的BIOBUZZ赛季代码 新代码缓存池，待审核\
+FTC19725的BIOBUZZ赛季代码\
 FTC BIOBUZZ, team code for 19725, BluePowerRobotics
 
 程序框架：\
