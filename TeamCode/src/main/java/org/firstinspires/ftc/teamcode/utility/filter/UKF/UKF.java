@@ -1,9 +1,12 @@
 package org.firstinspires.ftc.teamcode.utility.filter.UKF;
 
+import java.util.List;
+
 import org.ejml.data.DMatrixRMaj;
 import org.ejml.dense.row.factory.DecompositionFactory_DDRM;
 import org.ejml.interfaces.decomposition.CholeskyDecomposition_F64;
 import org.ejml.simple.SimpleMatrix;
+import org.firstinspires.ftc.teamcode.utility.filter.ReplayBuffer;
 
 /**
  * 3维无迹卡尔曼滤波器 (Unscented Kalman Filter)，用于 Pinpoint(里程计速度) 和
@@ -87,6 +90,15 @@ public class UKF {
     /** 上一次 update 的时间戳，用于拒绝过时观测 */
     private Double lastUpdateTime = null;
 
+    /** 是否启用视觉时间戳回滚重放 */
+    private final boolean allowReplay;
+
+    /** 回滚重放缓冲区 (仅 allowReplay 为 true 时创建) */
+    private final ReplayBuffer replayBuffer;
+
+    /** 回滚基准与观测时刻允许的最大间隔 (秒)；超过则放弃回滚 (与 predict 的 dt 保护一致) */
+    private static final double MAX_REPLAY_GAP = 1.0;
+
     // ==================== 构造 ====================
 
     /**
@@ -95,6 +107,17 @@ public class UKF {
      * @param initialTheta  初始朝向 (弧度)
      */
     public UKF(double initialX, double initialY, double initialTheta) {
+        this(initialX, initialY, initialTheta, false);
+    }
+
+    /**
+     * @param initialX      初始 x (英寸)
+     * @param initialY      初始 y (英寸)
+     * @param initialTheta  初始朝向 (弧度)
+     * @param allowReplay   是否启用视觉时间戳回滚重放
+     *                      (收到带延迟的视觉观测时先回滚到观测时刻更新，再重放里程计预测)
+     */
+    public UKF(double initialX, double initialY, double initialTheta, boolean allowReplay) {
         // ---- 状态初始化 (与 EKF 一致) ----
         state = new SimpleMatrix(new double[][]{
                 {initialX},
@@ -138,6 +161,9 @@ public class UKF {
             wm[i] = commonWeight;
             wc[i] = commonWeight;
         }
+
+        this.allowReplay = allowReplay;
+        this.replayBuffer = allowReplay ? new ReplayBuffer() : null;
     }
 
     // ==================== 核心滤波 ====================
@@ -155,6 +181,9 @@ public class UKF {
         // 首次调用：仅记录时间戳，不做预测
         if (lastPredictTime == null) {
             lastPredictTime = timestamp;
+            if (allowReplay) {
+                replayBuffer.add(timestamp, getPose(), P, Q, 0, 0, 0);
+            }
             return;
         }
 
@@ -166,6 +195,24 @@ public class UKF {
             return;
         }
 
+        applyMotion(vx, vy, omega, dt, Q);
+
+        // 记录快照供视觉回滚重放使用 (连同本段所用的历史 Q)
+        if (allowReplay) {
+            replayBuffer.add(timestamp, getPose(), P, Q, vx, vy, omega);
+        }
+    }
+
+    /**
+     * 状态与协方差传播 (无迹变换)，不含时间戳/缓冲逻辑。
+     *
+     * @param vx    机器人局部 x 方向速度 (in/s)
+     * @param vy    机器人局部 y 方向速度 (in/s)
+     * @param omega 角速度 (rad/s)
+     * @param dt    传播时间 (秒)
+     * @param Qused 本段传播使用的过程噪声 Q (常规 predict 传当前 Q；回放传快照的历史 Q)
+     */
+    private void applyMotion(double vx, double vy, double omega, double dt, SimpleMatrix Qused) {
         // ---- 1. 生成 sigma 点 ----
         double[][] sigmaPoints = generateSigmaPoints();
 
@@ -212,8 +259,8 @@ public class UKF {
             P_new.set(2, 2, P_new.get(2, 2) + w * dtheta * dtheta);
         }
 
-        // 加上过程噪声 Q·dt (体现过程噪声随时间累积)
-        P = P_new.plus(Q.scale(dt));
+        // 加上过程噪声 Q·dt (体现过程噪声随时间累积)；回放时传入该段快照记录的历史 Q
+        P = P_new.plus(Qused.scale(dt));
 
         // ---- 5. 更新状态 ----
         state = new SimpleMatrix(new double[][]{
@@ -233,12 +280,31 @@ public class UKF {
      * @param timestamp  观测时间戳 (秒)
      */
     public void update(double xMeas, double yMeas, double thetaMeas, double timestamp) {
-        // 拒绝过时观测
+        // 拒绝过时观测 (不论是否启用重放都保留)
         if (lastUpdateTime != null && timestamp <= lastUpdateTime) {
             return;
         }
-        lastUpdateTime = timestamp;
 
+        if (allowReplay) {
+            // 回滚到观测时刻更新，再重放其后预测；观测早于缓冲窗口时被丢弃
+            if (replayUpdate(xMeas, yMeas, thetaMeas, timestamp)) {
+                lastUpdateTime = timestamp;
+            }
+            return;
+        }
+
+        lastUpdateTime = timestamp;
+        applyVisionUpdate(xMeas, yMeas, thetaMeas);
+    }
+
+    /**
+     * 在当前状态处执行一次观测更新 (标准 UKF 更新步骤)。
+     *
+     * @param xMeas     视觉全局 x
+     * @param yMeas     视觉全局 y
+     * @param thetaMeas 视觉全局朝向 (弧度)
+     */
+    private void applyVisionUpdate(double xMeas, double yMeas, double thetaMeas) {
         // ---- 1. 观测向量 z = [xMeas, yMeas, thetaMeas]ᵀ ----
         SimpleMatrix z = new SimpleMatrix(new double[][]{
                 {xMeas},
@@ -299,6 +365,61 @@ public class UKF {
 
         // 对称性强制 (消除浮点累积误差)
         P = P.plus(P.transpose()).scale(0.5);
+    }
+
+    /**
+     * 回滚重放更新 —— 将滤波器回滚到视觉观测时刻、在该时刻完成更新，再重放其后的
+     * 里程计预测回到当前时刻，从而消除视觉链路延迟造成的滞后偏差。
+     *
+     * @return true 表示观测已应用；false 表示观测早于缓冲窗口或与回滚基准间隔过大被丢弃
+     */
+    private boolean replayUpdate(double xMeas, double yMeas, double thetaMeas, double timestamp) {
+        ReplayBuffer.Snapshot base = replayBuffer.floor(timestamp);
+        if (base == null) {
+            // 观测早于缓冲窗口，无法回滚
+            return false;
+        }
+
+        // 回滚基准与观测时刻间隔过大 (预测停更 / 时钟异常) 时放弃回滚，避免大 dt 重放
+        if (timestamp - base.t > MAX_REPLAY_GAP) {
+            return false;
+        }
+
+        // 观测时刻之后的所有快照 (时间戳均严格大于观测时刻)
+        List<ReplayBuffer.Snapshot> tail = replayBuffer.after(base.t);
+
+        // ---- 1. 回滚到观测时刻之前的最近快照 ----
+        state = toColumn(base.getX());
+        P = base.getP();
+
+        // ---- 2. 从该快照推进到观测时刻 (使用其后第一段的输入与历史 Q) ----
+        if (!tail.isEmpty()) {
+            ReplayBuffer.Snapshot first = tail.get(0);
+            applyMotion(first.vx, first.vy, first.omega, timestamp - base.t, first.getQ());
+        }
+
+        // ---- 3. 在观测时刻执行更新 ----
+        // 注: R 是被应用的这次观测自身的噪声 (由本帧 adaptR 按该帧 stdDev 计算)，
+        //     与时间轴无关，故沿用当前 R；只有 Q 是随时间变化的过程噪声，按快照历史 Q 回放。
+        applyVisionUpdate(xMeas, yMeas, thetaMeas);
+
+        // ---- 4. 重放其后所有预测回到当前时刻 (各段用各自快照的历史 Q)，并刷新快照 ----
+        double prevT = timestamp;
+        for (ReplayBuffer.Snapshot s : tail) {
+            applyMotion(s.vx, s.vy, s.omega, s.t - prevT, s.getQ());
+            prevT = s.t;
+            s.refresh(getPose(), P);
+        }
+        return true;
+    }
+
+    /** 将 [x, y, theta] 转为 3x1 列向量。 */
+    private SimpleMatrix toColumn(double[] v) {
+        return new SimpleMatrix(new double[][]{
+                {v[0]},
+                {v[1]},
+                {v[2]}
+        });
     }
 
     /**
@@ -438,6 +559,21 @@ public class UKF {
         });
         lastPredictTime = null;
         lastUpdateTime = null;
+        if (replayBuffer != null) {
+            replayBuffer.clear();
+        }
+    }
+
+    // ==================== 回滚重放状态 ====================
+
+    /** @return 是否启用视觉时间戳回滚重放 */
+    public boolean isReplayEnabled() {
+        return allowReplay;
+    }
+
+    /** @return 回滚缓冲中的快照数量 (未启用重放时为 0) */
+    public int getReplayBufferSize() {
+        return replayBuffer == null ? 0 : replayBuffer.size();
     }
 
     // ==================== Sigma 点生成 ====================

@@ -16,6 +16,7 @@ import com.qualcomm.robotcore.hardware.IMU;
 import org.firstinspires.ftc.teamcode.RoadRunner.Drawing;
 import org.firstinspires.ftc.teamcode.RoadRunner.MecanumDrive;
 import org.firstinspires.ftc.teamcode.RoadRunner.PinpointLocalizer;
+import org.firstinspires.ftc.teamcode.Parameter.TeamColor;
 import org.firstinspires.ftc.teamcode.Processors.FusionLocalizer.AdaptiveEKFLocalizer;
 import org.firstinspires.ftc.teamcode.Processors.FusionLocalizer.AdaptiveUKFLocalizer;
 import org.firstinspires.ftc.teamcode.Processors.FusionLocalizer.EKFLocalizer;
@@ -49,6 +50,8 @@ import java.util.List;
  *   <li>紫色 — AdaptiveEKFLocalizer</li>
  *   <li>青色 — UKFLocalizer (固定 Q/R)</li>
  *   <li>蓝色 — AdaptiveUKFLocalizer</li>
+ *   <li>黄色 — AdaptiveEKFLocalizer + Replay (视觉时间戳回滚重放)</li>
+ *   <li>蓝灰 — AdaptiveUKFLocalizer + Replay (视觉时间戳回滚重放)</li>
  *   <li>红色虚线 — TestPose (目标点)</li>
  * </ul>
  *
@@ -77,6 +80,8 @@ public class FusionTestOpMode extends LinearOpMode {
     private double errAdaptiveX,  errAdaptiveY,  errAdaptiveTheta;
     private double errUkfX,       errUkfY,       errUkfTheta;
     private double errAdaptiveUkfX, errAdaptiveUkfY, errAdaptiveUkfTheta;
+    private double errAdaptiveReplayX, errAdaptiveReplayY, errAdaptiveReplayTheta;
+    private double errAdaptiveUkfReplayX, errAdaptiveUkfReplayY, errAdaptiveUkfReplayTheta;
 
     // ---- 轨迹历史 (用于绘制) ----
     private final List<Pose2d> pinpointHistory    = new LinkedList<>();
@@ -85,6 +90,8 @@ public class FusionTestOpMode extends LinearOpMode {
     private final List<Pose2d> adaptiveHistory    = new LinkedList<>();
     private final List<Pose2d> ukfHistory         = new LinkedList<>();
     private final List<Pose2d> adaptiveUkfHistory = new LinkedList<>();
+    private final List<Pose2d> adaptiveReplayHistory    = new LinkedList<>();
+    private final List<Pose2d> adaptiveUkfReplayHistory = new LinkedList<>();
     private static final int MAX_HISTORY = 80;
 
     /** 开始后校准阶段的记录时长 (毫秒) */
@@ -107,6 +114,11 @@ public class FusionTestOpMode extends LinearOpMode {
         AdaptiveEKFLocalizer adaptiveEkf = new AdaptiveEKFLocalizer(hardwareMap, limelight, "imu", initialPose, false);
         UKFLocalizer ukf = new UKFLocalizer(hardwareMap, limelight, initialPose);
         AdaptiveUKFLocalizer adaptiveUkf = new AdaptiveUKFLocalizer(hardwareMap, limelight, "imu", initialPose, false);
+        // 回滚重放对照组: 开启视觉时间戳回滚重放的 AdaptiveEKF / AdaptiveUKF
+        AdaptiveEKFLocalizer adaptiveEkfReplay = new AdaptiveEKFLocalizer(
+                hardwareMap, limelight, "imu", initialPose, false, TeamColor.RED, true);
+        AdaptiveUKFLocalizer adaptiveUkfReplay = new AdaptiveUKFLocalizer(
+                hardwareMap, limelight, "imu", initialPose, false, true);
 
         // ---- 创建驱动 ----
         MecanumDrive drive = new MecanumDrive(hardwareMap, initialPose);
@@ -120,6 +132,8 @@ public class FusionTestOpMode extends LinearOpMode {
         adaptiveEkf.setPose(calibratedPose);
         ukf.setPose(calibratedPose);
         adaptiveUkf.setPose(calibratedPose);
+        adaptiveEkfReplay.setPose(calibratedPose);
+        adaptiveUkfReplay.setPose(calibratedPose);
         drive.localizer.setPose(calibratedPose);
 
         telemetry.addLine("Calibration done, driving enabled");
@@ -144,6 +158,8 @@ public class FusionTestOpMode extends LinearOpMode {
             adaptiveEkf.update();
             ukf.update();
             adaptiveUkf.update();
+            adaptiveEkfReplay.update();
+            adaptiveUkfReplay.update();
 
             // === 获取位姿 ===
             Pose2d pinpointPose    = pinpoint.getPose();
@@ -152,6 +168,8 @@ public class FusionTestOpMode extends LinearOpMode {
             Pose2d adaptiveEkfPose = adaptiveEkf.getPose();
             Pose2d ukfPose         = ukf.getPose();
             Pose2d adaptiveUkfPose = adaptiveUkf.getPose();
+            Pose2d adaptiveEkfReplayPose = adaptiveEkfReplay.getPose();
+            Pose2d adaptiveUkfReplayPose = adaptiveUkfReplay.getPose();
 
             // MT1 位姿仅在该帧 HIVE 倾角解算成功时才未被污染: 失败帧 getPose() 会回退为
             // 未修正的原始位姿 (见 MT1Localizer 类注释), 因此不能混入轨迹与误差统计
@@ -166,11 +184,14 @@ public class FusionTestOpMode extends LinearOpMode {
             addToHistory(adaptiveHistory, adaptiveEkfPose);
             addToHistory(ukfHistory, ukfPose);
             addToHistory(adaptiveUkfHistory, adaptiveUkfPose);
+            addToHistory(adaptiveReplayHistory, adaptiveEkfReplayPose);
+            addToHistory(adaptiveUkfReplayHistory, adaptiveUkfReplayPose);
 
             // === A 键触发误差记录 ===
             boolean aPressed = gamepad1.a;
             if (aPressed && !prevAPressed) {
-                recordErrors(pinpointPose, mt1Pose, mt1Usable, ekfPose, adaptiveEkfPose, ukfPose, adaptiveUkfPose);
+                recordErrors(pinpointPose, mt1Pose, mt1Usable, ekfPose, adaptiveEkfPose, ukfPose, adaptiveUkfPose,
+                        adaptiveEkfReplayPose, adaptiveUkfReplayPose);
             }
             prevAPressed = aPressed;
 
@@ -181,6 +202,8 @@ public class FusionTestOpMode extends LinearOpMode {
             telemetry.addData("AdaptiveEKF", formatPose(adaptiveEkfPose));
             telemetry.addData("UKF",         formatPose(ukfPose));
             telemetry.addData("AdaptiveUKF", formatPose(adaptiveUkfPose));
+            telemetry.addData("AEKF+Replay", formatPose(adaptiveEkfReplayPose));
+            telemetry.addData("AUKF+Replay", formatPose(adaptiveUkfReplayPose));
 
             // ============ Telemetry: TestPose ============
             Pose2d testPose = new Pose2d(testX, testY, testHeading);
@@ -202,6 +225,10 @@ public class FusionTestOpMode extends LinearOpMode {
                         formatErr(errUkfX, errUkfY, errUkfTheta));
                 telemetry.addData("AdaptiveUKF err",
                         formatErr(errAdaptiveUkfX, errAdaptiveUkfY, errAdaptiveUkfTheta));
+                telemetry.addData("AEKF+Replay err",
+                        formatErr(errAdaptiveReplayX, errAdaptiveReplayY, errAdaptiveReplayTheta));
+                telemetry.addData("AUKF+Replay err",
+                        formatErr(errAdaptiveUkfReplayX, errAdaptiveUkfReplayY, errAdaptiveUkfReplayTheta));
             }
 
             // ============ Telemetry: MT1Localizer 实时质量指标 ============
@@ -270,6 +297,13 @@ public class FusionTestOpMode extends LinearOpMode {
             telemetry.addData("AUKF.Q diag (x,y,θ)", formatDiag(q));
             telemetry.addData("AUKF.R diag (x,y,θ)", formatDiag(r));
 
+            // ============ Telemetry: 回滚重放状态 ============
+            telemetry.addLine("--- Replay (视觉时间戳回滚重放) ---");
+            telemetry.addData("AEKF+Replay.enabled", adaptiveEkfReplay.getEKF().isReplayEnabled());
+            telemetry.addData("AEKF+Replay.buffer",  adaptiveEkfReplay.getEKF().getReplayBufferSize());
+            telemetry.addData("AUKF+Replay.enabled", adaptiveUkfReplay.getUKF().isReplayEnabled());
+            telemetry.addData("AUKF+Replay.buffer",  adaptiveUkfReplay.getUKF().getReplayBufferSize());
+
 
             telemetry.update();
 
@@ -288,6 +322,8 @@ public class FusionTestOpMode extends LinearOpMode {
             drawTrail(packet.fieldOverlay(), adaptiveHistory,    "#9C27B0", 2);
             drawTrail(packet.fieldOverlay(), ukfHistory,         "#00BCD4", 2);
             drawTrail(packet.fieldOverlay(), adaptiveUkfHistory, "#2196F3", 2);
+            drawTrail(packet.fieldOverlay(), adaptiveReplayHistory,    "#FFEB3B", 2);
+            drawTrail(packet.fieldOverlay(), adaptiveUkfReplayHistory, "#607D8B", 2);
 
             // 当前位姿绘制
             packet.fieldOverlay().setStroke("#4CAF50");
@@ -315,6 +351,14 @@ public class FusionTestOpMode extends LinearOpMode {
             packet.fieldOverlay().setStroke("#2196F3");
             packet.fieldOverlay().setStrokeWidth(2);
             Drawing.drawRobot(packet.fieldOverlay(), adaptiveUkfPose);
+
+            packet.fieldOverlay().setStroke("#FFEB3B");
+            packet.fieldOverlay().setStrokeWidth(2);
+            Drawing.drawRobot(packet.fieldOverlay(), adaptiveEkfReplayPose);
+
+            packet.fieldOverlay().setStroke("#607D8B");
+            packet.fieldOverlay().setStrokeWidth(2);
+            Drawing.drawRobot(packet.fieldOverlay(), adaptiveUkfReplayPose);
 
             FtcDashboard.getInstance().sendTelemetryPacket(packet);
         }
@@ -405,7 +449,8 @@ public class FusionTestOpMode extends LinearOpMode {
 
     // ==================== 误差计算 ====================
 
-    private void recordErrors(Pose2d pp, Pose2d mt, boolean mtUsable, Pose2d ek, Pose2d ae, Pose2d uk, Pose2d au) {
+    private void recordErrors(Pose2d pp, Pose2d mt, boolean mtUsable, Pose2d ek, Pose2d ae, Pose2d uk, Pose2d au,
+                              Pose2d aer, Pose2d aur) {
         Pose2d ref = new Pose2d(testX, testY, testHeading);
 
         errPinpointX     = pp.position.x - ref.position.x;
@@ -438,6 +483,14 @@ public class FusionTestOpMode extends LinearOpMode {
         errAdaptiveUkfX     = au.position.x - ref.position.x;
         errAdaptiveUkfY     = au.position.y - ref.position.y;
         errAdaptiveUkfTheta = normalizeAngle(au.heading.toDouble() - ref.heading.toDouble());
+
+        errAdaptiveReplayX     = aer.position.x - ref.position.x;
+        errAdaptiveReplayY     = aer.position.y - ref.position.y;
+        errAdaptiveReplayTheta = normalizeAngle(aer.heading.toDouble() - ref.heading.toDouble());
+
+        errAdaptiveUkfReplayX     = aur.position.x - ref.position.x;
+        errAdaptiveUkfReplayY     = aur.position.y - ref.position.y;
+        errAdaptiveUkfReplayTheta = normalizeAngle(aur.heading.toDouble() - ref.heading.toDouble());
 
         errorRecorded = true;
     }

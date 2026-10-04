@@ -84,6 +84,22 @@ public class MT1Localizer implements Localizer {
     private double timestamp;
     /** 捕获延迟 (毫秒, 见 SDK LLResult.getCaptureLatency 文档) */
     private double captureLatency;
+    /**
+     * 该帧捕获时刻的时间戳 (秒), 已换算到 {@link System#nanoTime()} 基准。
+     * Limelight 硬件时间戳与 System.nanoTime() 分属不同时钟, 不可直接相减/比较;
+     * 此值与 EKF/UKF 内 predict 快照同基准, 供视觉时间戳回滚重放使用。
+     *
+     * <p>仅在检测到新物理帧时刷新: 同一物理帧被重复读取时保持恒定, 否则每次读取都会产生
+     * 一个递增的估计值, 使滤波器基于时间戳的过时观测去重 (lastUpdateTime) 失效, 导致同一
+     * 观测被重复融合。
+     */
+    private double timestampNano;
+
+    /**
+     * 上一物理帧的 Limelight 硬件时间戳 (秒), 用于判定本帧是否为新帧。
+     * 初始为 NaN (与任何取值都不相等), 保证首帧被判定为新帧。
+     */
+    private double lastFrameTimestamp = Double.NaN;
 
     // ---- 单标签最大倾斜度 (越大越模糊) ----
     private double maxFiducialSkew;
@@ -162,13 +178,31 @@ public class MT1Localizer implements Localizer {
         }
 
         // 提取 MegaTag1 质量指标
-        stdDevs = latestResult.getStddevMt1();
+        // 固件可能返回 null 或长度不足的数组, 直接覆盖会让 getStdDevs()/adaptR() 抛 NPE/越界。
+        // 保留上一次有效值 (避免整组置 0 被误判为高置信度), 保证 stdDevs 恒为非空且长度 6。
+        double[] mt1StdDevs = latestResult.getStddevMt1();
+        if (mt1StdDevs != null && mt1StdDevs.length >= stdDevs.length) {
+            stdDevs = mt1StdDevs;
+        }
         tagCount = latestResult.getBotposeTagCount();
         avgDist = latestResult.getBotposeAvgDist();
         avgArea = latestResult.getBotposeAvgArea();
         span = latestResult.getBotposeSpan();
-        timestamp = latestResult.getTimestamp();
+        double frameTimestamp = latestResult.getTimestamp();
+        // 判定是否为新物理帧: Limelight 帧率低于循环频率时 getLatestResult() 会重复返回同一帧,
+        // 其硬件时间戳恒定。仅当硬件时间戳变化时才视为新帧。
+        boolean isNewFrame = frameTimestamp != lastFrameTimestamp;
+        lastFrameTimestamp = frameTimestamp;
+        timestamp = frameTimestamp;
+
         captureLatency = latestResult.getCaptureLatency();
+        // 换算到 System.nanoTime() 基准: 以本地收到结果的时刻减去捕获延迟, 估计该帧的捕获时刻。
+        // (Limelight 硬件时间戳与 System.nanoTime() 分属不同时钟, 不可直接比较)
+        // 仅新帧才刷新 timestampNano: 重复读取同一帧时保持时间戳恒定, 使 EKF/UKF 的
+        // lastUpdateTime 去重与 ReplayBuffer 回滚重放不会被同一物理帧重复触发。
+        if (isNewFrame) {
+            timestampNano = System.nanoTime() / 1e9 - captureLatency / 1000.0;
+        }
 
         // 计算单标签最大倾斜度 (skew 越大 → 姿态解算越模糊)
         maxFiducialSkew = 0.0;
@@ -538,6 +572,14 @@ public class MT1Localizer implements Localizer {
     /** @return 捕获延迟 (毫秒) */
     public double getCaptureLatency() {
         return captureLatency;
+    }
+
+    /**
+     * @return 该帧捕获时刻的时间戳 (秒), 已换算到 {@link System#nanoTime()} 基准,
+     *         与 EKF/UKF 内 predict 快照同基准, 供视觉时间戳回滚重放使用
+     */
+    public double getTimestampNanoBase() {
+        return timestampNano;
     }
 
     /** @return 当前是否有有效定位结果 */

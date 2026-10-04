@@ -70,7 +70,20 @@ public class EKFLocalizer implements Localizer {
      * @param initialPose  初始位姿 (x, y, heading)
      */
     public EKFLocalizer(HardwareMap hardwareMap, Limelight3A limelight, Pose2d initialPose) {
-        this.ekf = new EKF(initialPose.position.x, initialPose.position.y, initialPose.heading.toDouble());
+        this(hardwareMap, limelight, initialPose, false);
+    }
+
+    /**
+     * D2 模式构造 (标准 2D 里程计)，可开启视觉时间戳回滚重放。
+     *
+     * @param hardwareMap  硬件映射
+     * @param limelight    已启动的 Limelight3A 实例
+     * @param initialPose  初始位姿 (x, y, heading)
+     * @param allowReplay  是否启用视觉时间戳回滚重放 (默认 false)
+     */
+    public EKFLocalizer(HardwareMap hardwareMap, Limelight3A limelight, Pose2d initialPose,
+                        boolean allowReplay) {
+        this.ekf = new EKF(initialPose.position.x, initialPose.position.y, initialPose.heading.toDouble(), allowReplay);
         ekf.setQ(QbasePos, QbasePos, QbaseAngle);
         ekf.setR(RbasePos, RbasePos, RbaseAngle);
         this.odom = new PinpointLocalizer(hardwareMap, 0.001999, initialPose);
@@ -82,7 +95,7 @@ public class EKFLocalizer implements Localizer {
      * D2 模式简化构造: 初始位姿 (0, 0, 0)。
      */
     public EKFLocalizer(HardwareMap hardwareMap, Limelight3A limelight) {
-        this(hardwareMap, limelight, new Pose2d(0, 0, 0));
+        this(hardwareMap, limelight, new Pose2d(0, 0, 0), false);
     }
 
     /**
@@ -95,7 +108,21 @@ public class EKFLocalizer implements Localizer {
      */
     public EKFLocalizer(HardwareMap hardwareMap, Limelight3A limelight,
                         String imuDeviceName, Pose2d initialPose) {
-        this.ekf = new EKF(initialPose.position.x, initialPose.position.y, initialPose.heading.toDouble());
+        this(hardwareMap, limelight, imuDeviceName, initialPose, false);
+    }
+
+    /**
+     * D3 模式构造 (3D 斜坡补偿里程计)，可开启视觉时间戳回滚重放。
+     *
+     * @param hardwareMap   硬件映射
+     * @param limelight     已启动的 Limelight3A 实例
+     * @param imuDeviceName Hub IMU 设备名 (如 "imu")
+     * @param initialPose   初始位姿 (x, y, heading)
+     * @param allowReplay   是否启用视觉时间戳回滚重放 (默认 false)
+     */
+    public EKFLocalizer(HardwareMap hardwareMap, Limelight3A limelight,
+                        String imuDeviceName, Pose2d initialPose, boolean allowReplay) {
+        this.ekf = new EKF(initialPose.position.x, initialPose.position.y, initialPose.heading.toDouble(), allowReplay);
         ekf.setQ(QbasePos, QbasePos, QbaseAngle);
         ekf.setR(RbasePos, RbasePos, RbaseAngle);
         this.odom = new PinpointD3Localizer(hardwareMap, 0.001999, imuDeviceName, initialPose);
@@ -140,7 +167,8 @@ public class EKFLocalizer implements Localizer {
                     visionPose.position.x,                  // 英寸
                     visionPose.position.y,                  // 英寸
                     visionPose.heading.toDouble(),          // 弧度
-                    mt1.getTimestamp()
+                    // 回滚重放需与 predict 快照同基准 (System.nanoTime()); 未启用时沿用 Limelight 硬件时间戳
+                    ekf.isReplayEnabled() ? mt1.getTimestampNanoBase() : mt1.getTimestamp()
             );
         }
 

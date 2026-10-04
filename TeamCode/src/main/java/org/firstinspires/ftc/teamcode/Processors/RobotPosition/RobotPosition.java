@@ -125,17 +125,19 @@ public class RobotPosition {
     public double getX(){     return currentPose.position.x;    }
     public double getY(){   return currentPose.position.y;    }
     public double getTheta(){ return currentPose.heading.toDouble();    }
+    /** @return 场坐标系 X 轴线速度 (英寸/秒)。输入为体坐标系速度，按 R(θ) 旋转到场坐标系。 */
     public double getVx(){
-        double vxField = currentVelocity2d.linearVel.x;
-        double vyField = currentVelocity2d.linearVel.y;
+        double vxBody = currentVelocity2d.linearVel.x;
+        double vyBody = currentVelocity2d.linearVel.y;
         double theta = getTheta();
-        return vxField * Math.cos(theta) + vyField * Math.sin(theta);
+        return vxBody * Math.cos(theta) - vyBody * Math.sin(theta);
     }
+    /** @return 场坐标系 Y 轴线速度 (英寸/秒)。输入为体坐标系速度，按 R(θ) 旋转到场坐标系。 */
     public double getVy(){
-        double vxField = currentVelocity2d.linearVel.x;
-        double vyField = currentVelocity2d.linearVel.y;
+        double vxBody = currentVelocity2d.linearVel.x;
+        double vyBody = currentVelocity2d.linearVel.y;
         double theta = getTheta();
-        return -vxField * Math.sin(theta) + vyField * Math.cos(theta);
+        return vxBody * Math.sin(theta) + vyBody * Math.cos(theta);
     }
     public MecanumDrive getDrive(){return drive;}
     /** @return 自适应 EKF 融合定位器（可读取 MT1 HIVE 倾角/状态观测与 Q、R 调试量） */
