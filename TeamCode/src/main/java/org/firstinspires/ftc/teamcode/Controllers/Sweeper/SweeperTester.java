@@ -15,6 +15,9 @@ public class SweeperTester extends LinearOpMode {
         
         sweeper = new Sweeper(hardwareMap, telemetry);
         sweeper.setStop();
+        telemetry.addLine("A: Eat | B: GiveArtifact | Y: Output | X: Stop");
+        telemetry.addLine("Dpad Up: Shovel Up | Dpad Down: Shovel Down");
+        telemetry.update();
         waitForStart();
         
         while (opModeIsActive()) {
@@ -28,8 +31,16 @@ public class SweeperTester extends LinearOpMode {
                 sweeper.setStop();
             }
             
+            // 铲子升降：在两个已知角度间切换
+            if (gamepad1.dpad_upWasPressed()) {
+                sweeper.setShovelUp();
+            } else if (gamepad1.dpad_downWasPressed()) {
+                sweeper.setShovelDown();
+            }
+            
             sweeper.update();
             sweeper.setTelemetry();
+            telemetry.addData("Shovel Pos", "%.3f", sweeper.getShovelPosition());
             telemetry.update();
         }
     }
