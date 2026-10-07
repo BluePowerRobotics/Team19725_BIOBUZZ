@@ -4,6 +4,7 @@ import com.acmerobotics.dashboard.config.Config;
 import com.qualcomm.robotcore.hardware.DcMotor;
 import com.qualcomm.robotcore.hardware.DcMotorEx;
 import com.qualcomm.robotcore.hardware.HardwareMap;
+import com.qualcomm.robotcore.hardware.Servo;
 
 import org.firstinspires.ftc.robotcore.external.Telemetry;
 import org.firstinspires.ftc.robotcore.external.navigation.CurrentUnit;
@@ -31,6 +32,8 @@ import org.firstinspires.ftc.robotcore.external.navigation.CurrentUnit;
  */
 public class Sweeper {
     public DcMotorEx motor;
+    /** 铲子升降舵机：控制 intake 前方铲子在抬起 / 放下两个已知角度间切换 */
+    public Servo shovelServo;
 
     private Telemetry telemetry;
 
@@ -49,14 +52,26 @@ public class Sweeper {
 
     public static int ForR = 0;
 
+    /** 铲子抬起时的舵机位置 [0,1]（todo: 实机标定） */
+    public static double ShovelUpPos = 1.0;
+    /** 铲子放下时的舵机位置 [0,1]（todo: 实机标定） */
+    public static double ShovelDownPos = 0.0;
+
+    /** 当前铲子舵机目标位置（[0,1]） */
+    private double targetShovelPos = ShovelDownPos;
+
     public Sweeper(HardwareMap hardwareMap, Telemetry telemetry) {
         this.telemetry = telemetry;
         this.motor = hardwareMap.get(DcMotorEx.class, "sweeperMotor");
+        this.shovelServo = hardwareMap.get(Servo.class, "shovelServo");
         setDirection();
         // 固件速度闭环：开启编码器速度模式并配置内置速度 PIDF
         motor.setMode(DcMotor.RunMode.RUN_USING_ENCODER);
         motor.setVelocityPIDFCoefficients(VelocityP, VelocityI, VelocityD, VelocityF);
         motor.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.FLOAT);
+        // 上电默认铲子抬起，等待操控/自动切换
+        setShovelUp();
+        shovelServo.setPosition(targetShovelPos);
     }
 
     private void setDirection() {
@@ -90,11 +105,23 @@ public class Sweeper {
         targetVelocity = velocity;
     }
 
+    /** 铲子抬起（切换到抬起角度） */
+    public void setShovelUp() {
+        targetShovelPos = ShovelUpPos;
+    }
+
+    /** 铲子放下（切换到放下角度） */
+    public void setShovelDown() {
+        targetShovelPos = ShovelDownPos;
+    }
+
     public void update() {
         // 固件闭环：把目标速度下发给 Hub 内置速度 PID
         motor.setVelocity(targetVelocity);
         lastTargetVelocity = targetVelocity;
         targetVelocity = 0; // 每帧必须重新调用set函数，否则自动归零
+        // 舵机保持位置：每帧刷新，保证 Dashboard 上改 ShovelUpPos/ShovelDownPos 后即时生效
+        shovelServo.setPosition(targetShovelPos);
     }
 
     public double getPower() {
@@ -111,6 +138,11 @@ public class Sweeper {
 
     public int getFR() {
         return ForR;
+    }
+
+    /** @return 铲子舵机当前指令位置（[0,1]） */
+    public double getShovelPosition() {
+        return targetShovelPos;
     }
 
     public double getCurrent() {
