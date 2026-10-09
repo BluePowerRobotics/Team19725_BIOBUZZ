@@ -393,7 +393,7 @@ public class ShooterTuningTester extends LinearOpMode {
             settleTime = now - stepStart;
         }
     }
-
+    
     private void finishStep() {
         lastOvershoot = stepTarget > 0 ? (stepMaxVel - stepTarget) / stepTarget * 100.0 : 0;
     }
