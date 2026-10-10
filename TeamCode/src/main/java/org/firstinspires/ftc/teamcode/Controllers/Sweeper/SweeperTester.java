@@ -32,9 +32,9 @@ public class SweeperTester extends LinearOpMode {
             }
             
             // 铲子升降：在两个已知角度间切换
-            if (gamepad1.dpad_upWasPressed()) {
+            if (gamepad1.dpadUpWasPressed()) {
                 sweeper.setShovelUp();
-            } else if (gamepad1.dpad_downWasPressed()) {
+            } else if (gamepad1.dpadDownWasPressed()) {
                 sweeper.setShovelDown();
             }
             
