@@ -25,6 +25,8 @@ package org.firstinspires.ftc.teamcode.Processors.Sensors;
  *       telemetry.addData("balls", counter.getCount());  // 实时计数
  *   }
  */
+//todo: 添加双向计数
+//todo: 接入RobotPosition
 public class BallCounter {
 
     private final PressureSwitcher pressureSwitcher;
