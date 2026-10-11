@@ -19,7 +19,7 @@ import org.firstinspires.ftc.teamcode.Controllers.Shooter.PrototypeShooter.Proto
  * </ul>
  *
  * <p><b>整定</b>：在 FTC Dashboard 的 {@code PrototypeShooter} 分组中实时修改
- * kP / kI / kD / kS / kV / iZone，观察遥测里"实际转速"跟随"目标转速"的
+ * kff / kp / ki / iZone / maxI / dropThreshold / kBoost，观察遥测里"实际转速"跟随"目标转速"的
  * 上升时间、超调量与稳态误差。
  *
  * <p>目标转速被限幅在 ±{@link #MaxTargetVelocity} 内，该值需按电机实际最大转速设置（tick/s）。
@@ -54,7 +54,7 @@ public class PrototypeShooterTest extends LinearOpMode {
 
         telemetry.addLine("Dpad Up/Down: adjust target velocity (hold to repeat)");
         telemetry.addLine("A: stop");
-        telemetry.addLine("Tune kP/kI/kD/kS/kV in Dashboard (group: PrototypeShooter)");
+        telemetry.addLine("Tune kff/kp/ki/iZone/maxI/dropThreshold/kBoost in Dashboard (group: PrototypeShooter)");
         shooter.setTelemetry();
         telemetry.update();
 
