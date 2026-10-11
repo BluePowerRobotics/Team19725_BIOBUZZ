@@ -25,7 +25,9 @@ import org.firstinspires.ftc.teamcode.utility.filter.EKF.EKF;
  * <p>作为<b>固定权重对照组</b>，与 {@link AdaptiveEKFLocalizer} 的区别：
  * <ul>
  *   <li>Q 与 R 均为固定值（构造时默认值，每帧重写），不做 IMU/视觉自适应</li>
- *   <li>视觉更新不做马氏距离门控，仅做有效性过滤</li>
+ *   <li>视觉更新不做马氏距离门控，仅做有效性过滤
+ *       ({@link MT1Localizer#isValid()} 且 {@link MT1Localizer#isHiveEstimated()}，
+ *       后者为 false 时 {@code MT1Localizer#getPose()} 会回退为受污染的原始位姿)</li>
  *   <li>不需要 IMU 硬件 (D2 模式)</li>
  * </ul>
  *
@@ -68,7 +70,20 @@ public class EKFLocalizer implements Localizer {
      * @param initialPose  初始位姿 (x, y, heading)
      */
     public EKFLocalizer(HardwareMap hardwareMap, Limelight3A limelight, Pose2d initialPose) {
-        this.ekf = new EKF(initialPose.position.x, initialPose.position.y, initialPose.heading.toDouble());
+        this(hardwareMap, limelight, initialPose, false);
+    }
+
+    /**
+     * D2 模式构造 (标准 2D 里程计)，可开启视觉时间戳回滚重放。
+     *
+     * @param hardwareMap  硬件映射
+     * @param limelight    已启动的 Limelight3A 实例
+     * @param initialPose  初始位姿 (x, y, heading)
+     * @param allowReplay  是否启用视觉时间戳回滚重放 (默认 false)
+     */
+    public EKFLocalizer(HardwareMap hardwareMap, Limelight3A limelight, Pose2d initialPose,
+                        boolean allowReplay) {
+        this.ekf = new EKF(initialPose.position.x, initialPose.position.y, initialPose.heading.toDouble(), allowReplay);
         ekf.setQ(QbasePos, QbasePos, QbaseAngle);
         ekf.setR(RbasePos, RbasePos, RbaseAngle);
         this.odom = new PinpointLocalizer(hardwareMap, 0.001999, initialPose);
@@ -80,7 +95,7 @@ public class EKFLocalizer implements Localizer {
      * D2 模式简化构造: 初始位姿 (0, 0, 0)。
      */
     public EKFLocalizer(HardwareMap hardwareMap, Limelight3A limelight) {
-        this(hardwareMap, limelight, new Pose2d(0, 0, 0));
+        this(hardwareMap, limelight, new Pose2d(0, 0, 0), false);
     }
 
     /**
@@ -93,7 +108,21 @@ public class EKFLocalizer implements Localizer {
      */
     public EKFLocalizer(HardwareMap hardwareMap, Limelight3A limelight,
                         String imuDeviceName, Pose2d initialPose) {
-        this.ekf = new EKF(initialPose.position.x, initialPose.position.y, initialPose.heading.toDouble());
+        this(hardwareMap, limelight, imuDeviceName, initialPose, false);
+    }
+
+    /**
+     * D3 模式构造 (3D 斜坡补偿里程计)，可开启视觉时间戳回滚重放。
+     *
+     * @param hardwareMap   硬件映射
+     * @param limelight     已启动的 Limelight3A 实例
+     * @param imuDeviceName Hub IMU 设备名 (如 "imu")
+     * @param initialPose   初始位姿 (x, y, heading)
+     * @param allowReplay   是否启用视觉时间戳回滚重放 (默认 false)
+     */
+    public EKFLocalizer(HardwareMap hardwareMap, Limelight3A limelight,
+                        String imuDeviceName, Pose2d initialPose, boolean allowReplay) {
+        this.ekf = new EKF(initialPose.position.x, initialPose.position.y, initialPose.heading.toDouble(), allowReplay);
         ekf.setQ(QbasePos, QbasePos, QbaseAngle);
         ekf.setR(RbasePos, RbasePos, RbaseAngle);
         this.odom = new PinpointD3Localizer(hardwareMap, 0.001999, imuDeviceName, initialPose);
@@ -129,13 +158,17 @@ public class EKFLocalizer implements Localizer {
 
         // ---- 4. MT1 视觉 → EKF 更新 (固定 R, 无门控, 仅有效性过滤) ----
         mt1.update();
-        if (mt1.isValid()) {
+        // 与 AdaptiveEKFLocalizer 保持一致: isHiveEstimated() 为 false 表示该帧 HIVE 解算失败或被拒
+        // (无标签 / 无解 / 取根超 CellUpAngle / 姿态交叉校验不通过 / 枢轴高度未标定),
+        // 此时 mt1.getPose() 是未经修正的受污染位姿, 不可作为观测量
+        if (mt1.isValid() && mt1.isHiveEstimated()) {
             Pose2d visionPose = mt1.getPose();              // (英寸, 英寸, 弧度)
             ekf.update(
                     visionPose.position.x,                  // 英寸
                     visionPose.position.y,                  // 英寸
                     visionPose.heading.toDouble(),          // 弧度
-                    mt1.getTimestamp()
+                    // 回滚重放需与 predict 快照同基准 (System.nanoTime()); 未启用时沿用 Limelight 硬件时间戳
+                    ekf.isReplayEnabled() ? mt1.getTimestampNanoBase() : mt1.getTimestamp()
             );
         }
 
