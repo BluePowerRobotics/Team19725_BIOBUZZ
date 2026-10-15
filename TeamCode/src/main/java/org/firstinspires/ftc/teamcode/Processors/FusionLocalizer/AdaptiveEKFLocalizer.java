@@ -17,6 +17,7 @@ import org.firstinspires.ftc.teamcode.RoadRunner.Localizer;
 import org.firstinspires.ftc.teamcode.RoadRunner.PinpointLocalizer;
 import org.firstinspires.ftc.teamcode.Processors.D3Localizer.PinpointD3Localizer;
 import org.firstinspires.ftc.teamcode.Processors.VisionLocalizer.MT1Localizer;
+import org.firstinspires.ftc.teamcode.Parameter.TeamColor;
 import org.firstinspires.ftc.teamcode.utility.filter.EKF.EKF;
 
 /**
@@ -43,7 +44,14 @@ import org.firstinspires.ftc.teamcode.utility.filter.EKF.EKF;
  * </ul>
  *
  * <p><b>R 自适应</b>: MT1 各方向 stdDev → 各方向独立 R 矩阵
+ *
+ * <p><b>视觉门控</b>: 仅当 {@link MT1Localizer#isValid()} 与 {@link MT1Localizer#isHiveEstimated()}
+ * 同时为 true 时才进入 R 自适应与马氏距离门控。后者为 false 说明该帧 HIVE 倾角无解或被拒
+ * (无标签 / 无解 / 取根超 CellUpAngle / 姿态交叉校验不通过 / 枢轴高度未标定),
+ * 此时 {@code MT1Localizer#getPose()} 回退为未经修正的受污染位姿, 必须整帧丢弃。
  */
+
+//todo：向 RobotPosition 透传 MT1Localizer 的 hive 倾角/状态观测（拒绝无效视觉更新已实现）
 @Config
 public class AdaptiveEKFLocalizer implements Localizer {
 
@@ -72,9 +80,10 @@ public class AdaptiveEKFLocalizer implements Localizer {
 
     /** Q 基值 (in²/s) */
     public static double qBase = 0.002;
-    public static double qBoostX = 1.0;
-    public static double qBoostY = 1.0;
-    public static double qBoostTheta = 1.0;
+    /** Q 倍增因子 (运行时状态, 每实例独立; 不可为 static, 否则多实例互相污染) */
+    private double qBoostX = 1.0;
+    private double qBoostY = 1.0;
+    private double qBoostTheta = 1.0;
 
     // ---- D2: 角加速度阈值 (冲击检测) ----
     public static double ANGULAR_ACCEL_THRESHOLD = 5.0;  // rad/s² (pitch/roll 角加速度阈值)
@@ -112,13 +121,13 @@ public class AdaptiveEKFLocalizer implements Localizer {
     /** 马氏距离门控阈值 (无量纲) */
     public static double GATE_THRESHOLD = 4.0;
 
-    /** R 基值缓存 (调试用) */
-    public static double rBase = 0.01;
+    /** R 基值缓存 (调试展示, 每实例独立) */
+    private double rBase = 0.01;
 
     // ==================== 构造 ====================
 
     /**
-     * D2 模式构造 (标准 2D 里程计)。
+     * D2 模式构造 (标准 2D 里程计), 默认红方 (Limelight pipeline 0)。
      *
      * @param hardwareMap    硬件映射
      * @param limelight      已启动的 Limelight3A 实例
@@ -127,23 +136,18 @@ public class AdaptiveEKFLocalizer implements Localizer {
      */
     public AdaptiveEKFLocalizer(HardwareMap hardwareMap, Limelight3A limelight,
                            String imuDeviceName, Pose2d initialPose) {
-        this.ekf = new EKF(initialPose.position.x, initialPose.position.y, initialPose.heading.toDouble());
-        this.odom = new PinpointLocalizer(hardwareMap, 0.001999, initialPose);
-        this.mt1 = new MT1Localizer(limelight);
-        this.hubImu = hardwareMap.get(IMU.class, imuDeviceName);
-        this.useD3 = false;
-        this.lastTimestamp = getNow();
+        this(hardwareMap, limelight, imuDeviceName, initialPose, false, TeamColor.RED);
     }
 
     /**
-     * D2 模式简化构造: 使用默认 IMU 名称 "imu", 初始位姿 (0,0,0)。
+     * D2 模式简化构造: 使用默认 IMU 名称 "imu", 初始位姿 (0,0,0), 默认红方。
      */
     public AdaptiveEKFLocalizer(HardwareMap hardwareMap, Limelight3A limelight) {
-        this(hardwareMap, limelight, "imu", new Pose2d(0, 0, 0));
+        this(hardwareMap, limelight, "imu", new Pose2d(0, 0, 0), false, TeamColor.RED);
     }
 
     /**
-     * D3 模式构造 (3D 斜坡补偿里程计)。
+     * D3 模式构造 (3D 斜坡补偿里程计), 默认红方 (Limelight pipeline 0)。
      *
      * @param hardwareMap    硬件映射
      * @param limelight      已启动的 Limelight3A 实例
@@ -152,13 +156,46 @@ public class AdaptiveEKFLocalizer implements Localizer {
      */
     public AdaptiveEKFLocalizer(HardwareMap hardwareMap, Limelight3A limelight,
                            String imuDeviceName, Pose2d initialPose, boolean useD3) {
-        this.ekf = new EKF(initialPose.position.x, initialPose.position.y, initialPose.heading.toDouble());
+        this(hardwareMap, limelight, imuDeviceName, initialPose, useD3, TeamColor.RED);
+    }
+
+    /**
+     * 完整构造。
+     *
+     * @param hardwareMap    硬件映射
+     * @param limelight      已启动的 Limelight3A 实例
+     * @param imuDeviceName  IMU 设备名 (如 "imu")，供里程计和 adaptQ 共用
+     * @param initialPose    初始位姿 (x, y, heading)
+     * @param useD3          true 使用 D3 斜坡补偿里程计, false 使用标准 2D 里程计
+     * @param teamColor      队伍颜色: 红方加载 Limelight pipeline 0, 蓝方加载 pipeline 1
+     */
+    public AdaptiveEKFLocalizer(HardwareMap hardwareMap, Limelight3A limelight,
+                           String imuDeviceName, Pose2d initialPose, boolean useD3,
+                           TeamColor teamColor) {
+        this(hardwareMap, limelight, imuDeviceName, initialPose, useD3, teamColor, false);
+    }
+
+    /**
+     * 完整构造，可开启视觉时间戳回滚重放。
+     *
+     * @param hardwareMap    硬件映射
+     * @param limelight      已启动的 Limelight3A 实例
+     * @param imuDeviceName  IMU 设备名 (如 "imu")，供里程计和 adaptQ 共用
+     * @param initialPose    初始位姿 (x, y, heading)
+     * @param useD3          true 使用 D3 斜坡补偿里程计, false 使用标准 2D 里程计
+     * @param teamColor      队伍颜色: 红方加载 Limelight pipeline 0, 蓝方加载 pipeline 1
+     * @param allowReplay    是否启用视觉时间戳回滚重放 (默认 false)
+     */
+    public AdaptiveEKFLocalizer(HardwareMap hardwareMap, Limelight3A limelight,
+                           String imuDeviceName, Pose2d initialPose, boolean useD3,
+                           TeamColor teamColor, boolean allowReplay) {
+        this.ekf = new EKF(initialPose.position.x, initialPose.position.y, initialPose.heading.toDouble(), allowReplay);
         if (useD3) {
             this.odom = new PinpointD3Localizer(hardwareMap, 0.001999, imuDeviceName, initialPose);
         } else {
             this.odom = new PinpointLocalizer(hardwareMap, 0.001999, initialPose);
         }
-        this.mt1 = new MT1Localizer(limelight);
+        this.mt1 = new MT1Localizer(limelight, teamColor);
         this.hubImu = hardwareMap.get(IMU.class, imuDeviceName);
         this.useD3 = useD3;
         this.lastTimestamp = getNow();
@@ -194,7 +231,9 @@ public class AdaptiveEKFLocalizer implements Localizer {
 
         // ---- 4. MT1 视觉 → 自适应 R 矩阵 + 门控 + EKF 更新 ----
         mt1.update();
-        if (mt1.isValid()) {
+        // isHiveEstimated() 为 false 表示该帧 HIVE 解算失败或被拒 (无标签 / 无解 / 取根超 CellUpAngle /
+        // 姿态交叉校验不通过 / 枢轴高度未标定), 此时 mt1.getPose() 是未经修正的受污染位姿, 直接丢弃
+        if (mt1.isValid() && mt1.isHiveEstimated()) {
             ekf.setR(adaptR());
             Pose2d visionPose = mt1.getPose();              // (英寸, 英寸, 弧度)
             if (ekf.gateVision(
@@ -207,7 +246,8 @@ public class AdaptiveEKFLocalizer implements Localizer {
                         visionPose.position.x,                  // 英寸
                         visionPose.position.y,                  // 英寸
                         visionPose.heading.toDouble(),          // 弧度
-                        mt1.getTimestamp()
+                        // 回滚重放需与 predict 快照同基准 (System.nanoTime()); 未启用时沿用 Limelight 硬件时间戳
+                        ekf.isReplayEnabled() ? mt1.getTimestampNanoBase() : mt1.getTimestamp()
                 );
             }
         }
