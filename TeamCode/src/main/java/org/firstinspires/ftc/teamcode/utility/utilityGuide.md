@@ -56,6 +56,7 @@ utility/
 | `Geometry/` | 几何计算工具，包含凸多边形处理 |
 | `RK4/` | 四阶龙格-库塔数值积分法实现的弹道模拟系统 |
 | `filter/` | 数据滤波算法，包含均值滤波、角度滤波和卡尔曼滤波 |
+| `Shooter/` | 发射机构（飞轮）速度环的纯计算类，由 `Controllers/Shooter/PrototypeShooter` 调用 |
 
 ### 使用建议
 
@@ -72,3 +73,4 @@ utility/
 - [Geometry/Guide.md](./Geometry/Guide.md)
 - [RK4/Guide.md](./RK4/Guide.md)
 - [filter/Guide.md](./filter/Guide.md)
+- [Shooter/Guide.md](./Shooter/Guide.md)
