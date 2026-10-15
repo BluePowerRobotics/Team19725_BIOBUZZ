@@ -23,6 +23,13 @@ public class HypParams {
     public static double maxOmega = Math.PI;
 
     /**
+     * 底盘半长（英寸）：底盘中心到最后端 / 最前端中点的距离。
+     * 用于在「最后端中点坐标」与「底盘中心坐标」之间换算，以及由 intake 目标点反推中心位姿。
+     * todo:实机测量标定（取值取自 master 分支 52ad315）
+     */
+    public static double chassisHalfLengthIn = 9.0;
+
+    /**
      * todo:红队初始姿态（单位：英寸，弧度）
      * 包含初始位置(x, y)和初始朝向(theta)
      */

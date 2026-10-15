@@ -30,6 +30,10 @@ import org.firstinspires.ftc.robotcore.external.navigation.CurrentUnit;
  *   <li>清零节点：① 停机（targetVelocity == 0）；② 误差带外（|err| ≥ iZone）；③ 触发掉速补偿时。</li>
  * </ul>
  *
+ * <p><b>掉速检测的「武装」规则</b>：只有当误差回到 {@link #dropThreshold} 以内（即系统已进入稳态）
+ * 之后，掉速检测才被允许触发补偿；目标转速一旦改变立刻重新解除武装。这样从 0 拉起时的正常加速段
+ * 不会被误判成掉速（否则 boost 会全程挂着并在到速后造成过冲）。
+ *
  * <p><b>参数标定</b>：可依据《飞轮系统控制理论研究报告》第 6 章的黑箱辨识方法 —— 阶跃响应辨识
  * {@link #kff}/{@link #kp}/{@link #ki}，稳态速度波动定 {@link #dropThreshold}，正常工况最大减速度定
  * {@link #dropRateThreshold}，{@link #kBoost} 先取 2~5 倍 kp。
@@ -101,6 +105,11 @@ public class PrototypeShooter {
     /** 补偿已持续时长 (s) */
     private double boostTimer = 0;
 
+    /** 掉速检测是否已「武装」：只有进入稳态（误差回到阈值内）后才允许触发补偿 */
+    private boolean dropArmed = false;
+    /** 上一次的目标转速，用于在目标改变时重新解除武装 */
+    private double lastTargetVel = Double.NaN;
+
     public PrototypeShooter(HardwareMap hardwareMap, Telemetry telemetry) {
         this.telemetry = telemetry;
         this.motor = hardwareMap.get(DcMotorEx.class, MOTOR_NAME);
@@ -154,8 +163,18 @@ public class PrototypeShooter {
         double dVelocity = (currentVel - previousVelocity) / dt;
         previousVelocity = currentVel;
 
+        // ---- 掉速检测「武装」：只有进入稳态（误差回到阈值内）后才允许触发补偿，
+        //      否则从 0 拉起时的正常加速段会被误判为掉速，导致 boost 全程挂着并造成过冲 ----
+        if (targetVel != lastTargetVel) {
+            dropArmed = false; // 目标改变 → 重新等待进入稳态
+            lastTargetVel = targetVel;
+        }
+        if (Math.abs(error) < dropThreshold) {
+            dropArmed = true;
+        }
+
         // ---- 掉速检测与触发补偿 ----
-        boolean dropDetected = targetVel != 0
+        boolean dropDetected = dropArmed && targetVel != 0
                 && (error > dropThreshold || dVelocity < -dropRateThreshold);
         if (dropDetected) {
             boostActive = true;
@@ -225,6 +244,8 @@ public class PrototypeShooter {
         previousVelocity = motor.getVelocity();
         boostActive = false;
         boostTimer = 0.0;
+        dropArmed = false;
+        lastTargetVel = Double.NaN;
         lastFFTerm = 0;
         lastPTerm = 0;
         lastITerm = 0;

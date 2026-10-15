@@ -99,7 +99,9 @@ public class RelayFeedbackTuner extends LinearOpMode {
         bufN = 0;
         bufNext = 0;
         logger.start(hardwareMap.appContext, "relay03");
-        logger.log("# relay feedback, target=" + targetVelocity + ", dHigh=" + dHigh + ", dLow=" + dLow);
+        logger.log("# relay feedback, target=" + targetVelocity + ", dHigh=" + dHigh + ", dLow=" + dLow
+                + ", transientSec=" + transientSec + ", measureSec=" + measureSec
+                + ", hysteresis=" + hysteresis);
 
         double lastDuty = (dHigh + dLow) / 2.0;
 
@@ -152,19 +154,14 @@ public class RelayFeedbackTuner extends LinearOpMode {
     }
 
     private void showResult() {
-        telemetry.addData("target (tick/s)", targetVelocity);
-        telemetry.addData("dHigh / dLow", "%.3f / %.3f", dHigh, dLow);
-        telemetry.addLine("---- 极限环 ----");
-        telemetry.addData("amplitude a (tick/s)", "%.1f", amp);
-        telemetry.addData("Tu (s)", Double.isNaN(tu) ? "n/a" : String.format(java.util.Locale.US, "%.4f", tu));
+        telemetry.addData("target / dHigh / dLow", "%d / %.3f / %.3f", targetVelocity, dHigh, dLow);
+        telemetry.addData("amp a / Tu", "%.1f / %s", amp,
+                Double.isNaN(tu) ? "n/a" : String.format(java.util.Locale.US, "%.4f", tu));
         if (!hasResult) {
             telemetry.addLine("Result: (invalid — check dHigh/dLow, run again)");
             return;
         }
-        telemetry.addLine("---- 建议参数 ----");
-        telemetry.addData("Ku", "%.8f", ku);
-        telemetry.addData("kp", "%.8f", sugKp);
-        telemetry.addData("ki", "%.8f", sugKi);
+        telemetry.addData("建议 Ku / kp / ki", "%.8f / %.8f / %.8f", ku, sugKp, sugKi);
     }
 
     // ==================== 采样缓冲与分析 ====================

@@ -55,6 +55,8 @@ public class FeedforwardTuner extends LinearOpMode {
     private PrototypeShooter shooter;
     private final TuningLogger logger = new TuningLogger();
     private final ElapsedTime timer = new ElapsedTime();
+    /** 测量专用计时器：不干扰主循环的日志时间轴 */
+    private final ElapsedTime measureTimer = new ElapsedTime();
 
     /** 上一次方向键状态：-1 下 / 0 未按 / 1 上 */
     private int lastDir = 0;
@@ -65,6 +67,8 @@ public class FeedforwardTuner extends LinearOpMode {
 
     private double lastOmega = 0, lastDss = 0, lastKff = 0;
     private boolean hasLast = false;
+    /** 最近一点是否已饱和（d_ss ≥ 0.95），饱和点不可用于定 Kff */
+    private boolean lastSaturated = false;
 
     /** 进入时保存被本 OpMode 强制改写的 kff，退出时恢复 */
     private double origKff;
@@ -82,7 +86,8 @@ public class FeedforwardTuner extends LinearOpMode {
 
         waitForStart();
         logger.start(hardwareMap.appContext, "ff05");
-        logger.log("# feedforward calibration (kff forced 0)");
+        logger.log("# feedforward calibration (kff forced 0), settleSec=" + settleSec
+                + ", windowSec=" + windowSec + ", velocityStep=" + velocityStep);
 
         while (opModeIsActive()) {
             // 目标转速调节（按住则按 repeatPeriodMs 连续调节）
@@ -122,13 +127,13 @@ public class FeedforwardTuner extends LinearOpMode {
 
     /** 在当前目标转速下等待稳定，取稳态占空比作为一点。 */
     private void measurePoint() {
-        // 稳定阶段
-        timer.reset();
-        while (opModeIsActive() && timer.seconds() < settleSec) {
+        // 稳定阶段（用独立的计时器，避免重置主循环的日志时间轴 → 否则 CSV 时间列会非单调）
+        measureTimer.reset();
+        while (opModeIsActive() && measureTimer.seconds() < settleSec) {
             PrototypeShooter.kff = 0.0;
             shooter.setTargetVelocity(targetVelocity);
             shooter.update();
-            telemetry.addData("Status", "settling... %.1f", timer.seconds());
+            telemetry.addData("Status", "settling... %.1f", measureTimer.seconds());
             telemetry.update();
             idle();
         }
@@ -136,8 +141,8 @@ public class FeedforwardTuner extends LinearOpMode {
         // 取均值
         double sumDuty = 0, sumVel = 0;
         int n = 0;
-        timer.reset();
-        while (opModeIsActive() && timer.seconds() < windowSec) {
+        measureTimer.reset();
+        while (opModeIsActive() && measureTimer.seconds() < windowSec) {
             PrototypeShooter.kff = 0.0;
             shooter.setTargetVelocity(targetVelocity);
             shooter.update();
@@ -151,24 +156,24 @@ public class FeedforwardTuner extends LinearOpMode {
         lastOmega = sumVel / n;
         lastDss = sumDuty / n;
         lastKff = lastOmega > 1e-6 ? lastDss / lastOmega : 0;
+        // 占空比接近 1 说明已饱和，该点的 d_ss 不可信（Kff 会偏小）
+        lastSaturated = lastDss >= 0.95;
         hasLast = true;
 
         points.add(new double[]{lastOmega, lastDss});
-        logger.log(String.format(Locale.US, "# point omega=%.1f dss=%.4f kff=%.8f",
-                lastOmega, lastDss, lastKff));
+        logger.log(String.format(Locale.US, "# point omega=%.1f dss=%.4f kff=%.8f%s",
+                lastOmega, lastDss, lastKff, lastSaturated ? " SATURATED(invalid)" : ""));
     }
 
-    // 遥测在循环里直接输出，这里提供统一展示（每帧调用）
+    // 遥测在循环里直接输出，这里提供统一展示（每帧调用）；只保留判读必需的行
     private void showTelemetry() {
-        telemetry.addData("target (tick/s)", targetVelocity);
-        telemetry.addData("velocity (tick/s)", "%.0f", shooter.getVelocity());
-        telemetry.addData("duty", "%.4f", shooter.getDuty());
-        telemetry.addData("points", points.size());
-
+        telemetry.addData("target", targetVelocity);
+        telemetry.addData("velocity / duty", "%.0f / %.4f", shooter.getVelocity(), shooter.getDuty());
         if (hasLast) {
-            telemetry.addData("last omega", "%.1f", lastOmega);
-            telemetry.addData("last d_ss", "%.4f", lastDss);
-            telemetry.addData("last Kff", "%.8f", lastKff);
+            telemetry.addData("last point", "n=%d w=%.0f d_ss=%.4f Kff=%.8f%s",
+                    points.size(), lastOmega, lastDss, lastKff, lastSaturated ? " [SATURATED]" : "");
+        } else {
+            telemetry.addData("points", points.size());
         }
 
         if (points.size() >= 1) {
@@ -186,8 +191,7 @@ public class FeedforwardTuner extends LinearOpMode {
                 if (Math.abs(denom) > 1e-9) {
                     double slope = (n * sOD - sO * sD) / denom;
                     double intercept = (sD - slope * sO) / n;
-                    telemetry.addData("Kff (linear fit slope)", "%.8f", slope);
-                    telemetry.addData("fit intercept", "%.4f", intercept);
+                    telemetry.addData("Kff (fit) / intercept", "%.8f / %.4f", slope, intercept);
                 }
             }
         }

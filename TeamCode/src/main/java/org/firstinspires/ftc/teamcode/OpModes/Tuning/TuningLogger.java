@@ -15,6 +15,9 @@ import java.util.Locale;
  * <p>文件路径：{@code <RC 外部存储>/tuning/<name>_<时间戳>.csv}，可在
  * Robot Controller 应用的 "Files" 或用 USB/`adb pull` 取出。
  *
+ * <p>文件格式：以 {@code #} 开头的注释行（含 OpMode 写入的参数说明），随后是表头
+ * {@code t,duty,velocity} 与数据行，列序固定为「时间(s), 占空比, 转速(tick/s)」。
+ *
  * <p>用法：
  * <pre>
  *   logger.start(hardwareMap.appContext, "step01");
@@ -50,6 +53,11 @@ public class TuningLogger {
             writer = new BufferedWriter(new FileWriter(file));
             path = file.getAbsolutePath();
             sinceFlush = 0;
+            // 统一表头：注释行 + 固定列序，便于离线用 numpy/pandas 直接读取画图
+            // （以 '#' 开头的行是注释，解析时跳过；第一行非注释即为列名）
+            log("# flywheel tuning data (" + name + ")");
+            log("# t(s),duty,velocity(tick/s)");
+            log("t,duty,velocity");
         } catch (IOException e) {
             writer = null;
             path = "(打开失败: " + e.getMessage() + ")";

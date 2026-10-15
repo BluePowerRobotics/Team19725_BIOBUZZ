@@ -77,7 +77,6 @@ public class StepResponseTuner extends LinearOpMode {
         telemetry.addLine("Method 6.1  Step-response identification");
         telemetry.addLine("A: run test    X: stop motor");
         telemetry.addLine("Tune d0/dStep/settleSec/recordSec/tRecover in Dashboard");
-        telemetry.addData("CSV", logger.getPath());
         telemetry.update();
 
         waitForStart();
@@ -101,7 +100,10 @@ public class StepResponseTuner extends LinearOpMode {
         sampleCount = 0;
         hasResult = false;
         logger.start(hardwareMap.appContext, "step01");
-        logger.log("# step response, d0=" + d0 + ", dStep=" + dStep);
+        logger.log("# step response, d0=" + d0 + ", dStep=" + dStep
+                + ", settleSec=" + settleSec + ", recordSec=" + recordSec
+                + ", steadyWindowSec=" + steadyWindowSec
+                + ", tRecover=" + tRecover + ", ratio=" + ratio);
 
         // ---- 阶段 1：维持在 d0，等待稳定 ----
         shooter.motor.setPower(d0);
@@ -125,6 +127,7 @@ public class StepResponseTuner extends LinearOpMode {
         // ---- 阶段 2：阶跃到 dStep 并记录 ----
         shooter.motor.setPower(dStep);
         timer.reset();
+        logger.log("# --- step applied here (t=0 of this segment) ---");
         int i = 0;
         while (opModeIsActive() && timer.seconds() < recordSec && i < MAX_SAMPLES) {
             double t = timer.seconds();
@@ -186,18 +189,13 @@ public class StepResponseTuner extends LinearOpMode {
 
     private void showResult() {
         telemetry.addData("d0 / dStep", "%.3f / %.3f", d0, dStep);
-        telemetry.addData("omega0 (tick/s)", "%.0f", omega0);
-        telemetry.addData("omegaSS (tick/s)", "%.0f", omegaSS);
+        telemetry.addData("omega0 / omegaSS", "%.0f / %.0f", omega0, omegaSS);
         if (!hasResult) {
             telemetry.addLine("Result: (invalid — check d0/dStep, run again)");
             return;
         }
-        telemetry.addLine("---- 辨识结果 ----");
-        telemetry.addData("Kd  (tick/s per duty)", "%.4f", kd);
-        telemetry.addData("tau (s)", "%.4f", tau);
-        telemetry.addLine("---- 建议参数 (填入 PrototypeShooter) ----");
-        telemetry.addData("kff", "%.8f", kff);
-        telemetry.addData("kp", "%.8f", sugKp);
-        telemetry.addData("ki", "%.8f", sugKi);
+        telemetry.addData("Kd / tau", "%.4f / %.4f", kd, tau);
+        telemetry.addData("建议 kff / kp / ki", "%.8f / %.8f / %.8f", kff, sugKp, sugKi);
+        telemetry.addData("CSV", logger.getPath());
     }
 }

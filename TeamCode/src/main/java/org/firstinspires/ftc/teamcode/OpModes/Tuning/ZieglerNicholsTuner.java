@@ -37,6 +37,8 @@ public class ZieglerNicholsTuner extends LinearOpMode {
     public static int targetVelocity = 3000;
     /** 判定振荡所需的最少过零次数 */
     public static int minZeroCrossings = 4;
+    /** 改变 kp 后等待暂态过去的时间 (s)：此期间不采样进振荡缓冲 */
+    public static double warmupSec = 3.0;
     /** 按住方向键时的 kp 连续调节周期 (ms) */
     public static long repeatPeriodMs = 150;
 
@@ -49,6 +51,10 @@ public class ZieglerNicholsTuner extends LinearOpMode {
     /** 上一次方向键状态：-1 下 / 0 未按 / 1 上 */
     private int lastDir = 0;
     private final ElapsedTime repeatTimer = new ElapsedTime();
+
+    /** 上一次采样时的 kp，用于在 kp 改变时清空缓冲并重新等待暂态 */
+    private double lastKp = Double.NaN;
+    private double kpChangeTime = 0;
 
     private PrototypeShooter shooter;
     private final TuningLogger logger = new TuningLogger();
@@ -82,7 +88,8 @@ public class ZieglerNicholsTuner extends LinearOpMode {
 
         waitForStart();
         logger.start(hardwareMap.appContext, "zn02");
-        logger.log("# ZN critical-gain test, target=" + targetVelocity);
+        logger.log("# ZN critical-gain test, target=" + targetVelocity
+                + ", startKp=" + PrototypeShooter.kp + ", warmupSec=" + warmupSec);
         timer.reset();
 
         while (opModeIsActive()) {
@@ -103,11 +110,21 @@ public class ZieglerNicholsTuner extends LinearOpMode {
             }
             lastDir = dir;
 
+            // kp 一变就清空振荡缓冲并重新等暂态：否则旧 kp 的响应/启动峰值会被算进幅值与周期
+            if (PrototypeShooter.kp != lastKp) {
+                lastKp = PrototypeShooter.kp;
+                kpChangeTime = timer.seconds();
+                bufN = 0;
+                bufNext = 0;
+            }
+
             shooter.setTargetVelocity(targetVelocity);
             shooter.update();
 
             double t = timer.seconds();
-            push(t, shooter.getVelocity());
+            if (t - kpChangeTime >= warmupSec) {
+                push(t, shooter.getVelocity());
+            }
             logger.logRow(t, shooter.getDuty(), shooter.getVelocity());
 
             double[] osc = estimateOscillation();
@@ -146,19 +163,15 @@ public class ZieglerNicholsTuner extends LinearOpMode {
     }
 
     private void showTelemetry() {
-        telemetry.addData("target (tick/s)", targetVelocity);
-        telemetry.addData("velocity (tick/s)", "%.0f", shooter.getVelocity());
-        telemetry.addData("current kp (Ku?)", "%.8f", PrototypeShooter.kp);
-        telemetry.addLine("---- 振荡估计 ----");
-        telemetry.addData("osc amp (tick/s)", "%.1f", estAmp);
-        telemetry.addData("osc mean (tick/s)", "%.0f", estMean);
-        telemetry.addData("Tu (s)", Double.isNaN(estTu) ? "n/a" : String.format(java.util.Locale.US, "%.4f", estTu));
+        telemetry.addData("target / velocity", "%d / %.0f", targetVelocity, shooter.getVelocity());
+        telemetry.addData("kp (Ku?)", "%.8f", PrototypeShooter.kp);
+        boolean sampling = timer.seconds() - kpChangeTime >= warmupSec;
+        telemetry.addData("osc amp / Tu", "%.1f / %s%s", estAmp,
+                Double.isNaN(estTu) ? "n/a" : String.format(java.util.Locale.US, "%.4f", estTu),
+                sampling ? "" : "  (settling)");
         if (locked) {
-            telemetry.addLine("---- 锁定结果 ----");
-            telemetry.addData("Ku", "%.8f", ku);
-            telemetry.addData("Tu (s)", "%.4f", tuLocked);
-            telemetry.addData("建议 kp", "%.8f", sugKp);
-            telemetry.addData("建议 ki", "%.8f", sugKi);
+            telemetry.addData("LOCKED Ku / Tu", "%.8f / %.4f", ku, tuLocked);
+            telemetry.addData("建议 kp / ki", "%.8f / %.8f", sugKp, sugKi);
         }
     }
 

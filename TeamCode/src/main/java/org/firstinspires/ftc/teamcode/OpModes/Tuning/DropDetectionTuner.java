@@ -60,7 +60,12 @@ public class DropDetectionTuner extends LinearOpMode {
     // 结果
     private double stdVel = 0, maxDecel = 0, dropThreshold = 0, dropRateThreshold = 0, kBoost = 0;
     private double meanVel = 0, meanDuty = 0;
+    /** 速度量化台阶 (tick/s)：由实测速度的最大公约数求得 */
+    private double quantStep = 0;
     private boolean hasResult = false;
+
+    /** 求最大减速度前的速度 EMA 平滑系数 */
+    private static final double EMA_ALPHA = 0.3;
 
     // 进入时保存被本 OpMode 强制关闭的掉速阈值，退出时恢复，避免污染其它 OpMode
     private double origDropThreshold, origDropRateThreshold;
@@ -100,7 +105,9 @@ public class DropDetectionTuner extends LinearOpMode {
         hasResult = false;
         sampleCount = 0;
         logger.start(hardwareMap.appContext, "drop04");
-        logger.log("# drop-detection calibration, target=" + targetVelocity);
+        logger.log("# drop-detection calibration, target=" + targetVelocity
+                + ", settleSec=" + settleSec + ", measureSec=" + measureSec
+                + ", kSigma=" + kSigma + ", kRate=" + kRate + ", kBoostRatio=" + kBoostRatio);
 
         // ---- 稳定段：闭环运行，关闭掉速补偿以免污染统计 ----
         shooter.setTargetVelocity(targetVelocity);
@@ -150,15 +157,28 @@ public class DropDetectionTuner extends LinearOpMode {
         // 样本标准差（÷ N-1），与报告 6.4 脚本口径一致
         stdVel = sampleCount > 1 ? Math.sqrt(sq / (sampleCount - 1)) : 0;
 
-        // 只统计减速度（速度下降的分量），不与加速度混淆
+        // 速度量化台阶：任何稳态精度 / 阈值讨论都必须先报出台阶
+        int g = 0;
+        for (int j = 0; j < sampleCount; j++) {
+            int v = (int) Math.round(Math.abs(velArr[j]));
+            if (v != 0) g = gcd(g, v);
+        }
+        quantStep = g;
+
+        // 只统计减速度（速度下降的分量），不与加速度混淆。
+        // 先对速度做 EMA 平滑再差分：相邻原始样本的读数噪声会把最大减速度显著抬高。
         maxDecel = 0;
+        double ema = velArr[0], prevEma = ema, prevT = timeArr[0];
         for (int j = 1; j < sampleCount; j++) {
-            double dt = timeArr[j] - timeArr[j - 1];
-            if (dt <= 1e-4) continue;
-            double dv = velArr[j] - velArr[j - 1];
-            if (dv >= 0) continue;          // 速度未下降，不是减速度
-            double decel = -dv / dt;        // 减速度取正值
-            if (decel > maxDecel) maxDecel = decel;
+            ema += EMA_ALPHA * (velArr[j] - ema);
+            double dt = timeArr[j] - prevT;
+            double dv = ema - prevEma;
+            if (dt > 1e-4 && dv < 0) {
+                double decel = -dv / dt;    // 减速度取正值
+                if (decel > maxDecel) maxDecel = decel;
+            }
+            prevEma = ema;
+            prevT = timeArr[j];
         }
 
         dropThreshold = kSigma * stdVel;
@@ -167,22 +187,33 @@ public class DropDetectionTuner extends LinearOpMode {
         hasResult = true;
 
         logger.log(String.format(java.util.Locale.US,
-                "# meanVel=%.1f sigma=%.2f maxDecel=%.1f dropThreshold=%.2f dropRate=%.2f kBoost=%.8f Tboost=%.2f",
-                meanVel, stdVel, maxDecel, dropThreshold, dropRateThreshold, kBoost, suggestBoostDurationSec));
+                "# meanVel=%.1f sigma=%.2f step=%.1f maxDecel=%.1f dropThreshold=%.2f dropRate=%.2f kBoost=%.8f Tboost=%.2f",
+                meanVel, stdVel, quantStep, maxDecel, dropThreshold, dropRateThreshold, kBoost, suggestBoostDurationSec));
         logger.close();
     }
 
+    /** 最大公约数：用于求速度反馈的量化台阶 */
+    private static int gcd(int a, int b) {
+        while (b != 0) {
+            int t = a % b;
+            a = b;
+            b = t;
+        }
+        return a;
+    }
+
     private void showResult() {
-        telemetry.addData("target (tick/s)", targetVelocity);
-        telemetry.addData("mean velocity (tick/s)", "%.0f", meanVel);
-        telemetry.addData("std sigma (tick/s)", "%.2f", stdVel);
+        telemetry.addData("target", targetVelocity);
+        telemetry.addData("mean / sigma / step", "%.0f / %.2f / %.1f", meanVel, stdVel, quantStep);
+        telemetry.addData("sigma (steps)", quantStep > 1e-9 ? stdVel / quantStep : 0);
         telemetry.addData("max decel (tick/s²)", "%.1f", maxDecel);
         if (!hasResult) {
             telemetry.addLine("Result: (invalid — run again)");
             return;
         }
         telemetry.addLine("---- 建议参数 (填入 PrototypeShooter) ----");
-        telemetry.addData("dropThreshold", "%.2f", dropThreshold);
+        telemetry.addData("dropThreshold", "%.2f  (%.2f steps)",
+                dropThreshold, quantStep > 1e-9 ? dropThreshold / quantStep : 0);
         telemetry.addData("dropRateThreshold", "%.2f", dropRateThreshold);
         telemetry.addData("kBoost (2~5 kp)", "%.8f", kBoost);
         telemetry.addData("boostDurationSec", "%.2f", suggestBoostDurationSec);
