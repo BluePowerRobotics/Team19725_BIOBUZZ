@@ -1,4 +1,4 @@
-# Team19725_BIOBUZZ赛季
+# Team19725\_BIOBUZZ赛季
 
 FTC19725的BIOBUZZ赛季代码\
 FTC BIOBUZZ, team code for 19725, BluePowerRobotics
@@ -21,4 +21,3 @@ AutoActions: 负责自动动作的执行\
 utility: 负责工具函数的实现
 
 Check out the [docs](https://rr.brott.dev/docs/v1-0/tuning/).
-

@@ -98,12 +98,11 @@ public class MyOpMode extends LinearOpMode {
 
 ### 4.1 滤波原理
 
-1. 原始数字量按极性映射为样本：**1 = 遮挡、0 = 未遮挡**。
+1. 原始数字量按极性映射为样本：**0= 遮挡、1 = 未遮挡**。
 2. 用 `utility.filter.EMA` 做指数移动平均：`filtered = alpha * sample + (1 - alpha) * filtered`。
 3. `filtered > threshold` 判定为遮挡。
 
 滤波值可理解为"近段时间被遮挡的程度"。由于是数字量，该过程天然起到**去抖**作用：
-
 - `threshold` 取 0.5 时，约等于"半数以上近期样本为遮挡"才判定；
 - `alpha` 越接近 1 响应越快、抗抖越弱；越接近 0 越平滑、延迟越大。
 
