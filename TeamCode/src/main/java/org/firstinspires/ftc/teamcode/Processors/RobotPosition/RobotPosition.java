@@ -50,6 +50,14 @@ public class RobotPosition {
         }
         return instance;
     }
+
+    /**
+     * @return 已初始化的实例；未初始化时返回 null。
+     *         供可视化等「可选」功能安全访问，避免 {@link #getInstance()} 抛异常。
+     */
+    public static RobotPosition getInstanceOrNull(){
+        return instance;
+    }
     private RobotPosition(){
     }
 
