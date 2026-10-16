@@ -54,15 +54,15 @@ public class HypParams {
             new Vector2D(72, -3)
     );
     /**
-     * 蓝队首个自动发射区域：红队首个发射区域的 x 轴镜像（y 取反）。
-     * 顶点：(24,12)、(48,30)、(48,3)、(72,30)、(72,3)。
+     * 蓝队首个自动发射区域：红队首个发射区域的原点中心对称（x,y 均取反）。
+     * 顶点：(-24,12)、(-48,30)、(-48,3)、(-72,30)、(-72,3)。
      */
     public static ConvexPolygon ShootFirstAreaBlue = new ConvexPolygon(
-            new Vector2D(24, 12),
-            new Vector2D(48, 30),
-            new Vector2D(48, 3),
-            new Vector2D(72, 30),
-            new Vector2D(72, 3)
+            new Vector2D(-24, 12),
+            new Vector2D(-48, 30),
+            new Vector2D(-48, 3),
+            new Vector2D(-72, 30),
+            new Vector2D(-72, 3)
     );
     /**
      * 红队第二自动发射区域：红队首个发射区域的 y 轴镜像（x 取反）。
@@ -76,15 +76,15 @@ public class HypParams {
             new Vector2D(-72, -3)
     );
     /**
-     * 蓝队第二自动发射区域：蓝队首个发射区域的 y 轴镜像（x 取反）。
-     * 顶点：(-24,12)、(-48,30)、(-48,3)、(-72,30)、(-72,3)。
+     * 蓝队第二自动发射区域：蓝队首个发射区域的原点中心对称（x,y 均取反）。
+     * 顶点：(24,12)、(48,30)、(48,3)、(72,30)、(72,3)。
      */
     public static ConvexPolygon ShootSecondAreaBlue = new ConvexPolygon(
-            new Vector2D(-24, 12),
-            new Vector2D(-48, 30),
-            new Vector2D(-48, 3),
-            new Vector2D(-72, 30),
-            new Vector2D(-72, 3)
+            new Vector2D(24, 12),
+            new Vector2D(48, 30),
+            new Vector2D(48, 3),
+            new Vector2D(72, 30),
+            new Vector2D(72, 3)
     );
     /**
      * 底盘半长（英寸）：底盘中心到最后端 / 最前端中点的距离。
@@ -101,6 +101,52 @@ public class HypParams {
      * 第二个取球点（intake 目标点，单位：英寸）。
      */
     public static Vector2D EatPoint2 = new Vector2D(-72, -24);
+
+    /**
+     * 底盘半宽（英寸）：底盘中心到左右侧中点的距离。
+     * 与 {@link #chassisHalfLengthIn} 一起构成底盘外接矩形，用于判定「整机轮廓完全进入区域」。
+     * todo: 实机测量标定
+     */
+    public static double chassisHalfWidthIn = 9.0;
+
+    /**
+     * Hive 正下方矩形区域（红队）：(24,-25)、(24,-1)、(-24,-1)、(-24,-25)。
+     * 即 x∈[-24,24]、y∈[-25,-1]；蓝队为其中心对称区域（{@link #HiveRectBlue}）。
+     */
+    public static ConvexPolygon HiveRectRed = new ConvexPolygon(
+            new Vector2D(24, -25),
+            new Vector2D(24, -1),
+            new Vector2D(-24, -1),
+            new Vector2D(-24, -25)
+    );
+    /**
+     * Hive 正下方矩形区域（蓝队）：红队区域的中心对称 (x,y)->(-x,-y)，
+     * 即 x∈[-24,24]、y∈[1,25]。
+     */
+    public static ConvexPolygon HiveRectBlue = new ConvexPolygon(
+            new Vector2D(-24, 25),
+            new Vector2D(-24, 1),
+            new Vector2D(24, 1),
+            new Vector2D(24, 25)
+    );
+
+    /**
+     * Hive 禁线（红队）：(24,-24) 与 (-24,-24) 两点间线段。机器人（含整机轮廓）不得与其接触。
+     * 蓝队为其中心对称线段（{@link #HiveForbiddenLineBlueA}/{@link #HiveForbiddenLineBlueB}）。
+     */
+    public static Vector2D HiveForbiddenLineRedA = new Vector2D(24, -24);
+    public static Vector2D HiveForbiddenLineRedB = new Vector2D(-24, -24);
+    /**
+     * Hive 禁线（蓝队）：中心对称后为 (-24,24) 与 (24,24) 两点间线段。
+     */
+    public static Vector2D HiveForbiddenLineBlueA = new Vector2D(-24, 24);
+    public static Vector2D HiveForbiddenLineBlueB = new Vector2D(24, 24);
+
+    /**
+     * 绕行 Hive 矩形时，整机轮廓越出矩形边界方向上的额外安全间隙（英寸），
+     * 用于 {@code GoTo*AvoidHiveAction} 的绕行路线。需实机标定。
+     */
+    public static double hiveAvoidClearanceIn = 2.0;
 
     /**
      * todo:红队重置姿态（单位：英寸，弧度）

@@ -88,11 +88,17 @@ public final class MecanumDrive {
         public double kA = 0.00007;
 
         // 路径规划参数（英寸单位）
+        // 这三者共同决定自动轨迹的时间最优梯形速度曲线：以 maxProfileAccel 加速到
+        // maxWheelVel、中间保持 maxWheelVel 巡航、再以 |minProfileAccel| 减速到停止。
+        // 默认值仅为起始基准（模板值），必须用标定 OpMode 迭代到打滑/跟踪发散前的最快值。
         public double maxWheelVel = 50;
-        public double minProfileAccel = -30;
+        // 减速上限与加速对称（-maxProfileAccel），保证「以最短时间、最快速度停止」；
+        // 若实测刹车强于起步，可把该值调到比 -maxProfileAccel 更大（更负）。
+        public double minProfileAccel = -50;
         public double maxProfileAccel = 50;
 
         // 转向规划参数（弧度单位）
+        // 同样参与时间最优曲线：转向段以 maxAngAccel 加速到 maxAngVel。
         public double maxAngVel = Math.PI;
         public double maxAngAccel = Math.PI;
 

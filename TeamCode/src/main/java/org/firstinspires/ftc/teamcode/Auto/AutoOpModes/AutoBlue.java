@@ -14,6 +14,7 @@ import org.firstinspires.ftc.teamcode.Parameter.TeamColor;
 import org.firstinspires.ftc.teamcode.Processors.RobotPosition.RobotPosition;
 import org.firstinspires.ftc.teamcode.RoadRunner.MecanumDrive;
 import org.firstinspires.ftc.teamcode.utility.ActionRunner;
+import org.firstinspires.ftc.teamcode.utility.EatPointTracker;
 import org.firstinspires.ftc.teamcode.utility.RobotStateStore;
 
 //todo：实现完整的状态机
@@ -63,6 +64,8 @@ public class AutoBlue extends LinearOpMode {
 
         // ===== 自动阶段开始：清空上一局遗留的机器状态，避免手动阶段读到陈旧数据 =====
         RobotStateStore.clear();
+        // 清空取球点访问记账，保证本局「未到达过的吸球点」从零开始
+        EatPointTracker.clear();
 
         // 比赛计时从 START 按下后开始
         ElapsedTime matchTime = new ElapsedTime();

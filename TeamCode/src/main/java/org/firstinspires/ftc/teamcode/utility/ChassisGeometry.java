@@ -3,6 +3,7 @@ package org.firstinspires.ftc.teamcode.utility;
 import com.acmerobotics.roadrunner.Pose2d;
 
 import org.firstinspires.ftc.teamcode.Parameter.HypParams;
+import org.firstinspires.ftc.teamcode.utility.Geometry.ConvexPolygon;
 
 /**
  * 底盘几何换算工具：在「底盘中心」与「底盘最后端中点 / 前端 intake 目标点」之间进行坐标换算。
@@ -74,5 +75,43 @@ public class ChassisGeometry {
         double cx = intakeX - l * Math.cos(heading);
         double cy = intakeY - l * Math.sin(heading);
         return new Pose2d(cx, cy, heading);
+    }
+
+    /**
+     * 底盘外接矩形的四个顶点（场地坐标系），用于判定「整机轮廓」与区域的包含/相交关系。
+     *
+     * <p>以底盘中心位姿为基准，长边沿航向（半长 {@link HypParams#chassisHalfLengthIn}），
+     * 短边垂直于航向（半宽 {@link HypParams#chassisHalfWidthIn}）。
+     *
+     * @param pose 底盘中心位姿
+     * @return 四个角点（顺序不作保证，{@link ConvexPolygon} 会按逆时针重排）
+     */
+    public static Vector2D[] footprintCorners(Pose2d pose) {
+        double l = HypParams.chassisHalfLengthIn;
+        double w = HypParams.chassisHalfWidthIn;
+        double c = Math.cos(pose.heading.toDouble());
+        double s = Math.sin(pose.heading.toDouble());
+        double cx = pose.position.x;
+        double cy = pose.position.y;
+        // 局部坐标 (±l, ±w) 旋转航向后平移到中心
+        return new Vector2D[]{
+                corner(cx, cy, l, w, c, s),
+                corner(cx, cy, l, -w, c, s),
+                corner(cx, cy, -l, -w, c, s),
+                corner(cx, cy, -l, w, c, s)
+        };
+    }
+
+    /** 单个角点：局部 (lx, ly) 绕中心旋转航向后平移到场地坐标 */
+    private static Vector2D corner(double cx, double cy, double lx, double ly, double c, double s) {
+        return new Vector2D(cx + lx * c - ly * s, cy + lx * s + ly * c);
+    }
+
+    /**
+     * 底盘外接矩形（{@link ConvexPolygon} 形式），便于用
+     * {@link ConvexPolygon#Contains(ConvexPolygon)} 判定整机是否完全位于某区域内。
+     */
+    public static ConvexPolygon footprintPolygon(Pose2d pose) {
+        return new ConvexPolygon(footprintCorners(pose));
     }
 }
