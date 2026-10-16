@@ -1,26 +1,22 @@
 package org.firstinspires.ftc.teamcode.Processors.Sensors;
 
-import com.acmerobotics.dashboard.config.Config;
-import com.qualcomm.robotcore.hardware.DigitalChannel;
+import com.qualcomm.robotcore.hardware.AnalogInput;
 import com.qualcomm.robotcore.hardware.HardwareMap;
 
 import org.firstinspires.ftc.teamcode.utility.filter.EMA;
 
 /**
- * 对射光电传感器（断裂光束 / Break Beam）：把数字输入封装成一个实时布尔开关量。
+ * 对射光电传感器（断裂光束 / Break Beam）：把"模拟输出"封装成一个实时布尔开关量。
  *
  * 电路说明：
- *   对射光电（发射端 + 接收端）输出数字信号接到 Hub 的 Digital 口（配置为 INPUT）。
- *   光束被遮挡时输出电平翻转，但不同型号/接法可能"遮挡=高"或"遮挡=低"，
- *   故用 blockedOnState 指定"遮挡对应的原始数字电平"，默认 true（读到 1 视为遮挡）。
- *
- * 滤波说明：
- *   把原始数字量映射成 0/1 样本（1 = 遮挡、0 = 未遮挡），再用 EMA 滤波，
- *   滤波值可理解为"近段时间被遮挡的程度"，超过阈值的滤波值判定为遮挡。
- *   该过程同时起到去抖动作用：阈值 0.5、alpha 越小(响应越慢)抗抖时间越长。
+ *   对射光电（发射端 + 接收端）输出的模拟信号接到 Hub 的 Analog 口。
+ *   未遮挡时输出高电压，遮挡时输出低电压（与压敏开关"压力越大电压越高"相反）。
+ *   本类用 EMA 对归一化电压滤波，当滤波电压低于阈值时输出 blocked = true。
  *
  * 归一化约定：
- *   getFilteredValue()/getThreshold()/setThreshold() 均为 [0, 1] 的归一化数值。
+ *   内部所有电压与阈值一律除以满量程电压 VOLTAGE_REFERENCE (3.3V)，
+ *   归一化到 [0, 1] 区间。因此 getRawVoltage()/getVoltage()/getThreshold()/
+ *   setThreshold() 等接口返回/接收的都是归一化数值。
  *
  * 用法（OpMode 主循环中，每帧调用 update()）：
  *   BreakBeamSensor beam = new BreakBeamSensor(hardwareMap, "breakBeam");
@@ -29,113 +25,106 @@ import org.firstinspires.ftc.teamcode.utility.filter.EMA;
  *       if (beam.isBlocked()) { ... }     // 实时布尔开关量
  *   }
  */
-@Config
 public class BreakBeamSensor {
 
-    /** 默认 EMA 平滑系数（越小越平滑、响应越慢） */
-    public static double DEFAULT_ALPHA = 0.8;
-    /** 默认归一化遮挡阈值 */
-    public static double DEFAULT_THRESHOLD = 0.5;
-    /** 默认遮挡对应的原始数字电平 */
-    public static boolean DEFAULT_BLOCKED_ON_STATE = true;
+    /** 模拟输入满量程电压（V），所有电压/阈值的归一化基准 */
+    public static final double VOLTAGE_REFERENCE = 3.3;
 
-    private final DigitalChannel digitalChannel;
+    /** 默认 EMA 平滑系数（越小越平滑、响应越慢） */
+    private static final double DEFAULT_ALPHA = 0.8;
+    /** 默认归一化遮挡阈值（滤波电压低于它即判定为遮挡） */
+    private static final double DEFAULT_THRESHOLD = 0.5;
+
+    private final AnalogInput analogInput;
     private final EMA ema;
 
-    /** 遮挡对应的原始数字电平（用于适配不同接法的传感器） */
-    private boolean blockedOnState;
-
-    /** 归一化遮挡阈值 [0,1]，滤波值超过它即判定为遮挡 */
+    /** 归一化遮挡阈值 [0,1]，滤波电压低于它即判定为遮挡 */
     private double threshold;
 
-    /** 最近一次 update() 采到的原始数字电平（未滤波） */
-    private boolean rawState;
+    /** 最近一次 update() 采到的归一化原始电压（未滤波） */
+    private double rawVoltage;
     /** 最近一次 update() 的遮挡判定结果 */
     private boolean blocked;
 
     /**
-     * 使用默认阈值、平滑系数与极性创建对射光电传感器
+     * 使用默认阈值与平滑系数创建对射光电传感器
      *
      * @param hardwareMap 硬件映射表
-     * @param deviceName  数字口在配置中的设备名
+     * @param deviceName  模拟输入在配置中的设备名
      */
     public BreakBeamSensor(HardwareMap hardwareMap, String deviceName) {
-        this(hardwareMap.get(DigitalChannel.class, deviceName),
-                DEFAULT_ALPHA, DEFAULT_THRESHOLD, DEFAULT_BLOCKED_ON_STATE);
+        this(hardwareMap.get(AnalogInput.class, deviceName),
+                DEFAULT_ALPHA, DEFAULT_THRESHOLD);
     }
 
     /**
-     * 指定阈值、平滑系数与极性创建对射光电传感器
+     * 指定阈值与平滑系数创建对射光电传感器
      *
-     * @param hardwareMap   硬件映射表
-     * @param deviceName    数字口在配置中的设备名
-     * @param alpha         EMA 平滑系数，范围 (0, 1]
-     * @param threshold     归一化遮挡阈值，范围 [0, 1]
-     * @param blockedOnState 遮挡对应的原始数字电平
+     * @param hardwareMap 硬件映射表
+     * @param deviceName  模拟输入在配置中的设备名
+     * @param alpha       EMA 平滑系数，范围 (0, 1]
+     * @param threshold   归一化遮挡阈值，范围 [0, 1]
      */
     public BreakBeamSensor(HardwareMap hardwareMap, String deviceName,
-                           double alpha, double threshold, boolean blockedOnState) {
-        this(hardwareMap.get(DigitalChannel.class, deviceName),
-                alpha, threshold, blockedOnState);
+                           double alpha, double threshold) {
+        this(hardwareMap.get(AnalogInput.class, deviceName), alpha, threshold);
     }
 
     /**
-     * @param digitalChannel 已获取的数字口设备
-     * @param alpha          EMA 平滑系数，范围 (0, 1]
-     * @param threshold      归一化遮挡阈值，范围 [0, 1]
-     * @param blockedOnState 遮挡对应的原始数字电平
+     * @param analogInput 已获取的模拟输入设备
+     * @param alpha       EMA 平滑系数，范围 (0, 1]
+     * @param threshold   归一化遮挡阈值，范围 [0, 1]
      */
-    public BreakBeamSensor(DigitalChannel digitalChannel,
-                           double alpha, double threshold, boolean blockedOnState) {
-        checkThreshold(threshold);
-        this.digitalChannel = digitalChannel;
+    public BreakBeamSensor(AnalogInput analogInput, double alpha, double threshold) {
+        if (threshold < 0 || threshold > 1) {
+            throw new IllegalArgumentException("threshold must be in range [0, 1]");
+        }
+        this.analogInput = analogInput;
         this.ema = new EMA(alpha);
         this.threshold = threshold;
-        this.blockedOnState = blockedOnState;
-        this.rawState = false;
+        this.rawVoltage = 0.0;
         this.blocked = false;
-        // 数字口配置为输入
-        this.digitalChannel.setMode(DigitalChannel.Mode.INPUT);
     }
 
     /**
-     * 采样一次数字输入：读取原始电平 → 映射为 0/1 → EMA 滤波 → 更新遮挡判定。
+     * 采样一次模拟输入：读取归一化原始电压 → EMA 滤波 → 更新遮挡判定。
      * 应在 OpMode 主循环中每帧调用。
      *
-     * @return 本次采样后是否遮挡（滤波值超过阈值）
+     * 注意：光电门"未遮挡 = 高电压、遮挡 = 低电压"，与压敏开关相反，
+     *      因此用滤波电压"低于"阈值判定遮挡（压敏开关用的是高于阈值）。
+     *
+     * @return 本次采样后是否遮挡（滤波电压低于阈值）
      */
     public boolean update() {
-        rawState = digitalChannel.getState();
-        double sample = (rawState == blockedOnState) ? 1.0 : 0.0;
-        blocked = ema.update(sample) > threshold;
+        double voltage = analogInput.getVoltage();
+        // 无效读数（NaN / 负值）不按"低电压 = 遮挡"处理：保持上次判定并停止推进滤波，
+        // 避免断线或坏读数被误判为遮挡而产生虚假上升沿（虚假计数）
+        if (Double.isNaN(voltage) || voltage < 0) {
+            return blocked;
+        }
+        rawVoltage = normalize(voltage);
+        blocked = ema.update(rawVoltage) < threshold;
         return blocked;
     }
 
     /**
-     * 当前是否遮挡，由最近一次 update() 计算得到
+     * 当前是否遮挡（滤波电压低于阈值），由最近一次 update() 计算得到
      */
     public boolean isBlocked() {
         return blocked;
     }
 
     /**
-     * 归一化原始遮挡程度（未滤波），来自最近一次 update()，非 0 即 1
+     * 归一化原始电压（未滤波），来自最近一次 update()，范围 [0,1]
      */
-    public double getRawValue() {
-        return (rawState == blockedOnState) ? 1.0 : 0.0;
+    public double getRawVoltage() {
+        return rawVoltage;
     }
 
     /**
-     * 原始数字电平（未滤波、未做极性换算），来自最近一次 update()
+     * 归一化滤波电压（EMA 输出），来自最近一次 update()，范围 [0,1]
      */
-    public boolean getRawState() {
-        return rawState;
-    }
-
-    /**
-     * 归一化滤波遮挡程度（EMA 输出），来自最近一次 update()，范围 [0,1]
-     */
-    public double getFilteredValue() {
+    public double getVoltage() {
         return ema.getFilteredValue();
     }
 
@@ -145,7 +134,9 @@ public class BreakBeamSensor {
      * @param threshold 归一化阈值，范围 [0, 1]
      */
     public void setThreshold(double threshold) {
-        checkThreshold(threshold);
+        if (threshold < 0 || threshold > 1) {
+            throw new IllegalArgumentException("threshold must be in range [0, 1]");
+        }
         this.threshold = threshold;
     }
 
@@ -173,33 +164,19 @@ public class BreakBeamSensor {
     }
 
     /**
-     * 获取当前"遮挡对应的原始数字电平"
-     */
-    public boolean isBlockedOnState() {
-        return blockedOnState;
-    }
-
-    /**
-     * 设置"遮挡对应的原始数字电平"，用于适配不同接法的传感器
-     *
-     * @param blockedOnState 遮挡时读到的原始数字电平
-     */
-    public void setBlockedOnState(boolean blockedOnState) {
-        this.blockedOnState = blockedOnState;
-    }
-
-    /**
-     * 重置滤波器状态与判定结果（阈值/alpha/极性保持不变）
+     * 重置滤波器状态并立即重新采样一次，使 rawVoltage / getVoltage() / blocked
+     * 回落为与当前物理状态一致的快照（阈值/alpha 保持不变）。
      */
     public void reset() {
         ema.reset();
-        rawState = false;
-        blocked = false;
+        update();
     }
 
-    private static void checkThreshold(double threshold) {
-        if (threshold < 0 || threshold > 1) {
-            throw new IllegalArgumentException("threshold must be in range [0, 1]");
-        }
+    /**
+     * 把模拟输入电压(V)归一化到 [0,1] 并做上限钳位。
+     * 调用方（update）已保证传入的是有效非负读数。
+     */
+    private static double normalize(double voltageVolts) {
+        return Math.min(voltageVolts / VOLTAGE_REFERENCE, 1.0);
     }
 }
