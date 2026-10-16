@@ -53,7 +53,7 @@ public class Sweeper {
     public static int ForR = 0;
 
     /** 铲子抬起时的舵机位置 [0,1]（todo: 实机标定） */
-    public static double ShovelUpPos = 1.0;
+    public static double ShovelUpPos = 0.5;
     /** 铲子放下时的舵机位置 [0,1]（todo: 实机标定） */
     public static double ShovelDownPos = 0.0;
 

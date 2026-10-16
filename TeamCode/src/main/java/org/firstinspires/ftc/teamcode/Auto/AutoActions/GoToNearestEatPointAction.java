@@ -2,7 +2,6 @@ package org.firstinspires.ftc.teamcode.Auto.AutoActions;
 
 import androidx.annotation.NonNull;
 
-import com.acmerobotics.dashboard.config.Config;
 import com.acmerobotics.dashboard.telemetry.TelemetryPacket;
 import com.acmerobotics.roadrunner.Action;
 import com.acmerobotics.roadrunner.Pose2d;
@@ -28,7 +27,6 @@ import org.firstinspires.ftc.teamcode.utility.Vector2D;
  * <p>轨迹在构造时刻固化，因此应在入队前、机器人位置基本确定后再创建本 Action。
  * 到位后通常由 {@link EatAction} 执行吃球。
  */
-@Config
 public class GoToNearestEatPointAction implements Action {
 
     private final Action trajectoryAction;

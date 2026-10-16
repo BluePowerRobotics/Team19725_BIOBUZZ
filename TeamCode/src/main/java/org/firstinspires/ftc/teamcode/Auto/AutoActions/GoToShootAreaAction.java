@@ -2,7 +2,6 @@ package org.firstinspires.ftc.teamcode.Auto.AutoActions;
 
 import androidx.annotation.NonNull;
 
-import com.acmerobotics.dashboard.config.Config;
 import com.acmerobotics.dashboard.telemetry.TelemetryPacket;
 import com.acmerobotics.roadrunner.Action;
 import com.acmerobotics.roadrunner.Pose2d;
@@ -33,7 +32,6 @@ import org.firstinspires.ftc.teamcode.utility.Vector2D;
  *
  * <p>轨迹在构造时刻固化，因此应在入队前、机器人位于目标发射位置附近时再创建本 Action。
  */
-@Config
 public class GoToShootAreaAction implements Action {
 
     /** 区域序号：第一发射区域 */
