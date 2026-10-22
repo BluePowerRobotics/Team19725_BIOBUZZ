@@ -109,6 +109,8 @@ if fid < 0, error('无法打开 %s', path); end
 hdr = '';
 rows = [];
 isRaw = false;
+names = {};
+rawMap = [];
 while true
     line = fgetl(fid);
     if ~ischar(line), break; end
@@ -116,28 +118,34 @@ while true
     if isempty(s) || s(1) == '#', continue; end
     if isempty(hdr)
         hdr = s;
+        names = strtrim(strsplit(s, ','));
         isRaw = contains(hdr, 'Shooter') || startsWith(lower(hdr), 'time,');
+        if isRaw, rawMap = rawColumnMap(names); end
         continue;
     end
     parts = strsplit(s, ',');
     if isRaw
-        % 原始日志：前 11 列是 time + 10 个数值列，末尾 logs 列可能带引号/逗号
-        if numel(parts) < 11, continue; end
+        % 原始日志：time 列是 hh:mm:ss.mmm；其余列一律按「列名」取，兼容
+        %   详细遥测（FF/I/P/boost/... 10 列）与新的精简 5 行遥测（只有 current/duty/target/velocity/voltage）
         tt = sscanf(parts{1}, '%d:%d:%f');
         if numel(tt) < 3, continue; end
-        vals = nan(1, 10);
-        for j = 1:10
-            v = str2double(parts{j+1});
-            vals(j) = v;
+        vals = nan(1, 11);
+        vals(1) = tt(1) * 3600 + tt(2) * 60 + tt(3);
+        for j = 1:numel(rawMap)
+            c = rawMap(j);
+            if c > 0 && c <= numel(parts)
+                vals(j + 1) = str2double(parts{c});
+            end
         end
-        if all(isnan(vals)), continue; end
-        rows(end+1, :) = [tt(1)*3600 + tt(2)*60 + tt(3), vals]; %#ok<AGROW>
     else
-        if numel(parts) < 11, continue; end
-        vals = str2double(parts(1:11));
-        if any(isnan(vals)), continue; end
-        rows(end+1, :) = vals; %#ok<AGROW>
+        % 处理完的数据表：时间/目标/实测/占空比必须有；FF/I/P/boost 等可选列缺失时留 NaN
+        if numel(parts) < 5, continue; end
+        n = min(numel(parts), 11);
+        vals = nan(1, 11);
+        vals(1:n) = str2double(parts(1:n));
     end
+    if any(isnan(vals([1 2 3 5]))), continue; end
+    rows(end+1, :) = vals; %#ok<AGROW>
 end
 fclose(fid);
 if isempty(rows), error('没读到数据行：%s', path); end
@@ -145,24 +153,19 @@ if isempty(rows), error('没读到数据行：%s', path); end
 d = struct('path', path);
 [~, d.name] = fileparts(path);
 if isRaw
-    % 列序：time, FF, I, P, boost, boost term, current, duty, error, target, velocity
-    raw = rows;
-    d.t = raw(:, 1);
-    d.ff = raw(:, 2); d.i = raw(:, 3); d.p = raw(:, 4);
-    d.boost = raw(:, 5); d.bt = raw(:, 6); d.current = raw(:, 7);
-    d.duty = raw(:, 8); d.target = raw(:, 10); d.velocity = raw(:, 11);
     % 时间列正常：重建均匀时间轴（毫秒字段不可靠，按行序走，与 export_clean_table.py 同口径）
-    t0 = d.t(1); span = d.t(end) - t0;
-    if span <= 0, span = numel(d.t) * 0.01; end
-    d.dt = span / (numel(d.t) - 1);
-    d.t = d.t - t0;
+    t0 = rows(1, 1); span = rows(end, 1) - t0;
+    if span <= 0, span = size(rows, 1) * 0.01; end
+    d.dt = span / (size(rows, 1) - 1);
+    d.t = rows(:, 1) - t0;
     d.raw = true;
 else
-    d.t = rows(:, 1); d.target = rows(:, 2); d.velocity = rows(:, 3);
-    d.duty = rows(:, 5); d.ff = rows(:, 6); d.i = rows(:, 7); d.p = rows(:, 8);
-    d.boost = rows(:, 9); d.bt = rows(:, 10); d.current = rows(:, 11);
-    d.dt = median(diff(d.t)); d.raw = false;
+    d.t = rows(:, 1); d.dt = median(diff(d.t)); d.raw = false;
 end
+% 两种来源统一为同一列布局：t, target, velocity, error, duty, ff, i, p, boost, bt, current
+d.target = rows(:, 2); d.velocity = rows(:, 3);
+d.duty = rows(:, 5); d.ff = rows(:, 6); d.i = rows(:, 7); d.p = rows(:, 8);
+d.boost = rows(:, 9); d.bt = rows(:, 10); d.current = rows(:, 11);
 d.error = d.target - d.velocity;
 d.span = d.t(end) - d.t(1);
 % 量化台阶 = 速度的最大公约数
@@ -201,9 +204,13 @@ for k = 1:numel(bnd)-1
     tv = d.target(i0);
     vs = std(v);
     sat = 100 * mean(du >= 0.999);
+    if abs(tv) > 1
+        epct = 100 * abs(mean(e)) / abs(tv);   % 目标为 0 的停机段不报百分比（会除零）
+    else
+        epct = NaN;
+    end
     L{end+1} = sprintf('%-7.0f %-8.2f %-9.0f %-8.1f %-8.2f %-9.1f %-8.2f %-8.3f %-8.1f', ...
-        tv, dur, mean(v), vs, vs / max(d.step, eps), mean(e), ...
-        (100 * abs(mean(e)) / max(abs(tv), eps)), mean(du), sat);
+        tv, dur, mean(v), vs, vs / max(d.step, eps), mean(e), epct, mean(du), sat);
     seg(end+1) = struct('target', tv, 'i0', i0, 'i1', i1, 'vmean', mean(v), 'vsd', vs, ...
         'emean', mean(e), 'sat', sat, 'dmean', mean(du)); %#ok<AGROW>
 end
@@ -412,4 +419,42 @@ drawnow;
 exportgraphics(fig, fullfile(outDir, [d.name '_diag.png']), 'Resolution', 150);
 close(fig);
 fprintf('[图] %s\n', fullfile(outDir, [d.name '_diag.png']));
+end
+
+% =========================================================================
+% 原始 Dashboard 日志的列名 → 统一列布局的映射
+% 统一布局（11 列）：t, target, velocity, error, duty, ff, i, p, boost, bt, current
+% 返回 10 个「原始列号」（落在 part 的第几列）；找不到记 0 → 该列留 NaN
+% =========================================================================
+function map = rawColumnMap(names)
+cands = { ...
+    {'Shooter target (tick/s)', 'target (tick/s)'}, ...        % target
+    {'Shooter velocity (tick/s)', 'velocity (tick/s)'}, ...     % velocity
+    {'Shooter error (tick/s)', 'error (tick/s)'}, ...           % error（可缺，后面用 target-velocity 重算）
+    {'Shooter power (duty)', 'Shooter duty', 'duty', 'power'}, ... % duty
+    {'Shooter FF term', 'Shooter FF', 'FF term'}, ...           % ff
+    {'Shooter I term', 'Shooter I', 'I term'}, ...              % i
+    {'Shooter P term', 'Shooter P', 'P term'}, ...              % p
+    {'Shooter boost', 'boost'}, ...                             % boost 标志
+    {'Shooter boost term', 'boost term'}, ...                   % boost 项
+    {'Shooter current (A)', 'current (A)'}};                    % current
+map = zeros(1, numel(cands));
+for j = 1:numel(cands)
+    for c = 1:numel(names)
+        hit = false;
+        for k = 1:numel(cands{j})
+            if strcmp(names{c}, cands{j}{k}), map(j) = c; hit = true; break; end
+        end
+        if hit, break; end
+    end
+    if map(j) == 0   % 严格匹配不到时退化为「包含」
+        for c = 1:numel(names)
+            hit = false;
+            for k = 1:numel(cands{j})
+                if contains(names{c}, cands{j}{k}), map(j) = c; hit = true; break; end
+            end
+            if hit, break; end
+        end
+    end
+end
 end

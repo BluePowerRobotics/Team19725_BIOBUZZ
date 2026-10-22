@@ -41,6 +41,7 @@ CAND = {
     "boostflag": ["Shooter boost", "boost"],
     "boostterm": ["Shooter boost term", "boost term"],
     "current": ["Shooter current (A)", "current (A)"],
+    "voltage": ["Shooter voltage (V)", "voltage (V)"],
     "duty": ["Shooter power (duty)", "Shooter duty", "duty", "power"],
     "error": ["Shooter error (tick/s)", "error (tick/s)"],
     "target": ["Shooter target (tick/s)", "target (tick/s)"],

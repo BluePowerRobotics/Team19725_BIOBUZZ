@@ -37,7 +37,8 @@ except ImportError:
     print("需要与本脚本同目录的 analyze_dashboard_log.py", file=sys.stderr)
     raise
 
-COLS = ["t", "target", "velocity", "error", "duty", "ff", "i", "p", "boost", "boost_term", "current"]
+COLS = ["t", "target", "velocity", "error", "duty", "ff", "i", "p", "boost", "boost_term",
+        "current", "voltage"]
 
 
 def clean_name(path):
@@ -51,6 +52,7 @@ def export(path, out_dir):
     vel, tgt, duty = d["velocity"], d["target"], d["duty"]
     ff, it, pt = d["ff"], d["i"], d["p"]
     boost, bt, cur = d["boostflag"], d["boostterm"], d["current"]
+    vol = d["voltage"]
     n = len(t)
 
     # 剔除末尾收尾异常帧
@@ -61,6 +63,7 @@ def export(path, out_dir):
     if cut < n:
         t, vel, tgt, duty = t[:cut], vel[:cut], tgt[:cut], duty[:cut]
         ff, it, pt, boost, bt, cur = ff[:cut], it[:cut], pt[:cut], boost[:cut], bt[:cut], cur[:cut]
+        vol = vol[:cut]
         n = cut
 
     err = tgt - vel                       # 统一重新计算，避免与日志列不同帧
@@ -75,12 +78,12 @@ def export(path, out_dir):
         fh.write(f"# 原始时间列毫秒倒退处数: {back}" + (f"   无法解析时间行: {bad}" if bad else "") + "\n")
         fh.write(f"# 速度量化台阶(gcd, tick/s): {step:.0f}   速度取值范围: [{np.nanmin(vel):.0f}, {np.nanmax(vel):.0f}]\n")
         fh.write("# 列: t(s), target(tick/s), velocity(tick/s), error(tick/s)=target-velocity,\n")
-        fh.write("#     duty(0~1), ff(占空比), i(占空比), p(占空比), boost(0/1), boost_term(占空比), current(A)\n")
+        fh.write("#     duty(0~1), ff(占空比), i(占空比), p(占空比), boost(0/1), boost_term(占空比), current(A), voltage(V)\n")
         fh.write(",".join(COLS) + "\n")
         for k in range(n):
-            fh.write("%.4f,%.0f,%.0f,%.0f,%.4f,%.4f,%.4f,%.4f,%d,%.4f,%.3f\n" % (
+            fh.write("%.4f,%.0f,%.0f,%.0f,%.4f,%.4f,%.4f,%.4f,%d,%.4f,%.3f,%.2f\n" % (
                 t[k], tgt[k], vel[k], err[k], duty[k], ff[k], it[k], pt[k],
-                1 if boost[k] > 0.5 else 0, bt[k], cur[k]))
+                1 if boost[k] > 0.5 else 0, bt[k], cur[k], vol[k]))
     print(f"[表] {out}   （{n} 行，{span:.1f} s，台阶 {step:.0f} tick/s）")
     return out
 
