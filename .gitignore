@@ -88,3 +88,7 @@ lint/tmp/
 /_ctx_b8_baseline.txt
 /tools/tuning/_hypdiff.txt
 /doc/_section_*.md
+
+# 研究与分析产物仅保留本地，不纳入版本控制
+/research/
+/doc/*.md
