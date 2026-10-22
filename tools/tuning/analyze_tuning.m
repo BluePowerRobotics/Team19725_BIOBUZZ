@@ -20,6 +20,13 @@ function analyze_tuning(varargin)
 %
 % 选项：-out DIR | -noplot | -window S | -ku K | -kp K | -alpha A
 %
+% 输出（**一图一文件**，图名与 analyze_tuning.py 完全一致）：
+%   step01        -> <stem>_step_velocity.png / <stem>_step_duty.png
+%   zn02, relay03 -> <stem>_velocity.png / <stem>_duty.png
+%   ff05          -> <stem>_velocity.png / <stem>_ff_regression.png
+%   未识别        -> <stem>_velocity.png / <stem>_duty.png
+%   另有 <stem>_report.txt（与终端打印内容相同）
+%
 % CSV 格式（TuningLogger 生成）：'#' 开头为注释行（含本次实验参数与结论，形如 key=value），
 % 随后表头 t,duty,velocity 与数据行；时间单位 s，转速单位 tick/s。
 % 注意：step01 在阶跃处插入 '# --- step applied here ... ---'，其后 t 从 0 重新开始。
@@ -83,8 +90,10 @@ for k = 1:numel(files)
     writeUtf8(fullfile(outDir, [stem '_report.txt']), txt);
     if cfg.plot
         try
-            makePlots(d, res, method, fullfile(outDir, [stem '_analysis.png']));
-            fprintf('[图] %s\n', fullfile(outDir, [stem '_analysis.png']));
+            figs = makePlots(d, res, method, outDir, stem);
+            for kf = 1:numel(figs)
+                fprintf('[图] %s\n', figs{kf});
+            end
         catch ME
             fprintf('[绘图失败] %s: %s\n', ME.identifier, ME.message);
         end
@@ -548,7 +557,8 @@ switch method
         L{end+1} = sprintf('过原点斜率（推荐填入 kff）= %.8f 占空比/(tick/s)', res.kff_origin);
         if isfield(res, 'slope')
             L{end+1} = sprintf('线性拟合斜率 = %.8f    截距 = %.4f', res.slope, res.intercept);
-            L{end+1} = '  截距明显非 0 → 存在静摩擦；当前控制律无 kS 项，可考虑加常数偏置。';
+            L{end+1} = '  截距就是静摩擦项 kS（单位：占空比）——直接填进控制律的 kS 项；';
+            L{end+1} = '  斜率 kff 与过原点值不同，两者都报出来便于对照（本机控制律已含 kS）。';
         end
 
     otherwise
@@ -587,7 +597,12 @@ end
 % 绘图
 % =========================================================================
 
-function makePlots(d, res, method, pngPath)
+function figs = makePlots(d, res, method, outDir, stem)
+%MAKEPLOTS **一图一文件**：每张 PNG 只画一个物理量。
+%   step01            <stem>_step_velocity.png / <stem>_step_duty.png
+%   zn02, relay03     <stem>_velocity.png / <stem>_duty.png
+%   ff05              <stem>_velocity.png / <stem>_ff_regression.png
+%   其它（未识别）      <stem>_velocity.png / <stem>_duty.png
 fonts = listfonts; cjk = 'Helvetica';
 for nm = {'Microsoft YaHei', 'Microsoft YaHei UI', 'SimHei', 'SimSun'}
     if any(strcmpi(fonts, nm{1})), cjk = nm{1}; break; end
@@ -595,85 +610,187 @@ end
 set(groot, 'defaultAxesFontName', cjk, 'defaultTextFontName', cjk, ...
     'defaultLegendFontName', cjk, 'defaultAxesFontSize', 10);
 
-fig = figure('Visible', 'off', 'Position', [100 100 1000 700], 'Color', 'w');
-ax1 = subplot(2, 1, 1); hold(ax1, 'on'); grid(ax1, 'on');
-ax2 = subplot(2, 1, 2); hold(ax2, 'on'); grid(ax2, 'on');
+if isempty(outDir), outDir = pwd; end
+if ~isfolder(outDir), mkdir(outDir); end
+figs = {};
 
 switch method
     case 'step01'
-        if ~res.ok
-            plot(ax1, d.t, d.vel, 'b-'); xlabel(ax1, '时间 (s)'); ylabel(ax1, '转速 (tick/s)');
-        else
-            idx = 0;
-            for k = 1:numel(d.events)
-                if contains(d.events{k}{2}, 'step applied here'), idx = d.events{k}{1}; break; end
-            end
-            preT = d.t(1:idx); postT = d.t(idx+1:end);
-            tShift = preT - preT(end);
-            legendStr = {'实测 ω (阶跃前)', '实测 ω (阶跃后)'};
-            plot(ax1, tShift, d.vel(1:idx), 'b-', 'LineWidth', 1.2);
-            plot(ax1, postT, d.vel(idx+1:end), 'b-', 'LineWidth', 1.3);
-            yline(ax1, res.omega0, ':', 'Color', [0.5 0.5 0.5]);
-            yline(ax1, res.omega_ss, ':', 'Color', [0.5 0.5 0.5]);
-            if ~isempty(res.fit)
-                tt = linspace(0, postT(end), 400);
-                vv = res.fit.v0 + res.fit.K * (1 - exp(-tt / res.fit.tau));
-                plot(ax1, tt, vv, 'r--', 'LineWidth', 1.4);
-                legendStr{end+1} = sprintf('最小二乘拟合 τ=%.3fs', res.fit.tau);
-            end
-            if ~isnan(res.tau_632)
-                xline(ax1, res.tau_632, 'g--', 'LineWidth', 1.2, 'HandleVisibility', 'off');
-                legendStr{end+1} = sprintf('t63.2%% = %.3fs', res.tau_632);
-            end
-            xline(ax1, 0, 'k-', 'LineWidth', 0.8, 'HandleVisibility', 'off');
-            xlabel(ax1, '时间 (s) （0 = 阶跃时刻）'); ylabel(ax1, '转速 (tick/s)');
-            title(ax1, sprintf('6.1 阶跃响应辨识  Kd=%.4f (tick/s)/duty', res.kd));
-            legend(ax1, legendStr, 'Location', 'southeast', 'FontSize', 8);
-            plot(ax2, tShift, d.duty(1:idx), 'Color', [0.85 0.45 0.15], 'LineWidth', 1.2);
-            plot(ax2, postT, d.duty(idx+1:end), 'Color', [0.85 0.45 0.15], 'LineWidth', 1.3);
-            xline(ax2, 0, 'k-', 'LineWidth', 0.8, 'HandleVisibility', 'off');
-            xlabel(ax2, '时间 (s)'); ylabel(ax2, '占空比'); title(ax2, '占空比（开环阶跃）');
-        end
+        figs = [figs, stepVelocityFig(d, res, outDir, stem)];
+        figs = [figs, stepDutyFig(d, res, outDir, stem)];
     otherwise
-        plot(ax1, d.t, d.vel, 'b-', 'LineWidth', 1.2);
-        xlabel(ax1, '时间 (s)'); ylabel(ax1, '转速 (tick/s)');
-        title(ax1, sprintf('%s 实测转速', method));
-        plot(ax2, d.t, d.duty, 'Color', [0.85 0.45 0.15], 'LineWidth', 1.2);
-        xlabel(ax2, '时间 (s)'); ylabel(ax2, '占空比');
-        if ismember(method, {'zn02', 'relay03'}) && res.ok
-            for a = [ax1 ax2]
-                if isfield(res, 'mean') && ~isempty(res.mean)
-                    yline(a, res.mean, ':', 'Color', [0.5 0.5 0.5]);
-                    yline(a, res.mean + res.amp, 'r:', 'HandleVisibility', 'off');
-                    yline(a, res.mean - res.amp, 'r:', 'HandleVisibility', 'off');
-                end
-            end
-            if isnan(res.tu), tuStr = 'n/a'; else, tuStr = sprintf('%.4fs', res.tu); end
-            title(ax1, sprintf('%s  幅值 a=%.1f  Tu=%s', method, res.amp, tuStr));
-        end
+        figs = [figs, velocityFig(d, res, method, outDir, stem)];
         if strcmp(method, 'ff05') && res.ok
-            cla(ax2);
-            w = res.points(:, 1); ds = res.points(:, 2);
-            plot(ax2, w, ds, 'ko', 'MarkerSize', 5, 'MarkerFaceColor', 'k');
-            ww = linspace(0, max(w) * 1.05, 100);
-            plot(ax2, ww, res.kff_origin * ww, 'r-', 'LineWidth', 1.4);
-            if isfield(res, 'slope')
-                plot(ax2, ww, res.slope * ww + res.intercept, 'b--', 'LineWidth', 1.2);
-                legend(ax2, {'测量点', sprintf('过原点 Kff=%.3e', res.kff_origin), ...
-                             sprintf('线性拟合 %.3e·ω+%.4f', res.slope, res.intercept)}, ...
-                       'Location', 'northwest', 'FontSize', 8);
-            else
-                legend(ax2, {'测量点', sprintf('过原点 Kff=%.3e', res.kff_origin)}, ...
-                       'Location', 'northwest', 'FontSize', 8);
-            end
-            xlabel(ax2, '转速 ω (tick/s)'); ylabel(ax2, '稳态占空比 d_{ss}');
-            title(ax2, '6.5 前馈增益标定');
+            figs = [figs, ffFitFig(res, outDir, stem)];
+        else
+            figs = [figs, dutyFig(d, res, method, outDir, stem)];
         end
 end
+end
 
-[~, name, ext] = fileparts(d.path);
-sgtitle(fig, [name ext], 'FontSize', 9);
-drawnow;
-exportgraphics(fig, pngPath, 'Resolution', 150);
-close(fig);
+% ---- step01 图 1：转速（拟合 + t63.2%） ----
+function f = stepVelocityFig(d, res, outDir, stem)
+f = {};
+if ~res.ok, return; end
+idx = stepIndex(d);
+preT = d.t(1:idx); postT = d.t(idx+1:end);
+tShift = preT - preT(end);
+fig = figure('Visible', 'off', 'Position', [100 100 900 420], 'Color', 'w');
+ax = axes(fig); hold(ax, 'on'); grid(ax, 'on');
+plot(ax, tShift, d.vel(1:idx), 'b-', 'LineWidth', 1.2, 'DisplayName', '实测 ω (阶跃前)');
+plot(ax, postT, d.vel(idx+1:end), 'b-', 'LineWidth', 1.3, 'DisplayName', '实测 ω (阶跃后)');
+yline(ax, res.omega0, ':', 'Color', [0.5 0.5 0.5], 'HandleVisibility', 'off');
+yline(ax, res.omega_ss, ':', 'Color', [0.5 0.5 0.5], 'HandleVisibility', 'off');
+if ~isempty(res.fit)
+    tt = linspace(0, postT(end), 400);
+    vv = res.fit.v0 + res.fit.K * (1 - exp(-tt / res.fit.tau));
+    plot(ax, tt, vv, 'r--', 'LineWidth', 1.4, ...
+         'DisplayName', sprintf('最小二乘拟合 τ=%.3fs', res.fit.tau));
+end
+if ~isnan(res.tau_632)
+    xline(ax, res.tau_632, 'g--', 'LineWidth', 1.2, 'HandleVisibility', 'off');
+    xline(ax, res.tau_632, 'g--', 'LineWidth', 1.2, ...
+          'DisplayName', sprintf('t63.2%% = %.3fs', res.tau_632));
+end
+xline(ax, 0, 'k-', 'LineWidth', 0.8, 'HandleVisibility', 'off');
+if isnan(res.tau_632), s632 = 'n/a'; else, s632 = sprintf('%.4f', res.tau_632); end
+if isempty(res.fit), sls = 'n/a'; else, sls = sprintf('%.4f', res.fit.tau); end
+txt = sprintf(['Δd = %.4f    Δω = %.1f tick/s\n' ...
+               'Kd = %.4f (tick/s)/duty    kff = 1/Kd = %.8f\n' ...
+               'τ(t63.2%%) = %s s    τ(最小二乘) = %s s    τc = %.4f s'], ...
+              res.d_step - res.d0, res.omega_ss - res.omega0, res.kd, 1 / res.kd, ...
+              s632, sls, res.tau_c);
+text(ax, 0.02, 0.03, txt, 'Units', 'normalized', 'FontSize', 8, ...
+     'BackgroundColor', 'w', 'VerticalAlignment', 'bottom');
+xlabel(ax, '时间 (s)  （0 = 阶跃时刻）');
+ylabel(ax, '转速 (tick/s)');
+[~, nm, ext] = fileparts(d.path);
+title(ax, sprintf('6.1 阶跃响应辨识 — 转速（%s%s）', nm, ext));
+legend(ax, 'Location', 'southeast', 'FontSize', 8);
+png = fullfile(outDir, [stem '_step_velocity.png']);
+exportgraphics(fig, png, 'Resolution', 150); close(fig);
+f = {png};
+end
+
+% ---- step01 图 2：占空比（开环阶跃） ----
+function f = stepDutyFig(d, res, outDir, stem)
+f = {};
+if ~res.ok, return; end
+idx = stepIndex(d);
+preT = d.t(1:idx); postT = d.t(idx+1:end);
+tShift = preT - preT(end);
+fig = figure('Visible', 'off', 'Position', [100 100 900 420], 'Color', 'w');
+ax = axes(fig); hold(ax, 'on'); grid(ax, 'on');
+plot(ax, tShift, d.duty(1:idx), 'Color', [0.85 0.45 0.15], 'LineWidth', 1.2, ...
+     'DisplayName', 'duty (阶跃前 d0)');
+plot(ax, postT, d.duty(idx+1:end), 'Color', [0.85 0.45 0.15], 'LineWidth', 1.3, ...
+     'DisplayName', 'duty (阶跃后 dStep)');
+yline(ax, res.d0, ':', 'Color', [0.5 0.5 0.5], 'HandleVisibility', 'off');
+yline(ax, res.d_step, ':', 'Color', [0.5 0.5 0.5], 'HandleVisibility', 'off');
+xline(ax, 0, 'k-', 'LineWidth', 0.8, 'HandleVisibility', 'off');
+txt = sprintf('d0 = %.4f    dStep = %.4f    Δd = %.4f', res.d0, res.d_step, res.d_step - res.d0);
+text(ax, 0.02, 0.96, txt, 'Units', 'normalized', 'FontSize', 8, ...
+     'BackgroundColor', 'w', 'VerticalAlignment', 'top');
+xlabel(ax, '时间 (s)  （0 = 阶跃时刻）');
+ylabel(ax, '占空比 (0~1)');
+title(ax, '6.1 阶跃响应辨识 — 占空比（开环阶跃）');
+legend(ax, 'Location', 'east', 'FontSize', 8);
+png = fullfile(outDir, [stem '_step_duty.png']);
+exportgraphics(fig, png, 'Resolution', 150); close(fig);
+f = {png};
+end
+
+% ---- 非 step01 图 1：转速 ----
+function f = velocityFig(d, res, method, outDir, stem)
+f = {};
+fig = figure('Visible', 'off', 'Position', [100 100 900 420], 'Color', 'w');
+ax = axes(fig); hold(ax, 'on'); grid(ax, 'on');
+plot(ax, d.t, d.vel, 'b-', 'LineWidth', 1.2, 'DisplayName', '转速 ω');
+if ismember(method, {'zn02', 'relay03'}) && res.ok && isfield(res, 'mean') && ~isempty(res.mean)
+    yline(ax, res.mean, ':', 'Color', [0.5 0.5 0.5], 'HandleVisibility', 'off');
+    yline(ax, res.mean + res.amp, 'r:', 'HandleVisibility', 'off');
+    yline(ax, res.mean - res.amp, 'r:', 'HandleVisibility', 'off');
+    if isnan(res.tu), sTu = 'n/a'; else, sTu = sprintf('%.4f s', res.tu); end
+    if isfield(res, 'ku') && ~isempty(res.ku)
+        sKu = sprintf('    Ku = %.8f', res.ku);
+    else
+        sKu = '';
+    end
+    txt = sprintf(['分析窗口 = 尾部 %.2f s\n极限环幅值 a = %.1f tick/s（红点线 = 中心 ±a）\n' ...
+                   '周期 Tu = %s%s'], res.window, res.amp, sTu, sKu);
+    text(ax, 0.02, 0.96, txt, 'Units', 'normalized', 'FontSize', 8, ...
+         'BackgroundColor', 'w', 'VerticalAlignment', 'top');
+end
+xlabel(ax, '时间 (s)'); ylabel(ax, '转速 (tick/s)');
+title(ax, sprintf('%s — 实测转速', method));
+legend(ax, 'Location', 'best', 'FontSize', 8);
+png = fullfile(outDir, [stem '_velocity.png']);
+exportgraphics(fig, png, 'Resolution', 150); close(fig);
+f = {png};
+end
+
+% ---- 非 step01 图 2：占空比 ----
+function f = dutyFig(d, res, method, outDir, stem)
+f = {};
+fig = figure('Visible', 'off', 'Position', [100 100 900 420], 'Color', 'w');
+ax = axes(fig); hold(ax, 'on'); grid(ax, 'on');
+plot(ax, d.t, d.duty, 'Color', [0.85 0.45 0.15], 'LineWidth', 1.2, 'DisplayName', '占空比 duty');
+if strcmp(method, 'relay03') && res.ok
+    yline(ax, res.d_high, 'r:', 'HandleVisibility', 'off');
+    yline(ax, res.d_low, 'r:', 'HandleVisibility', 'off');
+    if isfield(res, 'ku') && ~isempty(res.ku)
+        txt = sprintf('继电器 Δd = %.4f    Ku = 4Δd/(πa) = %.8f', res.delta_d, res.ku);
+    else
+        txt = sprintf('继电器 Δd = %.4f', res.delta_d);
+    end
+    text(ax, 0.02, 0.96, txt, 'Units', 'normalized', 'FontSize', 8, ...
+         'BackgroundColor', 'w', 'VerticalAlignment', 'top');
+end
+xlabel(ax, '时间 (s)'); ylabel(ax, '占空比 (0~1)');
+title(ax, sprintf('%s — 占空比输出', method));
+legend(ax, 'Location', 'best', 'FontSize', 8);
+png = fullfile(outDir, [stem '_duty.png']);
+exportgraphics(fig, png, 'Resolution', 150); close(fig);
+f = {png};
+end
+
+% ---- ff05 图 2：d_ss(ω) 回归 ----
+function f = ffFitFig(res, outDir, stem)
+f = {};
+w = res.points(:, 1); ds = res.points(:, 2);
+fig = figure('Visible', 'off', 'Position', [100 100 900 420], 'Color', 'w');
+ax = axes(fig); hold(ax, 'on'); grid(ax, 'on');
+plot(ax, w, ds, 'ko', 'MarkerSize', 5, 'MarkerFaceColor', 'k', 'DisplayName', '测量点 (ω, d_ss)');
+ww = linspace(0, max(w) * 1.05, 100);
+plot(ax, ww, res.kff_origin * ww, 'r-', 'LineWidth', 1.4, ...
+     'DisplayName', sprintf('过原点 kff = %.4e', res.kff_origin));
+if isfield(res, 'slope')
+    plot(ax, ww, res.slope * ww + res.intercept, 'b--', 'LineWidth', 1.2, ...
+         'DisplayName', sprintf('线性拟合 %.4e·ω %+.4f', res.slope, res.intercept));
+    txt = sprintf(['斜率 = kff = %.8f 占空比/(tick/s)\n' ...
+                   '截距 = kS = %+.4f 占空比（本机控制律已含 kS 项）\n' ...
+                   '过原点 kff = %.8f（不加 kS 时的折中值）'], ...
+                  res.slope, res.intercept, res.kff_origin);
+else
+    txt = sprintf('过原点 kff = %.8f', res.kff_origin);
+end
+text(ax, 0.02, 0.96, txt, 'Units', 'normalized', 'FontSize', 8, ...
+     'BackgroundColor', 'w', 'VerticalAlignment', 'top');
+xlabel(ax, '转速 ω (tick/s)'); ylabel(ax, '稳态占空比 d_{ss} (0~1)');
+title(ax, '6.5 前馈增益标定 — d_{ss}(ω) = kS + kff·ω');
+legend(ax, 'Location', 'southeast', 'FontSize', 8);
+png = fullfile(outDir, [stem '_ff_regression.png']);
+exportgraphics(fig, png, 'Resolution', 150); close(fig);
+f = {png};
+end
+
+% ---- 阶跃插入点在 d.events 里的行号（找不到则 0） ----
+function idx = stepIndex(d)
+idx = 0;
+for k = 1:numel(d.events)
+    if contains(d.events{k}{2}, 'step applied here')
+        idx = d.events{k}{1};
+        return;
+    end
+end
 end

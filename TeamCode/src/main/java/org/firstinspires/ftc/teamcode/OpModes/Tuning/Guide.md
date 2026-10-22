@@ -1,232 +1,323 @@
-# 飞轮无模型标定 OpMode 使用指南
+# 飞轮参数整定 OpMode 使用指南（第 4 代）
 
-本目录提供 5 个调参辅助 OpMode，对应《飞轮系统控制理论研究报告》第 6 章
-「无电气/机械参数标定控制参数的方法」。全部方法只利用**占空比输入 + 速度输出**，
-无需测量 `R/L/Ke/Kt/J/B` 等参数。
+本目录提供 **5 个** 整定辅助 OpMode，全部只用「占空比输入 + 速度输出 + 母线电压」，
+不需要测量 `R/L/Ke/Kt/J/B`。对应《飞轮系统控制理论研究报告》第 6 章，
+控制律定义见 `doc/现在的控制系统.md`。
 
-标定的目标对象是 [PrototypeShooter.java](../../Controllers/Shooter/PrototypeShooter/PrototypeShooter.java)
-的参数：`kff / kp / ki / maxI / iZone / dropThreshold / dropRateThreshold / kBoost / boostDurationSec`。
+标定目标是 [`FlywheelParams`](../../utility/Shooter/FlywheelParams.java) 里的参数
+（大球 `FlywheelParams.BIG`、小球 `FlywheelParams.SMALL`），**不再改 `PrototypeShooter` 的静态字段**。
+
+| 编号 | 类名 | Driver Station 名称 | 标定对象 |
+|---|---|---|---|
+| 6.1 | `StepResponseTuner` | `Tune6.1 StepResponse` | `kS/kff/kp/ki`（模型式初值） |
+| 6.3 | `RelayFeedbackTuner` | `Tune6.3 RelayFeedback` | `kp/ki`（临界比例度复核） |
+| 6.5 | `FeedforwardTuner` | `Tune6.5 Feedforward` | `kS/kff`（多点稳态拟合） |
+| 6.6 | `VelocityFilterTuner` | `Tune6.6 VelocityFilter` | `tauVMax/tauVMin` |
+| 6.7 | `BusVoltageFilterTuner` | `Tune6.7 BusVoltageFilter` | `tauBus` |
+
+另有 `ShooterTuningTester`（开环逐级功率扫描，`kS/kff` 的第二种来源）与
+`TuningLogger`（CSV 写入工具，不是 OpMode）。
+
+> 第 4 代删除的整定项：`Tune6.2 ZieglerNichols`（与 6.3 方法重复，且其 P-only 实现没有关掉
+> `kS`，测出来的不是纯 P）、`Tune6.4 DropDetection`（boost 已从控制律移除，
+> 掉速判据改为误差带 `dropEnterFrac·eBand`，其阈值由 `eBand` 与量化台阶直接算出，无需整定）。
 
 ---
 
 ## 通用说明
 
-- **分组**：所有 OpMode 的 Driver Station 分组为 `Tuning`，名称前缀 `Tune6.x`。
-- **调参入口**：FTC Dashboard → Config。每个 OpMode 有自己的分组；`PrototypeShooter` 参数在
-  `PrototypeShooter` 分组里（方法二需要在这里改 `kp`）。
-- **原始数据**：每个 OpMode 都会把 `(时间, 占空比, 转速)` 采样写入 CSV：
-  `<RC 外部存储>/tuning/<方法名>_<时间戳>.csv`，可用 `adb pull` 或 RC 文件管理器取出，
-  配合报告第 6 章的 Python 脚本离线复核。方法一会把 CSV 路径显示在遥测里。
-- **CSV 格式**：文件以 `#` 开头的注释行记录本次实验的参数与结论，随后是表头 `t,duty,velocity`；
-  数据列序固定为「时间(s), 占空比, 转速(tick/s)」，时间轴严格单调。解析时跳过 `#` 行即可
-  （`numpy.loadtxt(..., comments='#', skiprows=1)` 或 `pandas.read_csv(..., comment='#')`）。
-- **掉速检测的「武装」规则**：`PrototypeShooter` 只有在误差回到 `dropThreshold` 以内（即已进入稳态）
-  之后才允许触发掉速补偿，目标转速一旦改变立刻重新解除武装——否则从 0 拉起时的正常加速段会被
-  误判为掉速，使 boost 全程挂着并在到速后造成过冲。因此方法四测量「正常波动」前，务必先让系统真正到速。
-- **速度单位**：统一为 `DcMotorEx#getVelocity()` 的 **tick/s**（对应报告里的 ω）。
-- **安全**：飞轮转速高，测试时先取下小球/异物；开环测试（方法一/三）务必保证 `d0/dHigh/dLow`
-  在安全转速范围内。所有 OpMode 都可用 **X 键**立即停转。
-- **参数污染**：方法二/四/五会临时强改 `PrototypeShooter` 的静态增益（如 `kff/ki` 与掉速阈值）
-  以隔离被测环节，OpMode **退出时会自动恢复原值**，不会影响同一上电会话中后续 OpMode。
-  唯一例外：方法二对 `kp` 的调节是用户主动整定行为，退出时**不还原**（便于直接沿用）。
+- **分组**：Driver Station 分组 `Tuning`，名称前缀 `Tune6.x`。
+- **调参入口**：FTC Dashboard → Config。每个 OpMode 有自己的分组；被标定的参数在
+  `FlywheelParams`（`BIG`/`SMALL`）分组里。
+- **原始数据**：每次运行把采样写入 CSV：`<RC 外部存储>/tuning/<前缀>_<时间戳>.csv`，
+  用 `adb pull` 取出后配合 `tools/tuning/` 的脚本分析（见 `tools/tuning/PLOT_GUIDE.md`）。
+- **CSV 格式**：以 `#` 开头的注释行记录本次实验参数与结论，随后是表头行；
+  默认表头 `t,duty,velocity`，新程序用更宽的表头（见各方法「输出」）。
+  解析时 `skiprows` 跳过注释行、`comments='#'`（`numpy.loadtxt(..., comments='#')` /
+  `pandas.read_csv(..., comment='#')`）。时间轴严格单调，单位秒。
+- **速度单位**：统一 `DcMotorEx#getVelocity()` 的 **tick/s**。
+- **量化台阶**：实测 **20 tick/s**。任何稳态精度/阈值讨论都必须先报「相当于几个台阶」；
+  参数里 `quantStep=20` 就是它的固化值。若换了电机/齿比/滤波，必须重新测台阶。
+- **安全**：飞轮转速高，测试前取走球与异物；开环测试务必让 `d0/dHigh/dLow` 在安全转速内。
+  所有 OpMode 都可用 **X 键**立即停转。
+- **参数污染**：6.1/6.3/6.5 会临时强改被测参数（如置 `kff=0`、`ki=0`）以隔离环节，
+  **退出时自动恢复原值**。V4 起这些临时改动作用在 `FlywheelParams` 实例上，
+  重启 OpMode 即恢复（若手动在 Dashboard 改过，注意别和整定值混在一起）。
 
 ---
 
 ## 方法一：阶跃响应辨识（`Tune6.1 StepResponse`）
 
-> 报告 6.1，最推荐。一次性给出 `Kd / τ / kff / kp / ki`。
+> 一次给出 `Kd / τ / kff / kp / ki` 的模型式初值，是最快的起点。
 
 ### 原理
-以占空比 `d0` 稳定运行后阶跃到 `dStep`，速度响应近似
-`ω(t) = ω0 + Kd·Δd·(1 - e^(-t/τ))`，据此读 `Kd = Δω/Δd`、`τ = t63.2%`，再按零极点对消算：
-`kff = 1/Kd`，`kp = τ/(Kd·τc)`，`ki = 1/(Kd·τc)`，其中 `τc = tRecover/ratio`。
+
+占空比 `d0` 稳定运行后阶跃到 `dStep`，速度响应近似
+`ω(t) = ω0 + Kd·Δd·(1 − e^(−t/τ))`，读 `Kd = Δω/Δd`、`τ = t63.2%`，零极点对消得
+`kff = 1/Kd`、`kp = τ/(Kd·τc)`、`ki = 1/(Kd·τc)`，`τc = tRecover/ratio`。
 
 ### 可调参数（Dashboard → StepResponseTuner）
+
 | 参数 | 含义 | 建议 |
 |---|---|---|
 | `d0` | 阶跃前占空比 | 让飞轮稳定转起来（如 0.15） |
 | `dStep` | 阶跃后占空比 | 与 d0 拉开明显差距（如 0.25） |
 | `settleSec` | 阶跃前稳定时长 | 2 s |
-| `recordSec` | 阶跃后记录时长 | 3 s（≥ 4τ） |
-| `steadyWindowSec` | 取稳态均值窗口 | 0.5 s |
+| `recordSec` | 阶跃后记录时长 | 3 s（≥4τ） |
+| `steadyWindowSec` | 稳态均值窗口 | 0.5 s |
 | `tRecover` | 期望恢复时间 | 0.5 s |
 | `ratio` | tRecover/τc | 3~5 |
 
 ### 操作
-1. Init 后 Start → **自动跑一次**（d0 稳定 → 阶跃 → 记录 → 计算）。
-2. 按 **A** 重跑；按 **X** 停转。
-3. 读取遥测的「建议参数」，填入 `PrototypeShooter`。
+
+1. Start → 自动跑一次（`d0` 稳定 → 阶跃 → 记录 → 计算）。
+2. **A** 重跑，**X** 停转。
+3. 把建议值填进 `FlywheelParams.BIG`（注意：`kp` 见下方「注意」）。
 
 ### 输出
+
 `Kd (tick/s per duty)`、`τ (s)`、`kff`、`kp`、`ki`。
 
 ### 注意
-- 若 `dStep` 与 `d0` 太接近或飞轮未真正转起来，结果会判为 invalid。
-- `τ` 由 63.2% 上升时间估计，采样噪声大时可多跑几次取中位数。
+
+- **模型式给的 `kp` 一定偏小**：相角裕度/内模公式给出 6.1e-4~9.8e-4，
+  而量化判据允许到 `0.05/quantStep = 0.0025`（当前 0.00182）。经验做法是
+  **在模型值上乘 2~3 倍**，再用 `kp×台阶 ≤ 0.05` 卡上限、用继电法（6.3）交叉验证。
+- `τ` 由 63.2% 上升时间估计，噪声大时多跑几次取中位数。
+- `dStep` 与 `d0` 太接近、或飞轮未真正转起来，会判 invalid。
 
 ---
 
-## 方法二：Ziegler-Nichols 临界比例度法（`Tune6.2 ZieglerNichols`）
+## 方法二：继电反馈自整定（`Tune6.3 RelayFeedback`）
 
-> 报告 6.2。手动增大 Kp 直到等幅振荡，读出 `Ku / Tu`。
-
-### 原理
-P-only 控制 `d = Kp·(ω*-ω)`（OpMode 强制 `kff=0、ki=0` 并关闭掉速补偿）；
-增大 Kp 至等幅振荡，则当前 Kp 即 `Ku`，振荡周期为 `Tu`。ZN 表：
-`Kp = 0.45·Ku`，`Ki = 0.54·Ku/Tu`。
-
-### 可调参数（Dashboard → ZieglerNicholsTuner）
-| 参数 | 含义 | 建议 |
-|---|---|---|
-| `targetVelocity` | 目标转速 | 典型工作转速 |
-| `minZeroCrossings` | 判定周期的最少过零次数 | 4 |
-| `warmupSec` | 改变 kp 后跳过暂态、不采样的时长 | 3 s |
-
-### 操作
-1. Start 后飞轮以 P-only 运行。
-2. **DPad 上/下** 把 `PrototypeShooter.kp` ×1.1 / ÷1.1（或直接在 Dashboard 的
-   `PrototypeShooter` 分组里改），直到出现**不衰减的等幅振荡**。
-3. 观察遥测里的 `osc amp`、`Tu`；确认稳定后按 **A** 锁定：以当前 kp 作为 `Ku`，
-   用缓冲估出的 `Tu` 计算建议 `kp/ki`。
-4. 按 **B** 清除锁定结果与采样缓冲。
-
-### 输出
-`Ku`、`Tu (s)`、建议 `kp`、建议 `ki`。
-
-### 注意
-- `Ku` 与 `kp` 同量纲（占空比/(tick/s)），`ki` 单位为占空比/(tick/s·s)，可直接填入。
-- 每次 kp 变化（手柄或 Dashboard 直接改）都会**清空采样缓冲并重新等待 `warmupSec`**，避免把上一次
-  kp 的响应和启动峰值算进幅值/周期；遥测显示 `(settling)` 时不要读振荡结果。
-- 若只有稳态误差、无振荡，说明 Kp 还不够大；若振荡幅值失控，立即 X 停转。
-- 锁定前请确认 `osc amp` 近似恒定（等幅）。
-
----
-
-## 方法三：继电反馈自整定（`Tune6.3 RelayFeedback`）
-
-> 报告 6.3。自动产生极限环，比方法二楼安全。
+> 自动产生极限环，比手动加 Kp 安全得多；是 `kp/ki` 的**第二种**整定方式。
 
 ### 原理
-用继电器代替控制器：`err>0 → dHigh`，`err<0 → dLow`。系统进入极限环，
-测幅值 `a` 与周期 `Tu`，则 `Ku = 4·Δd/(π·a)`（`Δd = dHigh-dLow`），
-再 `Kp = 0.45·Ku`、`Ki = 0.54·Ku/Tu`。
+
+用继电器代替控制器：`err>0 → dHigh`，`err<0 → dLow`。进入极限环后测幅值 `a`、周期 `Tu`，
+则
+
+```text
+Ku = 2·Δd / (π·a)        Δd = dHigh − dLow，a = 极限环峰值（相对设定点）
+Kp = 0.45·Ku ,  Ki = 0.54·Ku/Tu
+```
+
+> **旧数据修正**：2026-10-22 之前本程序写作 `Ku = 4·Δd/(π·a)`，把全幅 `Δd` 当成半幅使用，
+> 结果高估 2 倍（样例 `dHigh=0.7, dLow=0.5, a=165` → 旧值 1.543e-3，正确值 7.716e-4）。
+> **凡是此前用旧版本跑出的 `Ku/Kp/Ki` 都要除以 2 再参考。**
 
 ### 可调参数（Dashboard → RelayFeedbackTuner）
+
 | 参数 | 含义 | 建议 |
 |---|---|---|
-| `targetVelocity` | 目标转速 | 典型工作转速 |
+| `targetVelocity` | 目标转速 | 典型工作转速（2050） |
 | `dHigh` / `dLow` | 继电器输出上下限 | 让稳态占空比落在两者之间（如 0.7 / 0.5） |
 | `transientSec` | 跳过建立极限环的暂态 | 2 s |
-| `measureSec` | 测量时长 | 4 s（≥ 数个周期） |
-| `hysteresis` | 继电器滞环 (tick/s) | 默认 0；信号噪声大可略加 |
+| `measureSec` | 测量时长 | 4 s（≥数个周期） |
+| `hysteresis` | 继电器滞环 (tick/s) | 默认 0；噪声大可略加（建议 ≤ 台阶） |
 
 ### 操作
-1. Init 后 Start → **自动跑一次**（建立极限环 → 测量 → 计算）。
-2. 按 **A** 重跑；按 **X** 停转。
-3. 读取建议 `Ku/kp/ki`。
+
+1. Start → 自动跑一次（建立极限环 → 测量 → 计算）。
+2. **A** 重跑，**X** 停转。
+3. 读建议 `Ku/kp/ki`。
 
 ### 输出
+
 幅值 `a`、`Tu (s)`、`Ku`、建议 `kp`、建议 `ki`。
 
 ### 注意
-- `Tu` 有效的前提是已进入稳定的极限环（跳过 `transientSec` 足够长）。
-- 若 `a` 太小或周期无效，结果判为 invalid：调大 `dHigh/dLow` 差距后重试。
+
+- `Tu` 有效的前提是稳定极限环（`transientSec` 足够长）。
+- `a` 太小时 `Ku` 会被噪声放大，判 invalid：拉开 `dHigh/dLow` 后重试。
+- 继电法给的是「临界增益」，对飞轮这种带饱和的执行器通常再取 `0.3~0.45×Ku` 更稳。
 
 ---
 
-## 方法四：掉速检测与补偿参数标定（`Tune6.4 DropDetection`）
+## 方法三：无模型前馈增益标定（`Tune6.5 Feedforward`）
 
-> 报告 6.4。标定 `dropThreshold / dropRateThreshold / kBoost / boostDurationSec`。
-
-### 原理
-让系统闭环稳定运行（本 OpMode **关闭掉速补偿**以测纯正常波动），统计：
-`Δω_th = kSigma·σ_ω`（σ_ω 为**样本标准差**，÷ N-1）；
-`k_th = kRate·max(-dω/dt)`（仅取**速度下降**的分量即最大减速度）；
-`kBoost = kBoostRatio·kp`；`boostDurationSec` 建议 0.1~0.5 s（发射实测微调）。
-
-### 可调参数（Dashboard → DropDetectionTuner）
-| 参数 | 含义 | 建议 |
-|---|---|---|
-| `targetVelocity` | 目标转速 | 典型工作转速 |
-| `settleSec` | 测量前稳定时长 | 2 s |
-| `measureSec` | 测量时长 | 5 s |
-| `kSigma` | σ 的倍数 | 3~5 |
-| `kRate` | 最大减速度倍数 | 2~3 |
-| `kBoostRatio` | kBoost/kp 倍数 | 2~5 |
-| `suggestBoostDurationSec` | 补偿时长建议值 | 0.3 s |
-
-### 操作
-1. **前置**：先把方法一/二/三整定好的 `kff/kp/ki` 填入 `PrototypeShooter`。
-2. Init 后 Start → **自动跑一次**；按 **A** 重跑；**X** 停转。
-3. 读取建议参数并填入 `PrototypeShooter`。
-
-### 注意
-- `kBoost` 由当前 `PrototypeShooter.kp` 按倍数给出，因此需先定好 kp。
-- 遥测会同时给出速度**量化台阶**（实测速度的最大公约数）与 σ 相当于几个台阶。若
-  `dropThreshold` 只相当于 1~2 个台阶，说明阈值被量化噪声主导，需保守取值或提高目标转速——
-  任何稳态精度/阈值的讨论都必须先报出台阶。
-- `maxDecel` 先对速度做 EMA 平滑再差分，避免相邻样本的读数噪声把 `dropRateThreshold` 抬得过高。
-- 本方法只统计「正常工况」波动；真实掉速（发射）后的恢复需用带补偿的系统实测微调 `kBoost/boostDurationSec`。
-
----
-
-## 方法五：无模型前馈增益标定（`Tune6.5 Feedforward`）
-
-> 报告 6.5。标定 `kff`。
+> `kS` 与 `kff` 的**首选**方法；也是判断「积分是否长期负重」的唯一现场手段。
 
 ### 原理
-闭环稳定运行时记录稳态占空比 `d_ss`，则 `Kff = d_ss/ω*`。本 OpMode **强制 kff=0**，
-由 PI 提供全部稳态占空比，避免前馈饱和导致读数失真。可在多个转速下各测一点做线性拟合。
+
+闭环稳定运行时记录稳态占空比 `d_ss`，由
+`d_ss(ω*) = kS + kff·ω*`
+**多点线性拟合**：斜率 = `kff`、截距 = `kS`。本 OpMode 强制 `kff=0`、`kS=0`，
+由 PI 提供全部稳态占空比，避免前馈把读数掩盖掉。
 
 ### 可调参数（Dashboard → FeedforwardTuner）
+
 | 参数 | 含义 | 建议 |
 |---|---|---|
-| `targetVelocity` | 初始目标转速 | 典型工作转速 |
+| `targetVelocity` | 初始目标转速 | 典型工作转速（1700） |
 | `velocityStep` | 目标转速步长 | 200 tick/s |
-| `settleSec` | 测量前稳定时长 | 2 s |
+| `settleSec` | 测量前稳定时长 | **≥2 s**（短了会吃到暂态） |
 | `windowSec` | 取均值窗口 | 1.5 s |
 
 ### 操作
-1. **前置**：`kp/ki` 必须已整定（非 0），否则系统到不了目标转速。
-2. Start 后，用 **DPad 上/下** 设定目标转速。
-3. 待速度稳定后按 **A** 记录一点（自动等待 `settleSec` 后取 `windowSec` 均值）。
-4. 改变目标转速，重复步骤 3，记录多点。
-5. 遥测显示 `Kff (through origin)`（过原点斜率，推荐）与 `Kff (linear fit slope)`（含截距拟合，
-   可反映静摩擦）。按 **B** 清空测量点。
+
+1. **前置**：`kp/ki` 已整定（非 0），否则根本到不了目标转速。
+2. Start 后用 **DPad 上/下** 设定目标转速；**每档至少停 2 s**（历史教训：
+   0.57~0.62 s 的停留把 `kS` 高估到 0.13）。
+3. 速度稳定后按 **A** 记录一点（自动等 `settleSec` 后取 `windowSec` 均值）。
+4. 覆盖 **1700 / 2050 / 2250 各 3~4 点**，共 9~12 点。
+5. 遥测显示 `Kff (origin fit, only if kS=0)`（过原点斜率）与 `Kff (fit) / kS (intercept)`
+   （含截距拟合，**推荐**）。**B** 清空测量点。
 
 ### 输出
-每点的 `ω / d_ss / Kff`、过原点斜率 Kff、线性拟合斜率与截距。
+
+每点 `ω / d_ss / Kff`、过原点斜率、线性拟合斜率与截距（= kS）。
 
 ### 注意
-- 若稳态占空比接近 1（饱和），该点无效，请降低目标转速。
-- 过原点斜率适合直接填入 `kff`；若拟合截距明显非 0，说明存在静摩擦，可考虑用截距补偿 `kS`（当前控制器未含该项）。
+
+- **单点拟合是高估陷阱**：`kS≈0.03` 时在 1700 tick/s 只用一点过原点拟合，会把 `kff` 高估约 4.6%。
+  必须多点、必须拟合斜率。
+- 稳态占空比接近 1（饱和）的点无效，降低目标转速重测。
+- 若截距为负或 >0.06，说明机械/电气状态变了（脏污、轴承、电池），先查机械再改参数。
 
 ---
 
-## 推荐标定顺序（报告 6.6）
+## 方法四：速度滤波整定（`Tune6.6 VelocityFilter`）
 
-1. **准备**：取下异物，确保飞轮可安全低速运行。
-2. **阶跃辨识**（方法一）→ 得到 `Kd / τ` 及初版 `kff / kp / ki`，填入 `PrototypeShooter`。
-3. **PI 微调**：若阶跃法结果不理想，用方法二（ZN）或方法三（继电）复核 `kp / ki`，取较保守者。
-4. **前馈标定**（方法五）→ 用实测稳态占空比修正 `kff`。
-5. **掉速参数**（方法四）→ 得到 `dropThreshold / dropRateThreshold / kBoost`，`boostDurationSec` 先取 0.3 s。
-6. **发射实测**：真实发射小球，观察掉速与恢复，微调 `kBoost / boostDurationSec`。
+> 第 4 代新增。标定 `tauVMax / tauVMin`。
+
+### 原理
+
+速度反馈要先压掉 **20 tick/s 的量化噪声**，又不能在大误差时拖后腿，因此用误差调度的 τ：
+
+```text
+eBand = max(2%·|ω*|, 2·quantStep)
+τ = tauVMax                      , |e| ≤ eLoFrac·eBand
+τ = tauVMin                      , |e| ≥ eHiFrac·eBand
+τ 线性过渡于两者之间
+```
+
+本程序一次跑完两段：
+
+1. **稳态段**：在 `steadyTarget` 稳住后统计原始速度标准差 `σ_raw` 与 6 个候选 τ 的 `σ_filt`；
+2. **阶跃段**：目标阶跃 `+stepDelta`，记录每个候选 τ 的 **90% 滞后**（相对原始速度的达标时刻）。
+
+反解建议：
+
+```text
+σ_target = max(quantStep/2, 0.5%·ω*)        // 允许的残余噪声
+r        = σ_target / σ_raw
+α        = 2r²/(1+r²)                        // 二阶矩匹配的 EMA 系数
+tauVMax  = dt·(1−α)/α
+```
+
+### 可调参数（Dashboard → VelocityFilterTuner）
+
+| 参数 | 含义 | 建议 |
+|---|---|---|
+| `steadyTarget` | 稳态测量转速 | 实际工作点（2050） |
+| `stepDelta` | 阶跃幅度 | 300 tick/s |
+| `settleSec` | 稳态采样前稳定时长 | 2 s |
+| `steadySec` | 稳态采样时长 | 3 s |
+| `tau1..tau6` | 6 个候选 τ (s) | 0.008 / 0.012 / 0.016 / 0.020 / 0.025 / 0.030 |
+| `lagTolerance` | 90% 滞后判据 | 0.9 |
+
+### 操作
+
+Start 后按 **A** 全自动跑完（两段），**X** 停转。CSV 前缀 `vf06`，列：
+`t,velocity,duty,vbus,f1..f6`。
+
+### 输出
+
+`σ_raw`、各候选的 `σ_filt` 与 90% 滞后、建议 `tauVMax`。
+
+### 注意
+
+- 选 τ 的判据是**两段都要看**：只看稳态噪声会选到 30 ms，那会让发射冲击段少看 73% 的跌深
+  （τ=30 ms 时冲击末只看到真值的 27%，连饱和都进不去）。
+- `tauVMin` 取「约一帧」即可（采样 8.7~9.0 ms → 8 ms）；再小是纯浪费。
+- 拐点 `eLoFrac/eHiFrac` 不再整定：它们与 `eBand` 绑定，`0.30/0.90` 是让残余过冲
+  `≈a_sat·τ(eBand)` 落在 10 tick/s 量级的取值。
+
+---
+
+## 方法五：母线电压滤波整定（`Tune6.7 BusVoltageFilter`）
+
+> 第 4 代新增。标定 `tauBus`（电压归一化用）。
+
+### 原理
+
+电压归一化 `s = clamp(V_nom/V_busFilt, 0.85, 1.25)` **只乘前馈**。`tauBus` 的取舍：
+
+- **太小**：单发发射把母线拉低 3 V，低通把这当成「电池没电」→ `s→1.25` →
+  2050 处前馈 0.815→1.02 → 输出又饱和（人造 boost）；
+- **太大**：换电池/电量下降后前馈要很久才校正回来。
+
+本程序分两段：
+
+- **A 稳态**：稳定运行 → `σ(V)`、稳态母线、等效源内阻 `R`（`V = V0 − R·I` 最小二乘）、电流峰；
+- **B 扰动**：记录 `launchRecordSec` 秒（期间**手动发射一发**），对 5 个候选 `tauBus`
+  给出滤波后的最大跌落，并换算成前馈占空比误差
+
+```text
+Δduty_ff = kff·ω*·(V_nom/V_filt − 1)
+```
+
+判据：取满足 `|Δduty_ff| ≤ maxFfDutyError`（默认 0.005 ≈ 3 个 `kp×台阶`）的**最小** `tauBus`。
+
+### 可调参数（Dashboard → BusVoltageFilterTuner）
+
+| 参数 | 含义 | 建议 |
+|---|---|---|
+| `targetVelocity` | 测量转速 | 实际工作点（2050） |
+| `settleSec` / `sampleSec` | 稳态前稳定 / 采样时长 | 2 s / 3 s |
+| `launchRecordSec` | 扰动记录时长 | 1.2 s |
+| `maxFfDutyError` | 前馈占空比误差判据 | 0.005 |
+| `tau1..tau5` | 5 个候选 `tauBus` (s) | 0.3 / 0.5 / 1.0 / 2.0 / 3.0 |
+
+### 操作
+
+1. **A** → 稳态测量（自动）。
+2. **B** → 立即手动发射一发（或用手压住飞轮模拟负载）。
+3. **X** 停转。CSV 前缀 `bf07`（稳态）/`bf07d`（扰动），列：
+   `t,vbus,current,duty,velocity,f1..f5`。
+
+### 输出
+
+母线均值、原始最大跌落、源内阻 `R`、各候选的滤波跌落与 `|Δduty_ff|`、建议 `tauBus`。
+
+### 注意
+
+- 掉速期间与掉速后 `busHoldOffSec`（0.6 s）内电压采样是**冻结**的，
+  所以 `tauBus` 只影响「电量缓变」的跟随速度，不影响单发跌落——本程序量的是后者。
+- `R` 明显大于 0.7 Ω 时优先改硬件（新电池/短线束），而不是继续调 `tauBus`。
+
+---
+
+## 推荐整定顺序
+
+1. **准备**：取走异物；确认 `quantStep` 仍是 20（换过电机/齿比就重测）。
+2. **稳态前馈**（6.5）：≥9 点重标 `kS`、`kff`。**这一步决定积分是否长期负重，必须先做。**
+3. **快速性**（6.1 → 6.3）：6.1 给模型初值（`kp` 乘 2~3），6.3 给临界增益复核，
+   最终 `kp` 用 `kp×台阶 ≤ 0.05` 卡上限、用实测 `duty_sd` 定稿。
+4. **速度滤波**（6.6）：定 `tauVMax/tauVMin`。
+5. **电压滤波**（6.7）：定 `tauBus`（只有打开 `useVoltageNorm` 才有意义）。
+6. **发射实测**：带球 10~15 发，看「跌幅 / 恢复时间 / 过冲 / 饱和占比 / 积分回落」。
+7. **两种电量对比**：满电 12.9~13.1 V 与放电 ~10.5 V，同目标各 30 s，`duty·V_bus` 差 ≤3%。
 
 ---
 
 ## 参数速查
 
-| PrototypeShooter 参数 | 单位 | 来源方法 |
+| `FlywheelParams` 参数 | 单位 | 来源 |
 |---|---|---|
-| `kff` | 占空比/(tick/s) | 6.1（=1/Kd）、6.5（=d_ss/ω*） |
-| `kp` | 占空比/(tick/s) | 6.1、6.2、6.3 |
-| `ki` | 占空比/(tick/s·s) | 6.1、6.2、6.3 |
-| `maxI` | 占空比 | 经验值（防积分饱和） |
-| `iZone` | tick/s | 经验值（积分生效误差带） |
-| `dropThreshold` | tick/s | 6.4 |
-| `dropRateThreshold` | tick/s² | 6.4 |
-| `kBoost` | 占空比/(tick/s) | 6.4（=倍数·kp） |
-| `boostDurationSec` | s | 6.4 + 发射实测 |
+| `kS` | 占空比 | 6.5（拟合截距）、`ShooterTuningTester`（开环截距） |
+| `kff` | 占空比/(tick/s) | 6.5（拟合斜率）、6.1（=1/Kd） |
+| `kp` | 占空比/(tick/s) | 6.1×2~3、6.3（0.45·Ku）、量化上限 `0.05/quantStep` |
+| `ki` | 占空比/(tick/s·s) | 6.1（=1/(Kd·τc)）、6.3（0.54·Ku/Tu） |
+| `maxI` | 占空比 | 经验值，防积分饱和（0.3） |
+| `tauVMax` / `tauVMin` | s | 6.6 |
+| `tauBus` | s | 6.7 |
+| `vBusNominal` | V | 电池额定（12.0；满电实测 12.9~13.1） |
+| `settleFrac` / `settleFrames` | — | 算出来的，不整定（2% / 10 帧） |
+| `dropEnterFrac` | 倍 `eBand` | 由实测跌深推出（默认 3.0） |
+| `iFreezeTimeoutSec` | s | 安全阀（1.5） |
+| `busHoldOffSec` / `busFreezeTimeoutSec` | s | 电池 RC 回弹时间（0.6 / 2.0） |
 
-> 队列中的增益单位均为「占空比」，因此本套方法与 `PrototypeShooter` 不读取电压传感器一致。
-> 若后续改为电压补偿（`d=V/Vdc`），需把增益改为 V 量纲并乘以 `Vdc`。
+> 全部增益单位为「占空比」。第 4 代的电压归一化只乘前馈，
+> 因此**增益量纲不变**，不需要像「整条输出 × V_nom/V_bus」那样换算成 V 量纲。

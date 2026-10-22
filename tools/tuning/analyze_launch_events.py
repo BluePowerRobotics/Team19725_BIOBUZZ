@@ -10,10 +10,15 @@
     补偿 boost 是否参与（触发时刻占比、boost term 峰值）
     恢复后是否过冲（回到带内之后的最大超调）
 
-输出：
-    <stem>_launch_overview.png   全程速度/占空比/boost，掉速区间着色
-    <stem>_launch_zoom.png       典型 4 次事件放大（速度 + 占空比 + 分量）
-    <stem>_launch_stats.png      跌幅-恢复时间散点、跌幅直方图、恢复时间直方图
+输出（**一图一文件**；`<stem>` = 日志文件名去扩展名，`<NNN>` = 事件序号三位补零）：
+    <stem>_launch_velocity.png          全程转速 + 目标，掉速事件区间着色
+    <stem>_launch_duty.png              全程占空比与 I / P 分量（看恢复期是否顶到饱和）
+    <stem>_launch_boost.png             全程 boost 标志与 boost term（补偿是否参与）
+    <stem>_launch_001.png … _NNN.png    每一次事件单独一张（转速 + 占空比/I，逐发可贴报告）
+    <stem>_launch_stats_depth_vs_recover.png  跌幅-恢复时间散点（颜色 = boost 占比%）
+    <stem>_launch_stats_depth_hist.png        跌幅直方图
+    <stem>_launch_stats_recover_hist.png      恢复时间直方图
+    <stem>_launch_events.csv            每次事件的总表（CSV，便于 Excel/评审）
     终端打印逐次事件表与统计汇总
 
 用法：
@@ -126,7 +131,9 @@ def main(argv=None):
     add("=" * 92)
     add(f"发射掉速事件分析：{os.path.basename(cfg.log)}")
     add(f"样本 {n}    时长 {span:.2f} s    采样间隔 {dt * 1000:.1f} ms    量化台阶 {step:.0f} tick/s")
-    add(f"事件判定：速度低于 ω*−max(100, 3%·ω*)；恢复判定：|e| ≤ max({cfg.target_band:.0%}·ω*, 1 个台阶) 连续 10 帧")
+    add(f"事件判定：速度低于 ω*−max(100, {3.0 * cfg.target_band:.0%}·ω*)"
+        f"（delta = max(100, 3×band_frac×ω*)）；"
+        f"恢复判定：|e| ≤ max({cfg.target_band:.0%}·ω*, 1 个台阶) 连续 10 帧")
     add("=" * 92)
 
     ev = detect_events(t, tgt, vel, duty, it, pt, boost, dt, cfg.target_band, cfg.min_target, step)
@@ -177,6 +184,19 @@ def main(argv=None):
     with open(os.path.join(out, stem + "_launch_report.txt"), "w", encoding="utf-8") as fh:
         fh.write(text + "\n")
 
+    # 每次事件一行，写成总表 CSV（评审 / Excel 直接开）
+    csv_path = os.path.join(out, stem + "_launch_events.csv")
+    with open(csv_path, "w", encoding="utf-8", newline="\n") as fh:
+        fh.write("idx,target,t0_s,recover_s,depth_tick_s,depth_pct,vmin,"
+                 "duty_max,is_saturated,i_min,p_max,current_max,boost_frac,boost_max,overshoot\n")
+        for idx, e in enumerate(ev, 1):
+            fh.write("%d,%.0f,%.4f,%.4f,%.1f,%.2f,%.1f,%.4f,%d,%.4f,%.4f,%.3f,%.4f,%.4f,%.1f\n" % (
+                idx, e["target"], e["t0"], e["recover"], e["depth"],
+                100.0 * e["depth"] / e["target"] if e["target"] else float("nan"), e["vmin"],
+                e["duty_max"], 1 if e["duty_max"] >= 0.999 else 0, e["i_min"], e["p_max"],
+                e["cur_max"], e["boost_frac"], e["boost_max"], e["overshoot"]))
+    print("[表] " + csv_path)
+
     if not cfg.no_plot:
         try:
             plot(t, tgt, vel, duty, it, pt, boost, A_bt, ev, out, stem)
@@ -186,86 +206,161 @@ def main(argv=None):
 
 
 def plot(t, tgt, vel, duty, it, pt, boost, bt, ev, out, stem):
+    """**一图一文件**：全程 3 张（转速/占空比/boost）+ 每发事件 1 张 + 统计 3 张。"""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     plt.rcParams["font.sans-serif"] = ["Microsoft YaHei", "SimHei", "DejaVu Sans"]
     plt.rcParams["axes.unicode_minus"] = False
 
-    fig, ax = plt.subplots(3, 1, figsize=(13, 9), sharex=True)
-    ax[0].plot(t, tgt, "r--", lw=1.0, label="目标 ω*")
-    ax[0].plot(t, vel, "b-", lw=0.8, label="实测 ω")
-    for e in ev:
-        ax[0].axvspan(e["t0"], e["t1"], color="orange", alpha=0.35)
-    ax[0].set_ylabel("转速 (tick/s)")
-    ax[0].set_title(f"{stem}  发射掉速事件（橙色=事件区间，共 {len(ev)} 次）")
-    ax[0].grid(alpha=0.3)
-    ax[0].legend(fontsize=8)
-    ax[1].plot(t, duty, color="#d97a26", lw=0.8, label="duty")
-    ax[1].plot(t, it, color="#2ca02c", lw=0.7, label="I")
-    ax[1].plot(t, pt, color="#9467bd", lw=0.7, label="P")
-    ax[1].axhline(1.0, color="r", lw=1.0)
-    ax[1].set_ylabel("占空比")
-    ax[1].grid(alpha=0.3)
-    ax[1].legend(fontsize=7, ncol=3)
-    ax[2].plot(t, np.asarray(boost) * 100, color="g", lw=0.8, label="boost(on=%d)")
-    if bt is not None:
-        ax[2].plot(t, np.nan_to_num(bt) * 100, color="k", lw=0.7, label="boost term ×100")
-    ax[2].set_ylabel("补偿")
-    ax[2].set_xlabel("时间 (s)")
-    ax[2].grid(alpha=0.3)
-    ax[2].legend(fontsize=7)
-    fig.tight_layout()
-    fig.savefig(os.path.join(out, stem + "_launch_overview.png"), dpi=140)
-    plt.close(fig)
+    made = []
 
-    # 典型事件放大
-    pick = sorted(range(len(ev)), key=lambda i: -ev[i]["depth"])[:4]
-    fig, axes = plt.subplots(len(pick), 1, figsize=(12, 2.4 * len(pick)), sharex=False)
-    if len(pick) == 1:
-        axes = [axes]
-    for axi, i in zip(axes, pick):
-        e = ev[i]
-        a, b = max(0, e["j0"] - int(0.3 / (t[1] - t[0]))), min(len(t), e["j1"] + int(1.0 / (t[1] - t[0])))
-        tt = t[a:b] - t[e["j0"]]
-        axi.plot(tt, vel[a:b], "b.-", ms=2.5, lw=0.8, label="ω")
-        axi.axhline(e["target"], color="r", ls="--", lw=1.0)
-        axi.axvspan(0, e["t1"] - e["t0"], color="orange", alpha=0.25)
-        axi2 = axi.twinx()
-        axi2.plot(tt, duty[a:b], color="#d97a26", lw=1.0, label="duty")
-        axi2.plot(tt, np.nan_to_num(it[a:b]), color="#2ca02c", lw=0.9, label="I")
-        axi2.set_ylim(-0.1, 1.05)
-        axi.set_ylabel("ω (tick/s)")
-        axi2.set_ylabel("duty / I")
-        axi.set_title(f"事件#{i+1} 目标 {e['target']:.0f}  跌幅 {e['depth']:.0f} ({100*e['depth']/e['target']:.1f}%)"
-                      f"  恢复 {e['recover']:.3f}s  duty峰 {e['duty_max']:.3f}  boost峰 {e['boost_max']:.3f}"
-                      f"  过冲 {e['overshoot']:.0f}", fontsize=9)
-        axi.grid(alpha=0.3)
-    axes[-1].set_xlabel("相对事件起点的时间 (s)")
-    fig.tight_layout()
-    fig.savefig(os.path.join(out, stem + "_launch_zoom.png"), dpi=140)
-    plt.close(fig)
+    def save(fig, suffix):
+        fp = os.path.join(out, f"{stem}_{suffix}.png")
+        fig.savefig(fp, dpi=150, bbox_inches="tight")
+        plt.close(fig)
+        made.append(fp)
+        return fp
 
-    # 统计图
+    step = A.gcd_step(vel)
     dep = np.array([e["depth"] for e in ev])
     rec = np.array([e["recover"] for e in ev])
     bf = np.array([e["boost_frac"] for e in ev])
-    fig, ax = plt.subplots(1, 3, figsize=(13, 4))
-    ax[0].scatter(dep, rec, c=bf * 100, cmap="viridis", s=30)
-    ax[0].set_xlabel("跌幅 (tick/s)")
-    ax[0].set_ylabel("恢复时间 (s)")
-    ax[0].set_title("跌幅 vs 恢复时间（颜色=boost 占比%）")
-    ax[0].grid(alpha=0.3)
-    ax[1].hist(dep, bins=15, color="#1f77b4")
-    ax[1].set_xlabel("跌幅 (tick/s)")
-    ax[1].set_title("跌幅分布")
-    ax[2].hist(rec, bins=15, color="#d62728")
-    ax[2].set_xlabel("恢复时间 (s)")
-    ax[2].set_title("恢复时间分布")
-    fig.tight_layout()
-    fig.savefig(os.path.join(out, stem + "_launch_stats.png"), dpi=140)
-    plt.close(fig)
-    print(f"[图] {os.path.join(out, stem)}_launch_overview.png / _launch_zoom.png / _launch_stats.png")
+    dm = np.array([e["duty_max"] for e in ev])
+    ov = np.array([e["overshoot"] for e in ev])
+
+    # ---- ① 全程转速 ----
+    fig, ax = plt.subplots(figsize=(9, 4))
+    ax.plot(t, tgt, "r--", lw=1.0, label="目标 ω*")
+    ax.plot(t, vel, "b-", lw=0.8, label="实测 ω")
+    for e in ev:
+        ax.axvspan(e["t0"], e["t1"], color="orange", alpha=0.35)
+    ax.annotate(f"橙色 = 掉速事件区间（共 {len(ev)} 次）\n"
+                f"跌幅中位 {np.median(dep):.0f} tick/s"
+                f"（{100.0 * np.median(dep) / np.median([e['target'] for e in ev]):.2f}%）",
+                xy=(0.01, 0.02), xycoords="axes fraction", fontsize=8, va="bottom",
+                bbox=dict(boxstyle="round", fc="white", alpha=0.85))
+    ax.set_xlabel("时间 (s)")
+    ax.set_ylabel("转速 (tick/s)")
+    ax.set_title(f"{stem} — 发射掉速事件：转速（目标 vs 实测）")
+    ax.grid(alpha=0.3)
+    ax.legend(fontsize=8)
+    save(fig, "launch_velocity")
+
+    # ---- ② 全程占空比与分量 ----
+    fig, ax = plt.subplots(figsize=(9, 4))
+    ax.plot(t, duty, color="#d97a26", lw=0.8, label="duty")
+    ax.plot(t, it, color="#2ca02c", lw=0.7, label="I 项")
+    ax.plot(t, pt, color="#9467bd", lw=0.7, label="P 项")
+    ax.axhline(1.0, color="r", lw=1.0)
+    for e in ev:
+        ax.axvspan(e["t0"], e["t1"], color="orange", alpha=0.2)
+    ax.annotate(f"恢复期顶到饱和（duty≥0.999）的事件占 {100.0 * np.mean(dm >= 0.999):.0f}%\n"
+                f"顶尖饱和 = 恢复速度受母线电压/电机能力限制，加大增益没有用",
+                xy=(0.01, 0.02), xycoords="axes fraction", fontsize=8, va="bottom",
+                bbox=dict(boxstyle="round", fc="white", alpha=0.85))
+    ax.set_xlabel("时间 (s)")
+    ax.set_ylabel("占空比 (0~1)")
+    ax.set_title(f"{stem} — 发射掉速事件：占空比与 I / P 分量")
+    ax.grid(alpha=0.3)
+    ax.legend(fontsize=7, ncol=3)
+    save(fig, "launch_duty")
+
+    # ---- ③ 全程 boost ----
+    fig, ax = plt.subplots(figsize=(9, 4))
+    ax.plot(t, np.asarray(boost) * 100, color="g", lw=0.8, label="boost 标志 ×100（>50 即触发）")
+    if bt is not None:
+        ax.plot(t, np.nan_to_num(bt) * 100, color="k", lw=0.7, label="boost term ×100")
+        ax.axhline(39.9, color="r", ls="--", lw=1.0, label="boostMax 限幅 0.400 ×100")
+    for e in ev:
+        ax.axvspan(e["t0"], e["t1"], color="orange", alpha=0.2)
+    ax.annotate(f"boost 参与事件比例 {100.0 * np.mean(bf > 0.5):.0f}%\n"
+                f"boost term 峰值 {max(e['boost_max'] for e in ev):.3f}"
+                f"（≥0.399 说明顶到 boostMax 限幅）",
+                xy=(0.01, 0.98), xycoords="axes fraction", fontsize=8, va="top",
+                bbox=dict(boxstyle="round", fc="white", alpha=0.85))
+    ax.set_xlabel("时间 (s)")
+    ax.set_ylabel("补偿（×100 显示）")
+    ax.set_title(f"{stem} — 掉速补偿 boost 是否参与恢复")
+    ax.grid(alpha=0.3)
+    ax.legend(fontsize=7)
+    save(fig, "launch_boost")
+
+    # ---- ④ 每次事件单独一张 ----
+    dt = float(t[1] - t[0]) if len(t) > 1 else 0.02
+    npre = max(1, int(round(0.3 / dt)))
+    npost = max(1, int(round(1.0 / dt)))
+    for idx, e in enumerate(ev, 1):
+        a = max(0, e["j0"] - npre)
+        b = min(len(t), e["j1"] + npost)
+        tt = t[a:b] - t[e["j0"]]
+        band = max(0.02 * e["target"], 1.0 * step)
+        fig, ax = plt.subplots(figsize=(9, 4))
+        ax.plot(tt, vel[a:b], "b.-", ms=2.5, lw=0.9, label="实测 ω")
+        ax.axhline(e["target"], color="r", ls="--", lw=1.0,
+                   label=f"目标 {e['target']:.0f} tick/s")
+        ax.axhline(e["target"] - band, color="orange", ls=":", lw=1.0,
+                   label=f"恢复判定带 −{band:.0f}（{max(2.0, 100.0 * band / e['target']):.0f}%）")
+        ax.axhline(e["vmin"], color="purple", ls=":", lw=1.0,
+                   label=f"最低 {e['vmin']:.0f}（跌幅 {e['depth']:.0f}）")
+        ax.axvspan(0, e["t1"] - e["t0"], color="orange", alpha=0.25)
+        ax.annotate(f"跌幅 {e['depth']:.0f} tick/s（{100.0 * e['depth'] / e['target']:.1f}%）\n"
+                    f"恢复 {e['recover']:.3f} s    duty 峰 {e['duty_max']:.3f}"
+                    f"{'（饱和）' if e['duty_max'] >= 0.999 else ''}\n"
+                    f"boost 占比 {100.0 * e['boost_frac']:.0f}%  峰值 {e['boost_max']:.3f}\n"
+                    f"恢复后过冲 {e['overshoot']:+.0f} tick/s（负 = 未过冲）",
+                    xy=(0.02, 0.02), xycoords="axes fraction", fontsize=8, va="bottom",
+                    bbox=dict(boxstyle="round", fc="white", alpha=0.85))
+        ax.set_xlabel("相对事件起点的时间 (s)")
+        ax.set_ylabel("转速 (tick/s)")
+        ax.set_title(f"{stem} — 第 {idx}/{len(ev)} 发：目标 {e['target']:.0f} tick/s")
+        ax.grid(alpha=0.3)
+        ax.legend(fontsize=7, loc="lower right")
+        save(fig, f"launch_{idx:03d}")
+
+    # ---- ⑤ 跌幅 vs 恢复时间 ----
+    fig, ax = plt.subplots(figsize=(9, 4))
+    sc = ax.scatter(dep, rec, c=bf * 100, cmap="viridis", s=30)
+    fig.colorbar(sc, ax=ax, label="boost 占比 (%)")
+    ax.axhline(0.3, color="r", ls="--", lw=1.0, label="0.3 s 目标线（比赛要求 <0.3~0.5 s）")
+    ax.annotate(f"恢复时间中位 {np.median(rec):.3f} s / 最长 {rec.max():.3f} s\n"
+                f"<0.3 s 的比例 {100.0 * np.mean(rec < 0.3):.0f}%",
+                xy=(0.02, 0.98), xycoords="axes fraction", fontsize=8, va="top",
+                bbox=dict(boxstyle="round", fc="white", alpha=0.85))
+    ax.set_xlabel("跌幅 (tick/s)")
+    ax.set_ylabel("恢复时间 (s)")
+    ax.set_title(f"{stem} — 跌幅 vs 恢复时间（颜色 = boost 占比%）")
+    ax.grid(alpha=0.3)
+    ax.legend(fontsize=8)
+    save(fig, "launch_stats_depth_vs_recover")
+
+    # ---- ⑥ 跌幅分布 ----
+    fig, ax = plt.subplots(figsize=(9, 4))
+    ax.hist(dep, bins=15, color="#1f77b4")
+    ax.axvline(np.median(dep), color="r", ls="--", lw=1.2,
+               label=f"中位 {np.median(dep):.0f} tick/s")
+    ax.set_xlabel("跌幅 (tick/s)")
+    ax.set_ylabel("事件数")
+    ax.set_title(f"{stem} — 跌幅分布（{len(ev)} 次事件）")
+    ax.grid(alpha=0.3, axis="y")
+    ax.legend(fontsize=8)
+    save(fig, "launch_stats_depth_hist")
+
+    # ---- ⑦ 恢复时间分布 ----
+    fig, ax = plt.subplots(figsize=(9, 4))
+    ax.hist(rec, bins=15, color="#d62728")
+    ax.axvline(np.median(rec), color="k", ls="--", lw=1.2,
+               label=f"中位 {np.median(rec):.3f} s")
+    ax.axvline(0.3, color="r", ls=":", lw=1.2, label="0.3 s 目标线")
+    ax.set_xlabel("恢复时间 (s)")
+    ax.set_ylabel("事件数")
+    ax.set_title(f"{stem} — 恢复时间分布")
+    ax.grid(alpha=0.3, axis="y")
+    ax.legend(fontsize=8)
+    save(fig, "launch_stats_recover_hist")
+
+    print("[图] " + "  ".join(os.path.basename(p) for p in made))
+    return made
 
 
 if __name__ == "__main__":

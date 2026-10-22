@@ -12,8 +12,8 @@ import org.firstinspires.ftc.teamcode.Controllers.Shooter.PrototypeShooter.Proto
 /**
  * 飞轮运转程序：Start 后把飞轮拉到待发转速，并允许现场微调目标转速。
  *
- * <p>面向「实际运转」而非整定：所有整定参数已在 {@link PrototypeShooter} 的静态字段里固化，
- * 本程序只做目标转速管理与发起闭环绕组。
+ * <p>面向「实际运转」而非整定：整定参数固化在 {@link org.firstinspires.ftc.teamcode.utility.Shooter.FlywheelParams}
+ * 的 {@code BIG} 参数集里（Dashboard 分组 {@code FlywheelParams}），本程序只做目标转速管理与发起闭环绕组。
  *
  * <p><b>操作</b>
  * <ul>
@@ -61,7 +61,7 @@ public class FlywheelRun extends LinearOpMode {
         telemetry.addLine("Start -> target = " + startVelocity + " tick/s");
         telemetry.addLine("Dpad Up/Down: adjust target velocity (hold to repeat)");
         telemetry.addLine("X: stop    A: restart to " + startVelocity);
-        telemetry.addLine("Params are tuned in PrototypeShooter (Dashboard group: PrototypeShooter)");
+        telemetry.addLine("Params: utility.Shooter.FlywheelParams.BIG (Dashboard group: FlywheelParams)");
         shooter.setTelemetry();
         telemetry.update();
 

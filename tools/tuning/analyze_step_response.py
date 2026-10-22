@@ -14,6 +14,13 @@
 **时间轴铁律**：原始日志的 time 列毫秒字段是坏的，一律按文件行序重建均匀时间轴
 dt = 总时长/(n-1)，不按 time 排序。
 
+输出（**一图一文件**，`<stem>` = 输入文件名去扩展名）：
+  <stem>_step_report.txt   文字报告（同时打印到终端）
+  <stem>_step_velocity.png 主阶跃窗口：实测 vs 目标 + 误差带 + t90 / 进带时刻
+  <stem>_step_duty.png     同一窗口的占空比（顶到 1.0 = 全油门饱和）
+  <stem>_step_current.png  同一窗口的电机电流
+  <stem>_step_aligned.png  全部向上阶跃对齐叠加（一致性 / 迟滞）
+
 用法：
     python analyze_step_response.py <日志或数据表> [--out DIR] [--tail 1.0]
                                    [--band-frac 0.02] [--band-steps 2] [--no-plot]
@@ -293,8 +300,8 @@ def analyze(path, tail=1.0, band_frac=0.02, band_steps=2.0, out_dir=None, do_plo
             kff, kS = np.polyfit(xs, ys, 1)
             add("  线性拟合 kS = %+.5f, kff = %.8f" % (kS, kff))
             if kS > 0.005:
-                add("  截距为正 → 存在静摩擦/预紧项：本机建议 kS ≈ %.3f（当前 kS=0 时这部分全靠积分补，"
-                    "表现为积分长期非零）" % kS)
+                add("  截距为正 → 存在静摩擦/预紧项：建议 kS ≈ %.3f（本机控制律已含 kS 项，直接填入；"
+                    "kS 仍为 0 时这部分全靠积分补，表现为积分长期非零）" % kS)
         elif len(pts) >= 3:
             add("  （工作点转速跨度 <300 tick/s，kS/kff 无法分离，只用过原点 kff）")
         else:
@@ -314,13 +321,14 @@ def analyze(path, tail=1.0, band_frac=0.02, band_steps=2.0, out_dir=None, do_plo
 
     if do_plot and rows_out:
         try:
-            make_plot(d, rows_out, step, band_frac, band_steps, tail, out_dir, name)
+            make_plots(d, rows_out, step, band_frac, band_steps, tail, out_dir, name)
         except Exception as exc:  # 绘图失败不影响报告
             print("[绘图失败] %s: %s" % (type(exc).__name__, exc), file=sys.stderr)
     return rows_out
 
 
-def make_plot(d, rows_out, step, band_frac, band_steps, tail, out_dir, name):
+def make_plots(d, rows_out, step, band_frac, band_steps, tail, out_dir, name):
+    """**一图一文件**：阶跃主图 / 占空比 / 电流 / 多阶跃叠加，各出一张 PNG。"""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -330,6 +338,16 @@ def make_plot(d, rows_out, step, band_frac, band_steps, tail, out_dir, name):
 
     t, tgt, vel, duty = d["t"], d["target"], d["velocity"], d["duty"]
     cur, vol = d["current"], d["voltage"]
+    stem = os.path.splitext(name)[0]
+    if not out_dir:
+        return []
+    os.makedirs(out_dir, exist_ok=True)
+
+    def save(fig, suffix):
+        fig.savefig(os.path.join(out_dir, f"{stem}_{suffix}.png"),
+                    dpi=150, bbox_inches="tight")
+        plt.close(fig)
+        return os.path.join(out_dir, f"{stem}_{suffix}.png")
 
     # 选一个「0 → 目标」的启动阶跃做主图（优先最大的目标）
     starts = [r for r in rows_out if r["prev"] <= 0.5]
@@ -341,60 +359,95 @@ def make_plot(d, rows_out, step, band_frac, band_steps, tail, out_dir, name):
     k1 = min(k1, i1, len(t))
     tt = t[k0:k1] - t[i0]
     band = max(band_frac * main["target"], band_steps * step)
+    made = []
 
-    fig = plt.figure(figsize=(13, 11))
-    ax1 = fig.add_subplot(3, 1, 1)
-    ax1.plot(tt, vel[k0:k1], "b.-", lw=1.2, ms=3, label="实测 ω")
-    ax1.axhline(main["target"], color="r", ls="--", lw=1.2, label="目标 ω* = %.0f" % main["target"])
-    ax1.axhspan(main["target"] - band, main["target"] + band, color="orange", alpha=0.15,
-                label="误差带 ±%.0f (±%.0f%%)" % (band, max(band_frac * 100, 100 * band_steps * step / main["target"])))
+    # ---- ① 转速：阶跃主图 ----
+    fig, ax = plt.subplots(figsize=(9, 4))
+    ax.plot(tt, vel[k0:k1], "b.-", lw=1.2, ms=3, label="实测 ω")
+    ax.axhline(main["target"], color="r", ls="--", lw=1.2,
+               label="目标 ω* = %.0f" % main["target"])
+    ax.axhspan(main["target"] - band, main["target"] + band, color="orange", alpha=0.15,
+               label="误差带 ±%.0f (±%.0f%%)" % (
+                   band, max(band_frac * 100, 100 * band_steps * step / main["target"])))
     for dy in (-2 * step, -step, step, 2 * step):
-        ax1.axhline(main["target"] + dy, color="0.7", lw=0.6, ls=":")
-    ax1.axvline(main["t90"], color="green", ls="-.", lw=1.0)
-    ax1.annotate("t90%% = %.3f s" % main["t90"], xy=(main["t90"], main["v_pre"] + 0.35 * (main["target"] - main["v_pre"])),
-                 xytext=(main["t90"] + 0.15, main["v_pre"] + 0.30 * (main["target"] - main["v_pre"])),
-                 color="green", fontsize=9)
+        ax.axhline(main["target"] + dy, color="0.7", lw=0.6, ls=":")
+    ax.axvline(main["t90"], color="green", ls="-.", lw=1.0)
+    ax.annotate("t90%% = %.3f s" % main["t90"],
+                xy=(main["t90"], main["v_pre"] + 0.35 * (main["target"] - main["v_pre"])),
+                xytext=(main["t90"] + 0.15, main["v_pre"] + 0.30 * (main["target"] - main["v_pre"])),
+                color="green", fontsize=9)
     if np.isfinite(main["t_set"]):
-        ax1.axvline(main["t_set"], color="purple", ls="-.", lw=1.0)
-        ax1.annotate("进入误差带 %.3f s" % main["t_set"], xy=(main["t_set"], main["target"] * 0.55),
-                     xytext=(main["t_set"] + 0.15, main["target"] * 0.5), color="purple", fontsize=9)
-    ax1.set_title("① 阶跃 %.0f → %.0f tick/s（超调 %+.2f%%，峰值 %.0f）"
-                  % (main["v_pre"], main["target"], main["overshoot"], main["v_peak"]))
-    ax1.set_xlabel("相对阶跃时刻的时间 (s)"); ax1.set_ylabel("转速 (tick/s)")
-    ax1.grid(alpha=0.3); ax1.legend(loc="lower right", fontsize=9)
+        ax.axvline(main["t_set"], color="purple", ls="-.", lw=1.0)
+        ax.annotate("进入误差带 %.3f s" % main["t_set"], xy=(main["t_set"], main["target"] * 0.55),
+                    xytext=(main["t_set"] + 0.15, main["target"] * 0.5), color="purple", fontsize=9)
+    ax.annotate("超调 %+.2f%%   峰值 %.0f tick/s   t63.2%%=%.3f s" % (
+        main["overshoot"], main["v_peak"], main["t63"]),
+        xy=(0.01, 0.02), xycoords="axes fraction", fontsize=9, va="bottom",
+        bbox=dict(boxstyle="round", fc="white", alpha=0.85))
+    ax.set_title("阶跃 %.0f → %.0f tick/s  （灰点线 = ±1/2 个量化台阶 %.0f tick/s）"
+                 % (main["v_pre"], main["target"], step))
+    ax.set_xlabel("相对阶跃时刻的时间 (s)")
+    ax.set_ylabel("转速 (tick/s)")
+    ax.grid(alpha=0.3)
+    ax.legend(loc="lower right", fontsize=9)
+    made.append(save(fig, "step_velocity"))
 
-    ax2 = fig.add_subplot(3, 1, 2)
-    ax2.plot(tt, duty[k0:k1], color="darkorange", lw=1.2, label="duty")
-    ax2.axhline(1.0, color="r", lw=0.8, ls="--")
-    ax2.set_ylabel("占空比", color="darkorange"); ax2.set_ylim(-0.05, 1.08)
-    ax2.grid(alpha=0.3)
-    ax2b = ax2.twinx()
-    ax2b.plot(tt, cur[k0:k1], color="purple", lw=1.0, alpha=0.8, label="电流 (A)")
-    ax2b.set_ylabel("电流 (A)", color="purple")
-    ax2.set_title("② 同一时刻：占空比（是否顶到 1.0 = 全油门）与电流 / 母线电压 %.2f V"
-                  % float(np.nanmedian(vol[k0:k1])))
-    lines = ax2.get_lines()[:2] + ax2b.get_lines()
-    ax2.legend(lines, [l.get_label() for l in lines], loc="center right", fontsize=9)
-    ax2.set_xlabel("相对阶跃时刻的时间 (s)")
+    # ---- ② 占空比 ----
+    fig, ax = plt.subplots(figsize=(9, 4))
+    ax.plot(tt, duty[k0:k1], color="darkorange", lw=1.2, label="duty")
+    ax.axhline(1.0, color="r", lw=0.8, ls="--", label="限幅上限 1.0（= 全油门饱和）")
+    ax.set_ylim(-0.05, 1.08)
+    seg = slice(k0, k1)
+    sat_pct = 100.0 * np.mean(duty[seg] >= 0.999) if k1 > k0 else float("nan")
+    ax.annotate("该窗口饱和占比 %.0f%%   母线电压 %.2f V\n"
+                "饱和段 = 全油门加速（正常），但饱和时长直接决定到速时间"
+                % (sat_pct, float(np.nanmedian(vol[seg])) if np.any(np.isfinite(vol[seg])) else float("nan")),
+                xy=(0.01, 0.02), xycoords="axes fraction", fontsize=9, va="bottom",
+                bbox=dict(boxstyle="round", fc="white", alpha=0.85))
+    ax.set_xlabel("相对阶跃时刻的时间 (s)")
+    ax.set_ylabel("占空比 (0~1)")
+    ax.set_title("阶跃窗口内的占空比（顶到 1.0 = 全油门，看是否长期饱和）")
+    ax.grid(alpha=0.3)
+    ax.legend(loc="center right", fontsize=9)
+    made.append(save(fig, "step_duty"))
 
-    ax3 = fig.add_subplot(3, 1, 3)
-    for idx, r in enumerate(rows_out):
+    # ---- ③ 电流 ----
+    fig, ax = plt.subplots(figsize=(9, 4))
+    ax.plot(tt, cur[k0:k1], color="purple", lw=1.0, alpha=0.85, label="电流 (A)")
+    if np.any(np.isfinite(cur[seg])):
+        ax.annotate("窗口峰值 %.2f A   均值 %.2f A"
+                    % (float(np.nanmax(cur[seg])), float(np.nanmean(cur[seg]))),
+                    xy=(0.01, 0.98), xycoords="axes fraction", fontsize=9, va="top",
+                    bbox=dict(boxstyle="round", fc="white", alpha=0.85))
+    ax.set_xlabel("相对阶跃时刻的时间 (s)")
+    ax.set_ylabel("电流 (A)")
+    ax.set_title("阶跃窗口内的电机电流（与占空比对照：饱和时看是否还有余量）")
+    ax.grid(alpha=0.3)
+    ax.legend(loc="upper right", fontsize=9)
+    made.append(save(fig, "step_current"))
+
+    # ---- ④ 全部向上阶跃对齐叠加 ----
+    fig, ax = plt.subplots(figsize=(9, 4))
+    for r in rows_out:
         a, b = r["i0"], r["i1"]
         m0 = int(np.searchsorted(t[a:b], t[a] - 0.2)) + a
         m1 = min(int(np.searchsorted(t[a:b], t[a] + 6.0)) + a, b, len(t))
-        ax3.plot(t[m0:m1] - t[a], vel[m0:m1], lw=1.0,
-                 label="%.0f→%.0f @%.0fs" % (r["prev"], r["target"], r["t0"]))
-    ax3.set_title("③ 全部向上阶跃对齐叠加（看一致性：起步形状是否一致、是否有迟滞）")
-    ax3.set_xlabel("相对阶跃时刻的时间 (s)"); ax3.set_ylabel("转速 (tick/s)")
-    ax3.grid(alpha=0.3); ax3.legend(fontsize=8, ncol=2, loc="lower right")
+        ax.plot(t[m0:m1] - t[a], vel[m0:m1], lw=1.0,
+                label="%.0f→%.0f @%.0fs" % (r["prev"], r["target"], r["t0"]))
+    ax.annotate("共 %d 次向上阶跃；曲线越重合 = 一致性越好，分开 = 有迟滞/工况漂移"
+                % len(rows_out),
+                xy=(0.01, 0.98), xycoords="axes fraction", fontsize=9, va="top",
+                bbox=dict(boxstyle="round", fc="white", alpha=0.85))
+    ax.set_title("全部向上阶跃对齐叠加（看起步形状是否一致、是否有迟滞）")
+    ax.set_xlabel("相对阶跃时刻的时间 (s)")
+    ax.set_ylabel("转速 (tick/s)")
+    ax.grid(alpha=0.3)
+    ax.legend(fontsize=8, ncol=2, loc="lower right")
+    made.append(save(fig, "step_aligned"))
 
-    fig.tight_layout()
-    if out_dir:
-        os.makedirs(out_dir, exist_ok=True)
-        fp = os.path.join(out_dir, os.path.splitext(name)[0] + "_step.png")
-        fig.savefig(fp, dpi=150)
-        plt.close(fig)
-        print("[图] " + fp)
+    for p in made:
+        print("[图] " + p)
+    return made
 
 
 def main():
