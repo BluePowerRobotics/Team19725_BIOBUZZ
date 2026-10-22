@@ -41,6 +41,7 @@
 | `GoToOtherShootAreaAvoidHiveAction` | 绕开 Hive（外侧）前往另一发射区域并预瞄球门 | `(TeamColor, Pose2d goal)` |
 | `AutoAimAction` | 原地 PD 转向，自动锁定当前 HIVE 侧球门 | `(TeamColor)` |
 | `EatAction` | 集球器以吃球速度运转指定时长后停转 | `(Sweeper)` 或 `(Sweeper, long durationMs)` |
+| `AdaptiveParkAction` | T-3s 检测整机是否接触场地边框，接触则开到安全位置停靠，否则原地停止 | `(MecanumDrive, ElapsedTime matchTime, long durationMs, long leadTimeMs)` |
 
 ---
 
@@ -206,6 +207,78 @@ new EatAction(sweeper);                       // 用 eatDurationMs 默认时长
 new EatAction(sweeper, 1500);                 // 指定时长
 ```
 
+## 12. AdaptiveParkAction（自适应停靠）
+
+**作用**：自动阶段结束前 **3 秒**（T-3s）检测整机外接矩形是否接触场地边框，并据此决定
+**本局停靠点**。停靠点由当时位姿实时解算，**不是固定点**。
+
+**场地边界**：12 ft × 12 ft 场地以原点为中心，边界为 `|x| = |y| = 72 in`
+（`HypParams.fieldHalfSizeIn`）。
+
+**判定与动作**：
+
+| 检测结果 | 动作 | 停靠点 |
+|---------|------|--------|
+| 四角任一到达/越过 ±72 in（接触） | 沿 `strafeToLinearHeading` 轨迹开到最小平移解 | 解算出的安全位姿（动态） |
+| 四角全部在边界内（不接触） | `setDrivePowers(0,0,0)` 原地停止 | 检测时刻的当前位姿 |
+
+**最小平移解**（`safeParkPose`）：设底盘半长 / 半宽为 `L` / `W`，航向 `θ`，求旋转矩形的
+轴对齐半投影
+
+```
+ex = |L·cosθ| + |W·sinθ|
+ey = |L·sinθ| + |W·cosθ|
+```
+
+再把中心夹到 `[-limit+ex, limit-ex]`（y 同理），其中
+`limit = fieldHalfSizeIn - parkBorderMarginIn`。这样得到的**轴对齐包围盒**完全落在安全区内，
+且位移最小、**不改变航向**。
+
+**执行时序**：
+
+1. 未到 T-3s：每帧保持电机停止并返回 `true`（可提前入队，作为队列最后一个元素）；
+2. 到 T-3s：检测一次，记录 `borderContact` 与 `parkPose`；
+3. 接触 → 建轨迹并跟随；不接触 → 停车并立刻返回 `false`；
+4. 轨迹结束后再次停车并返回 `false`。
+
+**构造**（与 OpMode 共用同一个比赛计时器）：
+
+```java
+ElapsedTime matchTime = new ElapsedTime();   // START 后创建
+
+actionRunner.clear();
+actionRunner.add(new AdaptiveParkAction(
+        drive, matchTime,
+        HypParams.AUTONOMOUS_DURATION_MS,
+        HypParams.PARK_TIME_THRESHOLD_MS));
+```
+
+**参数说明**（均在 `Parameter/HypParams.java`，`@Config` 可在 Dashboard 实时调整）：
+
+| 参数 | 默认值 | 单位 | 含义 |
+|------|--------|------|------|
+| `AUTONOMOUS_DURATION_MS` | 30000 | ms | 自动阶段总时长，作为倒计时基准 |
+| `PARK_TIME_THRESHOLD_MS` | 3000 | ms | 停靠触发阈值（剩余时间 ≤ 该值即检测） |
+| `fieldHalfSizeIn` | 72.0 | in | 场地半边长（12 ft × 12 ft → ±72） |
+| `parkBorderMarginIn` | 3.0 | in | 停靠时整机外接盒与边框保留的安全间隙 |
+| `chassisHalfLengthIn` / `chassisHalfWidthIn` | 见 HypParams | in | 整机轮廓半长 / 半宽，用于外接矩形 |
+
+**遥测键**（FTC Dashboard）：
+
+| 键 | 含义 |
+|----|------|
+| `AdaptivePark` | 阶段文字（`waiting until T-3s` / `no border contact -> stop` / `border contact -> moving inside`） |
+| `AdaptivePark remaining(ms)` | 等待阶段的剩余时间 |
+| `AdaptivePark park x` / `park y` / `park heading(deg)` | 本局停靠点 |
+
+**对外查询**：`borderContact()`、`parkPose()`。
+
+**注意**：
+
+- 位姿来自融合定位，本 Action **不推进定位器**（由 OpMode 每帧唯一一次 `update()`）。
+- 判据依赖定位精度；若实车贴边仍有压线风险，调大 `parkBorderMarginIn`（如 4~5 in）。
+- 极端情况下（外接盒大于安全区）退回场地中心 `(0,0)`，航向不变。
+
 ## 典型串联顺序
 
 ```
@@ -213,8 +286,37 @@ GoToShootAreaAction → AutoAimAction →（发射）
 GoToEatPointAction / GoToNearestEatPointAction → EatAction
 GoToOtherShootAreaViaHiveAction / GoToOtherShootAreaAvoidHiveAction → AutoAimAction →（发射）
 GoToUnvisitedEatPointViaHiveAction / GoToUnvisitedEatPointAvoidHiveAction → EatAction
-任意阶段超时 → ActionRunner.clear() + GoToStopPose
+剩余时间 ≤ PARK_TIME_THRESHOLD_MS → ActionRunner.clear() + AdaptiveParkAction
 ```
+
+## 自动阶段主程序（AutoRed / AutoBlue）
+
+两个 OpMode 使用同一套状态机，仅队伍颜色、起始位姿与预瞄准球门不同：
+
+| 项目 | AutoRed | AutoBlue |
+|------|---------|----------|
+| 队伍 | `TeamColor.RED` | `TeamColor.BLUE` |
+| 起始位姿 | `HypParams.startPoseRed` | `HypParams.startPoseBlue` |
+| 预瞄准球门 | `HypParams.RedAudienceUp` | `HypParams.BlueAudienceUp` |
+
+**状态机与动作循环**（动作队列空闲时投递下一段）：
+
+```
+TO_EAT_POINT   → GoToUnvisitedEatPointAvoidHiveAction（绕开 Hive 去未访问取球点）
+EATING         → EatAction
+TO_SHOOT_AREA  → GoToOtherShootAreaViaHiveAction（经 Hive 正下方去另一发射区）
+TO_SHOOT_AREA 完成 → 回到 TO_EAT_POINT，持续循环
+PARKING        → AdaptiveParkAction
+STOP
+```
+
+**停靠的硬保障**：主循环每帧计算 `remainingMs`；一旦
+`remainingMs <= PARK_TIME_THRESHOLD_MS` 且尚未投递过停靠动作，立即
+`actionRunner.clear()` 中断**正在执行**的任意 Action，再投递 `AdaptiveParkAction`，
+并用 `parkScheduled` 保证只投递一次。因此即使上一段长轨迹尚未跑完，T-3s 也一定会转入停靠。
+
+**结束收尾**：`RobotStateStore.savePose(...)` 记录结束位姿，`sweeper.setStop()` +
+`chassis.stop()` 确保底盘与集球器停稳。
 
 ## 实机测试
 
@@ -234,6 +336,10 @@ GoToUnvisitedEatPointViaHiveAction / GoToUnvisitedEatPointAvoidHiveAction → Ea
 | `Test: GoToOtherShootAreaAvoidHive` | `GoToOtherShootAreaAvoidHiveAction` |
 | `Test: AutoAim` | `AutoAimAction` |
 | `Test: Eat` | `EatAction` |
+
+> `AdaptiveParkAction` 没有独立测试 OpMode：它的触发依赖比赛计时与自动阶段完整流程，
+> 请通过 `AutoRed` / `AutoBlue` 实机联调验证（重点观察 T-3s 是否停车、接触时是否向场内移动、
+> Dashboard 的 `AdaptivePark park x/y` 是否为场内位置）。
 
 **Init 阶段按键选择**：
 

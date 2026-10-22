@@ -173,6 +173,18 @@ public class HypParams {
     public static long PARK_TIME_THRESHOLD_MS = 3000;
 
     /**
+     * FTC 场地半边长（英寸）：12 ft × 12 ft 场地以原点为中心，边界为 x/y = ±72。
+     * 用于自适应停靠 Action 判定「整机外接矩形是否接触场地边框」。
+     */
+    public static double fieldHalfSizeIn = 72.0;
+
+    /**
+     * 自适应停靠时整机外接矩形与场地边框保留的安全间隙（英寸）。
+     * 检测到接触后，机器人会被推回到「外接矩形距边框 ≥ 该值」的位置。
+     */
+    public static double parkBorderMarginIn = 3.0;
+
+    /**
      * 自动阶段总时长（单位：毫秒）
      */
     public static long AUTONOMOUS_DURATION_MS = 30000;
