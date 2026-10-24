@@ -21,7 +21,7 @@ import org.firstinspires.ftc.teamcode.RoadRunner.MecanumDrive;
 import org.firstinspires.ftc.teamcode.utility.Geometry.ConvexPolygon;
 import org.firstinspires.ftc.teamcode.Parameter.HypParams;
 import org.firstinspires.ftc.teamcode.utility.filter.EMA;
-
+//负责除视觉以外的所有状态估计
 @Config
 public class RobotPosition {
     static MecanumDrive drive;
