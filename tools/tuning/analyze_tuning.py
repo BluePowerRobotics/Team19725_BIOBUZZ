@@ -28,6 +28,20 @@
     --kp K         drop04 需要 kBoost=ratio*kp 且 CSV 里没有 kBoost 时手工指定 kp
     --alpha A      drop04 求最大减速度前的速度 EMA 系数（默认 0.3，与端上一致）
 
+输出（**一图一文件**，`<stem>` = CSV 文件名去扩展名；每张 PNG 只画一个物理量）：
+    <stem>_report.txt          结论文本（同时打印到终端）
+    step01  →  <stem>_step_velocity.png（阶跃前后转速 + 最小二乘拟合 + t63.2%）
+               <stem>_step_duty.png    （开环阶跃的占空比 d0 / dStep）
+    zn02    →  <stem>_velocity.png     （尾部窗内转速 + 中心/幅值线 + Tu）
+               <stem>_duty.png         （占空比输出）
+    relay03 →  <stem>_velocity.png     （极限环转速 + 中心/幅值线 + Tu）
+               <stem>_duty.png         （继电器 dHigh / dLow + Δd）
+    drop04  →  <stem>_velocity.png     （测量段转速，看 σ 与量化台阶）
+               <stem>_duty.png         （测量段占空比）
+    ff05    →  <stem>_velocity.png     （全程转速）
+               <stem>_ff_regression.png（d_ss(ω) 回归：过原点 kff 与含 kS 的线性拟合）
+    未识别  →  <stem>_velocity.png / _duty.png
+
 CSV 格式（由 TuningLogger 生成）：
     # 若干注释行（含本次实验的参数与结论，形如 key=value）
     t,duty,velocity
@@ -401,23 +415,44 @@ ANALYZERS = {"step01": analyze_step, "zn02": analyze_zn, "relay03": analyze_rela
 # 绘图
 # ---------------------------------------------------------------------------
 
-def make_plots(d: TuningData, res: dict, out_png: str, show: bool) -> None:
+def make_plots(d: TuningData, res: dict, out_dir: str, stem: str, show: bool) -> list:
+    """**一图一文件**：每个物理量单独一张 PNG（dpi=150, bbox_inches='tight'）。
+
+    返回实际写出的路径列表。文件名（`<stem>` = CSV 文件名去扩展名）：
+        step01            <stem>_step_velocity.png / _step_duty.png
+        zn02, relay03     <stem>_velocity.png / _duty.png
+        ff05              <stem>_velocity.png / _ff_regression.png
+        其它（未识别）      <stem>_velocity.png / _duty.png
+    """
     import matplotlib
     if not show:
         matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     plt.rcParams["font.sans-serif"] = ["Microsoft YaHei", "SimHei", "DejaVu Sans"]
     plt.rcParams["axes.unicode_minus"] = False
+    os.makedirs(out_dir, exist_ok=True)
+
+    made = []
+
+    def save(fig, suffix):
+        fp = os.path.join(out_dir, f"{stem}_{suffix}.png")
+        fig.savefig(fp, dpi=150, bbox_inches="tight")
+        if show:
+            plt.show()
+        plt.close(fig)
+        made.append(fp)
+        return fp
 
     m = d.method
-    fig, axes = plt.subplots(2, 1, figsize=(10, 7), sharex=False)
 
     if m == "step01" and res.get("ok"):
         idx = next((row for row, text in d.events if STEP_MARK in text), 0)
         pre_t, post_t = d.t[:idx], d.t[idx:]
         # 把两段拼到同一条时间轴上：阶跃点 = 0
         t_shift = pre_t - pre_t[-1] if len(pre_t) else pre_t
-        ax = axes[0]
+
+        # ---- ① 转速：阶跃前后 + 一阶拟合 + t63.2% ----
+        fig, ax = plt.subplots(figsize=(9, 4))
         ax.plot(t_shift, d.vel[:idx], "b-", lw=1.2, label="实测 ω (阶跃前)")
         ax.plot(post_t, d.vel[idx:], "b-", lw=1.3, label="实测 ω (阶跃后)")
         ax.axhline(res["omega0"], color="gray", ls=":", lw=1)
@@ -431,71 +466,108 @@ def make_plots(d: TuningData, res: dict, out_png: str, show: bool) -> None:
             ax.axvline(res["tau_632"], color="green", ls="--", lw=1,
                        label=f"t63.2% = {res['tau_632']:.3f}s")
         ax.axvline(0, color="k", lw=0.8)
+        tau_ls = res["fit"]["tau"] if res.get("fit") else float("nan")
+        ax.annotate(f"Δd = {res['d_step'] - res['d0']:.4f}    Δω = {res['omega_ss'] - res['omega0']:.1f} tick/s\n"
+                    f"Kd = {res['kd']:.4f} (tick/s)/duty    kff = 1/Kd = {1.0 / res['kd']:.8f}\n"
+                    f"τ(t63.2%) = "
+                    f"{'n/a' if res['tau_632'] is None else f'{res[chr(116)+chr(97)+chr(117)+chr(95)+chr(54)+chr(51)+chr(50)]:.4f} s'}"
+                    f"    τ(最小二乘) = {tau_ls:.4f} s    τc = {res['tau_c']:.4f} s",
+                    xy=(0.02, 0.02), xycoords="axes fraction", fontsize=8, va="bottom",
+                    bbox=dict(boxstyle="round", fc="white", alpha=0.85))
         ax.set_xlabel("时间 (s)  （0 = 阶跃时刻）")
         ax.set_ylabel("转速 (tick/s)")
-        ax.set_title(f"6.1 阶跃响应辨识  Kd={res['kd']:.4f} (tick/s)/duty")
+        ax.set_title(f"6.1 阶跃响应辨识 — 转速（{os.path.basename(d.path)}）")
         ax.grid(alpha=0.3)
         ax.legend(fontsize=8, loc="lower right")
+        save(fig, "step_velocity")
 
-        ax = axes[1]
-        ax.plot(t_shift, d.duty[:idx], color="#d97a26", lw=1.2)
-        ax.plot(post_t, d.duty[idx:], color="#d97a26", lw=1.3)
+        # ---- ② 占空比（开环阶跃） ----
+        fig, ax = plt.subplots(figsize=(9, 4))
+        ax.plot(t_shift, d.duty[:idx], color="#d97a26", lw=1.2, label="duty (阶跃前 d0)")
+        ax.plot(post_t, d.duty[idx:], color="#d97a26", lw=1.3, label="duty (阶跃后 dStep)")
         ax.axvline(0, color="k", lw=0.8)
-        ax.set_ylim(max(-0.02, float(d.duty.min()) - 0.05), min(1.12, float(d.duty.max()) + 0.05))
-        ax.set_xlabel("时间 (s)")
-        ax.set_ylabel("占空比")
-        ax.set_title("占空比（开环阶跃）")
+        ax.axhline(res["d0"], color="gray", ls=":", lw=1)
+        ax.axhline(res["d_step"], color="gray", ls=":", lw=1)
+        ax.set_ylim(max(-0.02, float(d.duty.min()) - 0.05),
+                    min(1.12, float(d.duty.max()) + 0.05))
+        ax.annotate(f"d0 = {res['d0']:.4f}    dStep = {res['d_step']:.4f}"
+                    f"    Δd = {res['d_step'] - res['d0']:.4f}",
+                    xy=(0.02, 0.98), xycoords="axes fraction", fontsize=8, va="top",
+                    bbox=dict(boxstyle="round", fc="white", alpha=0.85))
+        ax.set_xlabel("时间 (s)  （0 = 阶跃时刻）")
+        ax.set_ylabel("占空比 (0~1)")
+        ax.set_title(f"6.1 阶跃响应辨识 — 占空比（开环阶跃）")
         ax.grid(alpha=0.3)
+        ax.legend(fontsize=8)
+        save(fig, "step_duty")
+
     else:
-        ax = axes[0]
+        # ---- 转速 ----
+        fig, ax = plt.subplots(figsize=(9, 4))
         ax.plot(d.t, d.vel, "b-", lw=1.2, label="转速 ω")
+        if m in ("zn02", "relay03") and res.get("ok") and res.get("mean") is not None:
+            ax.axhline(res["mean"], color="gray", ls=":", lw=1)
+            ax.axhline(res["mean"] + res["amp"], color="r", ls=":", lw=1)
+            ax.axhline(res["mean"] - res["amp"], color="r", ls=":", lw=1)
+            tu_txt = "n/a" if not res.get("tu") else f"{res['tu']:.4f} s"
+            ax.annotate(f"分析窗口 = 尾部 {res.get('window')} s\n"
+                        f"极限环幅值 a = {res['amp']:.1f} tick/s（红点线 = 中心 ±a）\n"
+                        f"周期 Tu = {tu_txt}"
+                        + (f"    Ku = {res['ku']:.8f}" if res.get("ku") else ""),
+                        xy=(0.02, 0.98), xycoords="axes fraction", fontsize=8, va="top",
+                        bbox=dict(boxstyle="round", fc="white", alpha=0.85))
         ax.set_xlabel("时间 (s)")
         ax.set_ylabel("转速 (tick/s)")
-        ax.set_title(f"{m} 实测转速")
+        ax.set_title(f"{m} — 实测转速（{os.path.basename(d.path)}）")
         ax.grid(alpha=0.3)
         ax.legend(fontsize=8)
-
-        ax = axes[1]
-        ax.plot(d.t, d.duty, color="#d97a26", lw=1.2, label="占空比")
-        ax.set_xlabel("时间 (s)")
-        ax.set_ylabel("占空比")
-        ax.grid(alpha=0.3)
-        ax.legend(fontsize=8)
-
-        if m in ("zn02", "relay03") and res.get("ok"):
-            for a in axes:
-                if res.get("mean") is not None:
-                    a.axhline(res["mean"], color="gray", ls=":", lw=1)
-                    a.axhline(res["mean"] + res["amp"], color="r", ls=":", lw=1)
-                    a.axhline(res["mean"] - res["amp"], color="r", ls=":", lw=1)
-            axes[0].set_title(
-                f"{m}  幅值 a={res['amp']:.1f}  Tu=" +
-                ("n/a" if not res.get("tu") else f"{res['tu']:.4f}s"))
-            axes[0].legend([f"窗口 {res.get('window')}s 内的等幅振荡"], fontsize=8)
+        save(fig, "velocity")
 
         if m == "ff05" and res.get("ok") and res.get("points"):
+            # ---- 前馈回归 ----
             w = np.array([p[0] for p in res["points"]])
             ds = np.array([p[1] for p in res["points"]])
-            axes[1].clear()
-            axes[1].plot(w, ds, "ko", ms=5, label="测量点")
+            fig, ax = plt.subplots(figsize=(9, 4))
+            ax.plot(w, ds, "ko", ms=5, label="测量点 (ω, d_ss)")
             ww = np.linspace(0, float(w.max()) * 1.05, 100)
-            axes[1].plot(ww, res["kff_origin"] * ww, "r-", lw=1.4,
-                         label=f"过原点 Kff={res['kff_origin']:.3e}")
+            ax.plot(ww, res["kff_origin"] * ww, "r-", lw=1.4,
+                    label=f"过原点 kff = {res['kff_origin']:.4e}")
             if "slope" in res:
-                axes[1].plot(ww, res["slope"] * ww + res["intercept"], "b--", lw=1.2,
-                             label=f"线性拟合 {res['slope']:.3e}·ω+{res['intercept']:.4f}")
-            axes[1].set_xlabel("转速 ω (tick/s)")
-            axes[1].set_ylabel("稳态占空比 d_ss")
-            axes[1].set_title("6.5 前馈增益标定")
-            axes[1].grid(alpha=0.3)
-            axes[1].legend(fontsize=8)
+                ax.plot(ww, res["slope"] * ww + res["intercept"], "b--", lw=1.2,
+                        label=f"线性拟合 {res['slope']:.4e}·ω {res['intercept']:+.4f}")
+                ax.annotate(f"斜率 = kff = {res['slope']:.8f} 占空比/(tick/s)\n"
+                            f"截距 = kS = {res['intercept']:+.4f} 占空比（本机控制律已含 kS 项）\n"
+                            f"过原点 kff = {res['kff_origin']:.8f}（不加 kS 时的折中值）",
+                            xy=(0.02, 0.98), xycoords="axes fraction", fontsize=8, va="top",
+                            bbox=dict(boxstyle="round", fc="white", alpha=0.85))
+            ax.set_xlabel("转速 ω (tick/s)")
+            ax.set_ylabel("稳态占空比 d_ss (0~1)")
+            ax.set_title("6.5 前馈增益标定 — d_ss(ω) = kS + kff·ω")
+            ax.grid(alpha=0.3)
+            ax.legend(fontsize=8)
+            save(fig, "ff_regression")
+        else:
+            # ---- 占空比 ----
+            fig, ax = plt.subplots(figsize=(9, 4))
+            ax.plot(d.t, d.duty, color="#d97a26", lw=1.2, label="占空比 duty")
+            if m == "relay03" and res.get("ok"):
+                ax.axhline(res["d_high"], color="r", ls=":", lw=1,
+                           label=f"dHigh = {res['d_high']:.4f}")
+                ax.axhline(res["d_low"], color="r", ls=":", lw=1,
+                           label=f"dLow = {res['d_low']:.4f}")
+                ax.annotate(f"继电器 Δd = {res['delta_d']:.4f}    "
+                            f"Ku = 4·Δd/(π·a) = {res['ku']:.8f}" if res.get("ku") else
+                            f"继电器 Δd = {res['delta_d']:.4f}",
+                            xy=(0.02, 0.98), xycoords="axes fraction", fontsize=8, va="top",
+                            bbox=dict(boxstyle="round", fc="white", alpha=0.85))
+            ax.set_xlabel("时间 (s)")
+            ax.set_ylabel("占空比 (0~1)")
+            ax.set_title(f"{m} — 占空比输出")
+            ax.grid(alpha=0.3)
+            ax.legend(fontsize=8)
+            save(fig, "duty")
 
-    fig.suptitle(os.path.basename(d.path), fontsize=9)
-    fig.tight_layout()
-    fig.savefig(out_png, dpi=150)
-    if show:
-        plt.show()
-    plt.close(fig)
+    return made
 
 
 # ---------------------------------------------------------------------------
@@ -601,7 +673,8 @@ def build_report(d: TuningData, res: dict) -> str:
         add(f"过原点斜率（推荐填入 kff）= {res['kff_origin']:.8f} 占空比/(tick/s)")
         if "slope" in res:
             add(f"线性拟合斜率 = {res['slope']:.8f}    截距 = {res['intercept']:.4f}")
-            add("  截距明显非 0 → 存在静摩擦；当前控制律无 kS 项，可考虑加常数偏置或改用含 kS 的控制器。")
+            add("  截距就是静摩擦项 kS（单位：占空比）——直接填进控制律的 kS 项；"
+                "斜率 kff 与过原点值不同，两者都报出来便于对照。")
 
     else:
         add("未识别方法：仅输出基本统计")
@@ -616,11 +689,36 @@ def build_report(d: TuningData, res: dict) -> str:
 # 主流程
 # ---------------------------------------------------------------------------
 
-def collect_inputs(paths):
+def looks_like_tuning_csv(path: str) -> bool:
+    """粗筛：TuningLogger 的标定 CSV 只有 `t,duty,velocity` 三列。
+
+    `export_clean_table.py` 产出的数据表（11 列）和 FTC Dashboard 原始遥测常常
+    躺在同一棵目录树下；把它们当标定 CSV 会把 target 误读成 duty。这里先按
+    「第一个非注释行的列数 == 3」挡掉。
+    """
+    try:
+        with open(path, "r", encoding="utf-8-sig", errors="replace") as fh:
+            for _ in range(500):
+                line = fh.readline()
+                if not line:
+                    break
+                s = line.strip()
+                if not s or s.startswith("#"):
+                    continue
+                return len([x for x in s.split(",") if x.strip()]) == 3
+    except OSError:
+        return False
+    return False
+
+
+def collect_inputs(paths, quiet: bool = False):
     files = []
     for p in paths:
         if os.path.isdir(p):
-            files.extend(sorted(glob.glob(os.path.join(p, "*.csv"))))
+            # 顶层 + 一层子目录都要（out/clean 常和 out/*.csv 并存）
+            found = sorted(glob.glob(os.path.join(p, "*.csv")))
+            found += sorted(glob.glob(os.path.join(p, "**", "*.csv"), recursive=True))
+            files.extend(found)
         elif any(ch in p for ch in "*?"):
             files.extend(sorted(glob.glob(p)))
         else:
@@ -629,7 +727,16 @@ def collect_inputs(paths):
     for f in files:
         if f not in out:
             out.append(f)
-    return out
+    kept, skipped = [], []
+    for f in out:
+        if looks_like_tuning_csv(f):
+            kept.append(f)
+        else:
+            skipped.append(f)
+    if skipped and not quiet:
+        for f in skipped:
+            print(f"[跳过] 不是 t,duty,velocity 三列标定 CSV：{f}", file=sys.stderr)
+    return kept
 
 
 def main(argv=None):
@@ -646,8 +753,9 @@ def main(argv=None):
 
     files = collect_inputs(cfg.inputs)
     if not files:
-        print("没有找到输入 CSV", file=sys.stderr)
-        return 2
+        print("没有找到可分析的标定 CSV（应为 t,duty,velocity 三列，见 README §4）；"
+              "已跳过的非标定文件见上面的 [跳过] 行。", file=sys.stderr)
+        return 0
 
     reports = []
     for path in files:
@@ -669,9 +777,8 @@ def main(argv=None):
             fh.write(text + "\n")
         if not cfg.no_plot:
             try:
-                png = os.path.join(out_dir, stem + "_analysis.png")
-                make_plots(d, res, png, cfg.show)
-                print(f"[图] {png}")
+                for png in make_plots(d, res, out_dir, stem, cfg.show):
+                    print(f"[图] {png}")
             except ImportError as e:
                 print(f"[跳过绘图] {e}（可加 --no-plot）", file=sys.stderr)
             except Exception as e:  # 绘图失败不应影响报告

@@ -21,7 +21,7 @@ import org.firstinspires.ftc.teamcode.RoadRunner.MecanumDrive;
 import org.firstinspires.ftc.teamcode.utility.Geometry.ConvexPolygon;
 import org.firstinspires.ftc.teamcode.Parameter.HypParams;
 import org.firstinspires.ftc.teamcode.utility.filter.EMA;
-
+//负责除视觉以外的所有状态估计
 @Config
 public class RobotPosition {
     static MecanumDrive drive;
@@ -48,6 +48,14 @@ public class RobotPosition {
         if(instance==null){
             throw new IllegalStateException("RobotPosition not initialized, call setInstance first");
         }
+        return instance;
+    }
+
+    /**
+     * @return 已初始化的实例；未初始化时返回 null。
+     *         供可视化等「可选」功能安全访问，避免 {@link #getInstance()} 抛异常。
+     */
+    public static RobotPosition getInstanceOrNull(){
         return instance;
     }
     private RobotPosition(){

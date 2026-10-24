@@ -87,8 +87,8 @@ public class FlywheelTest extends LinearOpMode {
             // ---- 方向键步进目标转速 ----
             int v = vertical.step(gamepad1.dpad_down, gamepad1.dpad_up, repeatPeriodMs);
             int h = horizontal.step(gamepad1.dpad_left, gamepad1.dpad_right, repeatPeriodMs);
-            targetBig = clamp(targetBig + v * speedStep, 0, Shooter.BIG_PARAMS.speedMax);
-            targetSmall = clamp(targetSmall + h * speedStep, 0, Shooter.SMALL_PARAMS.speedMax);
+            targetBig = clamp(targetBig + v * speedStep, 0, Shooter.BIG_PARAMS.flywheel.speedMax);
+            targetSmall = clamp(targetSmall + h * speedStep, 0, Shooter.SMALL_PARAMS.flywheel.speedMax);
 
             // ---- 速度闭环（扳机始终关闭，俯仰固定） ----
             shooterBig.update(targetBig, holdPitch, false);

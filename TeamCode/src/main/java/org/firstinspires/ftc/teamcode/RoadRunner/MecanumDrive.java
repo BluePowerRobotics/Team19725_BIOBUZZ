@@ -88,11 +88,17 @@ public final class MecanumDrive {
         public double kA = 0.00007;
 
         // 路径规划参数（英寸单位）
+        // 这三者共同决定自动轨迹的时间最优梯形速度曲线：以 maxProfileAccel 加速到
+        // maxWheelVel、中间保持 maxWheelVel 巡航、再以 |minProfileAccel| 减速到停止。
+        // 默认值仅为起始基准（模板值），必须用标定 OpMode 迭代到打滑/跟踪发散前的最快值。
         public double maxWheelVel = 50;
-        public double minProfileAccel = -30;
+        // 减速上限与加速对称（-maxProfileAccel），保证「以最短时间、最快速度停止」；
+        // 若实测刹车强于起步，可把该值调到比 -maxProfileAccel 更大（更负）。
+        public double minProfileAccel = -50;
         public double maxProfileAccel = 50;
 
         // 转向规划参数（弧度单位）
+        // 同样参与时间最优曲线：转向段以 maxAngAccel 加速到 maxAngVel。
         public double maxAngVel = Math.PI;
         public double maxAngAccel = Math.PI;
 
@@ -171,7 +177,20 @@ public final class MecanumDrive {
     private long poseUpdateSeqSeenByAction = 0;
 
     /**
-     * 位姿历史记录，用于绘制轨迹
+     * 场地图上「实际运动路径」最多保留的采样点数（FTC Dashboard 可调）。
+     * 50 Hz 主循环下 2000 点约覆盖 40 s，足够整段自动阶段。
+     */
+    public static int POSE_HISTORY_MAX = 2000;
+
+    /**
+     * 「实际运动路径」相邻采样点的最小位移（英寸）。
+     * 位移小于该值的帧不记录，避免机器人原地（瞄准 / 吃球 / 待机）时用静止点
+     * 把真实路径挤出历史。
+     */
+    public static double POSE_HISTORY_MIN_STEP_IN = 0.5;
+
+    /**
+     * 位姿历史记录：机器人的实际运动路径，用于在 FTC Dashboard 场地图上实时绘制
      */
     private final LinkedList<Pose2d> poseHistory = new LinkedList<>();
 
@@ -752,11 +771,18 @@ public final class MecanumDrive {
         lastVelocity = localizer.update();
         poseUpdateSeq++;
 
-        // 添加到位姿历史
-        poseHistory.add(localizer.getPose());
+        // 添加到位姿历史：仅当相对上一个记录点移动超过阈值时才记录，
+        // 使「实际运动路径」不被原地静止的帧挤出（见 POSE_HISTORY_MIN_STEP_IN）
+        Pose2d pose = localizer.getPose();
+        Pose2d last = poseHistory.peekLast();
+        if (last == null
+                || Math.hypot(pose.position.x - last.position.x,
+                        pose.position.y - last.position.y) >= POSE_HISTORY_MIN_STEP_IN) {
+            poseHistory.add(pose);
+        }
 
         // 保持历史记录大小
-        while (poseHistory.size() > 100) {
+        while (poseHistory.size() > POSE_HISTORY_MAX) {
             poseHistory.removeFirst();
         }
 
@@ -797,10 +823,18 @@ public final class MecanumDrive {
     }
 
     /**
-     * 绘制位姿历史
+     * 在画布上绘制机器人的<b>实际运动路径</b>（位姿历史，青色折线）。
+     *
+     * <p>供各 OpMode / ActionRunner 每帧调用，使实际走过的路径实时显示在
+     * FTC Dashboard 的场地图（Field）视图上。与规划轨迹（绿色）颜色区分。
+     *
      * @param c 画布
      */
-    private void drawPoseHistory(Canvas c) {
+    public void drawPoseHistory(Canvas c) {
+        if (poseHistory.size() < 2) {
+            return;
+        }
+
         // 提取位姿历史点
         double[] xPoints = new double[poseHistory.size()];
         double[] yPoints = new double[poseHistory.size()];
@@ -813,10 +847,17 @@ public final class MecanumDrive {
             i++;
         }
 
-        // 绘制轨迹
-        c.setStrokeWidth(1);
-        c.setStroke("#3F51B5");
+        // 绘制实际运动路径
+        c.setStrokeWidth(2);
+        c.setStroke("#00BCD4");
         c.strokePolyline(xPoints, yPoints);
+    }
+
+    /**
+     * 清空实际运动路径历史（例如新一局开始 / 位姿复位时调用）。
+     */
+    public void clearPoseHistory() {
+        poseHistory.clear();
     }
 
     /**

@@ -1,4 +1,4 @@
-package org.firstinspires.ftc.teamcode.OpModes;
+package org.firstinspires.ftc.teamcode.OpModes.CompetitionOpmode;
 
 import com.acmerobotics.dashboard.FtcDashboard;
 import com.acmerobotics.dashboard.telemetry.MultipleTelemetry;
@@ -15,8 +15,8 @@ import org.firstinspires.ftc.teamcode.Parameter.HypParams;
 import org.firstinspires.ftc.teamcode.Parameter.TeamColor;
 import org.firstinspires.ftc.teamcode.utility.RobotStateStore;
 
-@com.qualcomm.robotcore.eventloop.opmode.TeleOp(name = "TeleOpRed", group = "TeleOp")
-public class TeleOpRed extends LinearOpMode {
+@com.qualcomm.robotcore.eventloop.opmode.TeleOp(name = "TeleOpBlue", group = "TeleOp")
+public class TeleOpBlue extends LinearOpMode {
     private Chassis chassis;
     private Sweeper sweeper;
     private ActionRunner actionRunner;
@@ -36,19 +36,19 @@ public class TeleOpRed extends LinearOpMode {
         telemetry.addLine("Press B (Red)");
         telemetry.update();
 
-        teamColor = TeamColor.RED;
+        teamColor = TeamColor.BLUE;
 
         // ---- 读回自动阶段结束时刻持久化的机器状态，作为手动阶段的初始位姿 ----
         // 机器人自动结束后的实际位置就是手动阶段的起点，无需人工重新摆放/重置定位；
         // 无有效记录时（未跑自动 / 自动未完成 / 手动调试）回退到默认停车位姿
         Pose2d storedPose = RobotStateStore.loadPose();
-        Pose2d initPose = (storedPose != null) ? storedPose : HypParams.StopPoseRed;
+        Pose2d initPose = (storedPose != null) ? storedPose : HypParams.StopPoseBlue;
 
         actionRunner = new ActionRunner();
         chassis = new Chassis(hardwareMap, teamColor, actionRunner, telemetry, initPose);
         sweeper = new Sweeper(hardwareMap, telemetry);
 
-        telemetry.addData("Status", "Initialized");
+        telemetry.setMsTransmissionInterval(20);
         telemetry.addData("Team Color", teamColor == TeamColor.BLUE ? "BLUE" : "RED");
         telemetry.addData("Init Pose Source", storedPose != null ? "Stored robot state" : "Default StopPose");
         telemetry.addData("Init Pose", "%.2f, %.2f, %.1f deg",
@@ -56,14 +56,15 @@ public class TeleOpRed extends LinearOpMode {
         telemetry.addData("--- P1 Controls ---", "");
         telemetry.addData("Left Stick", "Chassis Drive");
         telemetry.addData("Right Stick X", "Chassis Rotation (disabled while aiming)");
-        telemetry.addData("Left Trigger", "Aim Red Audience Down");
-        telemetry.addData("Right Trigger", "Aim Red Audience Up");
+        telemetry.addData("Left Trigger", "Aim Blue Audience Up");
+        telemetry.addData("Right Trigger", "Aim Blue Audience Down");
         telemetry.addData("X", "Toggle No-Head Mode");
         telemetry.addData("A", "Reset Pose to " + (teamColor == TeamColor.BLUE ? "Blue" : "Red") + " ResetPose");
         telemetry.addData("Left Bumper", "Sweeper Eat");
         telemetry.addData("Right Bumper", "Sweeper Output");
         telemetry.addData("--- P2 Controls ---", "");
         telemetry.update();
+        telemetry.setMsTransmissionInterval(250);
 
         waitForStart();
 
@@ -75,11 +76,11 @@ public class TeleOpRed extends LinearOpMode {
             // 底盘移动：左摇杆平移 + 右摇杆旋转；
             // 按下扳机进入瞄准模式（右摇杆失效，航向自动指向所选球门）
             if (gamepad1.left_trigger > 0.5) {
-                // 左扳机：瞄准 Red_Audience_Down
-                chassis.update(gamepad1.left_stick_x, gamepad1.left_stick_y, HypParams.RedAudienceDown);
+                // 左扳机：瞄准 Blue_Audience_Up
+                chassis.update(gamepad1.left_stick_x, gamepad1.left_stick_y, HypParams.BlueAudienceUp);
             } else if (gamepad1.right_trigger > 0.5) {
-                // 右扳机：瞄准 Red_Audience_Up
-                chassis.update(gamepad1.left_stick_x, gamepad1.left_stick_y, HypParams.RedAudienceUp);
+                // 右扳机：瞄准 Blue_Audience_Down
+                chassis.update(gamepad1.left_stick_x, gamepad1.left_stick_y, HypParams.BlueAudienceDown);
             } else {
                 // 不瞄准：常规操作
                 chassis.update(gamepad1.left_stick_x, gamepad1.left_stick_y, gamepad1.right_stick_x);

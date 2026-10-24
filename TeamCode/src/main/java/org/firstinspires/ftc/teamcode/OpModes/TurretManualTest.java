@@ -78,8 +78,8 @@ public class TurretManualTest extends LinearOpMode {
             // ---- 方向键步进飞轮目标转速 ----
             int v = vertical.step(gamepad2.dpad_down, gamepad2.dpad_up, repeatPeriodMs);
             int h = horizontal.step(gamepad2.dpad_left, gamepad2.dpad_right, repeatPeriodMs);
-            targetSpeedBig = clamp(targetSpeedBig + v * speedStep, 0, Shooter.BIG_PARAMS.speedMax);
-            targetSpeedSmall = clamp(targetSpeedSmall + h * speedStep, 0, Shooter.SMALL_PARAMS.speedMax);
+            targetSpeedBig = clamp(targetSpeedBig + v * speedStep, 0, Shooter.BIG_PARAMS.flywheel.speedMax);
+            targetSpeedSmall = clamp(targetSpeedSmall + h * speedStep, 0, Shooter.SMALL_PARAMS.flywheel.speedMax);
 
             // ---- 扳机：按住释放 ----
             boolean triggerBig = gamepad2.right_bumper;

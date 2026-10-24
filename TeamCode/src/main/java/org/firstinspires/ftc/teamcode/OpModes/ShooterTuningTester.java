@@ -167,7 +167,7 @@ public class ShooterTuningTester extends LinearOpMode {
             }
 
             setReportTelemetry();
-            shooter.setTelemetryDetailed(); // 整定台需要 FF/P/I/boost 分量分解
+            shooter.setTelemetryDetailed(); // 整定台需要 kS/FF/P/I 分量分解（第 4 代已无 boost 项）
             telemetry.update();
         }
 

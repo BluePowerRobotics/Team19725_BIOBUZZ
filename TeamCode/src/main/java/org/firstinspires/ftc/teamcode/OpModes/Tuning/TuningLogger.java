@@ -36,12 +36,23 @@ public class TuningLogger {
     private String path = "(未写入)";
 
     /**
-     * 创建并打开一个 CSV 文件。
+     * 创建并打开一个 CSV 文件（默认三列 {@code t,duty,velocity}）。
      *
      * @param context Robot Controller 上下文（{@code hardwareMap.appContext}）
      * @param name    文件名前缀（不含扩展名）
      */
     public void start(Context context, String name) {
+        start(context, name, "t,duty,velocity");
+    }
+
+    /**
+     * 创建并打开一个 CSV 文件，表头可自定义（第 4 代新增：滤波器整定需要额外的电压/电流列）。
+     *
+     * @param context Robot Controller 上下文（{@code hardwareMap.appContext}）
+     * @param name    文件名前缀（不含扩展名）
+     * @param header  表头行，列名以逗号分隔，例如 {@code "t,velocity,duty,vbus,current"}
+     */
+    public void start(Context context, String name, String header) {
         close();
         try {
             File dir = new File(context.getExternalFilesDir(null), "tuning");
@@ -56,8 +67,8 @@ public class TuningLogger {
             // 统一表头：注释行 + 固定列序，便于离线用 numpy/pandas 直接读取画图
             // （以 '#' 开头的行是注释，解析时跳过；第一行非注释即为列名）
             log("# flywheel tuning data (" + name + ")");
-            log("# t(s),duty,velocity(tick/s)");
-            log("t,duty,velocity");
+            log("# " + header);
+            log(header);
         } catch (IOException e) {
             writer = null;
             path = "(打开失败: " + e.getMessage() + ")";
@@ -82,6 +93,16 @@ public class TuningLogger {
     /** 记录一行 (时间, 占空比, 转速) 采样 */
     public void logRow(double t, double duty, double velocity) {
         log(String.format(Locale.US, "%.4f,%.4f,%.2f", t, duty, velocity));
+    }
+
+    /** 记录一行任意列数的采样（每列统一 {@code %.4f}，列数需与 {@link #start(Context, String, String)} 的表头一致） */
+    public void logRowValues(double... values) {
+        StringBuilder sb = new StringBuilder(values.length * 10);
+        for (int i = 0; i < values.length; i++) {
+            if (i > 0) sb.append(',');
+            sb.append(String.format(Locale.US, "%.4f", values[i]));
+        }
+        log(sb.toString());
     }
 
     /** @return 当前 CSV 文件路径（供遥测显示） */

@@ -7,10 +7,15 @@
   fly2_*  = 阶段② 单 PID ⇄ 开环对照（含 mode 列） → 画 时间序列（按 mode 分色）
   fly3_*  = 阶段③ 现有控制律 ⇄ 纯 PID 对照        → 同上
 
-输出（默认写到 --out 目录）：
-  flywheel_compare.png  所有对照文件的速度/占空比/电压时间序列叠加图（跨文件比较）
-  flywheel_sweep.png    阶段① 的 速度-功率 与 电压-功率 扫描曲线（标出极限点）
-  flywheel_bench.png    基准表（# bench 行）的 v / p / sd_v 对比柱状图 —— 三阶段横向对比
+输出（默认写到 --out 目录；**一图一文件**，命名规则 `flywheel_<子图>_<物理量>.png`）：
+  flywheel_compare_velocity.png  所有对照文件的速度时间序列叠加（跨文件比较）
+  flywheel_compare_duty.png      所有对照文件的占空比时间序列叠加
+  flywheel_compare_voltage.png   所有对照文件的母线电压时间序列叠加（含 11.5~13 V 正常带）
+  flywheel_sweep_velocity.png    阶段① 速度-功率 扫描曲线（误差棒=各级 sd，标出极限点）
+  flywheel_sweep_voltage.png     阶段① 母线电压-功率 与 端电压≈busV×power
+  flywheel_bench_velocity.png    基准表 v 对比柱状图（三阶段横向对比）
+  flywheel_bench_sd.png          基准表 sd_v 对比柱状图（越小越稳）
+  flywheel_bench_duty.png        基准表 p 对比柱状图（控制代价）
   并在终端打印各文件、各模式的稳态统计表。
 
 用法：
@@ -188,86 +193,160 @@ def setup_mpl(show: bool):
     return plt
 
 
-def plot_compare(plt, series_list, out_png):
+def save_fig(plt, fig, path, dpi=150):
+    """统一的存图口径：一图一文件、dpi=150、bbox_inches='tight'。"""
+    fig.savefig(path, dpi=dpi, bbox_inches="tight")
+    plt.close(fig)
+    return path
+
+
+#: 三项"对比"物理量的出图规格：(文件名后缀, y 轴标签, 标题中段, 取数函数)
+COMPARE_SPECS = (
+    ("velocity", "转速 (tick/s)", "转速 ω", lambda s: s.vel),
+    ("duty", "占空比 (power, 0~1)", "占空比 power", lambda s: s.power),
+    ("voltage", "母线电压 (V)", "母线电压 busV", lambda s: s.bus),
+)
+
+
+def plot_compare(plt, series_list, out_dir):
+    """飞轮对照：速度 / 占空比 / 母线电压 —— **每个物理量各出一张 PNG**。"""
     comp = [s for s in series_list if s.kind == "compare"]
     if not comp:
-        return False
-    fig, axes = plt.subplots(3, 1, figsize=(11, 9), sharex=True)
+        return []
     styles = ["-", "--", "-.", ":"]
     colors = {0.0: "#1f77b4", 1.0: "#d62728"}
-    for k, s in enumerate(comp):
-        for m, i0, i1 in segments(s):
-            if i1 - i0 < 3:
-                continue
-            c = colors.get(m, "#7f7f7f")
-            lab = f"{s.name[:22]} mode={int(m)}"
-            axes[0].plot(s.t[i0:i1], s.vel[i0:i1], color=c, ls=styles[k % 4], lw=1.2, label=lab)
-            axes[1].plot(s.t[i0:i1], s.power[i0:i1], color=c, ls=styles[k % 4], lw=1.2)
-            axes[2].plot(s.t[i0:i1], s.bus[i0:i1], color=c, ls=styles[k % 4], lw=1.2)
-    axes[0].set_ylabel("转速 (tick/s)")
-    axes[0].set_title("飞轮对照：速度 / 占空比 / 母线电压（按 mode 分色）")
-    axes[0].grid(alpha=0.3)
-    axes[0].legend(fontsize=7, ncol=2)
-    axes[1].set_ylabel("占空比 (power)")
-    axes[1].grid(alpha=0.3)
-    axes[2].set_ylabel("母线电压 (V)")
-    axes[2].set_xlabel("时间 (s)")
-    axes[2].grid(alpha=0.3)
-    fig.tight_layout()
-    fig.savefig(out_png, dpi=150)
-    plt.close(fig)
-    return True
+    made = []
+    for key, ylab, title, getter in COMPARE_SPECS:
+        fig, ax = plt.subplots(figsize=(9, 4))
+        for k, s in enumerate(comp):
+            arr = getter(s)
+            for m, i0, i1 in segments(s):
+                if i1 - i0 < 3:
+                    continue
+                c = colors.get(m, "#7f7f7f")
+                lab = f"{s.name[:22]} mode={int(m)}"
+                ax.plot(s.t[i0:i1], arr[i0:i1], color=c, ls=styles[k % 4], lw=1.2, label=lab)
+        ax.set_xlabel("时间 (s)")
+        ax.set_ylabel(ylab)
+        ax.set_title(f"飞轮对照 — {title}（按 mode 分色；实线/虚线区分文件）")
+        ax.grid(alpha=0.3)
+        ax.legend(fontsize=7, ncol=2, loc="best")
+        if key == "duty":
+            ax.axhline(1.0, color="r", lw=1.0)
+            ax.axhline(0.0, color="r", lw=1.0)
+            ax.annotate("红实线 = 限幅上下限 0 / 1", xy=(0.01, 0.02), xycoords="axes fraction",
+                        fontsize=8, color="r", va="bottom")
+        if key == "voltage":
+            ax.axhspan(11.5, 13.0, color="green", alpha=0.08)
+            ax.annotate("绿带 = 正常母线区间 11.5~13.0 V", xy=(0.01, 0.98),
+                        xycoords="axes fraction", fontsize=8, color="green", va="top")
+        made.append(save_fig(plt, fig, os.path.join(out_dir, f"flywheel_compare_{key}.png")))
+    return made
 
 
-def plot_sweep(plt, series_list, out_png):
+def sweep_levels(s: Series):
+    """按占空比档位分组，返回 (ps, vs, sds, buses) —— 每级的均值/标准差/母线电压。"""
+    p = s.power
+    levels = sorted(set(np.round(p, 4)))
+    ps, vs, sds, buses = [], [], [], []
+    for lv in levels:
+        sel = np.abs(p - lv) < 1e-6
+        if np.count_nonzero(sel) < 3:
+            continue
+        ps.append(lv)
+        vs.append(float(np.mean(s.vel[sel])))
+        sds.append(float(np.std(s.vel[sel], ddof=1)))
+        buses.append(float(np.nanmean(s.bus[sel])))
+    return ps, vs, sds, buses
+
+
+def plot_sweep(plt, series_list, out_dir):
+    """阶段① 扫描：速度-功率 / 电压-功率 —— **每张图一个物理量**。"""
     sw = [s for s in series_list if s.kind == "sweep"]
     if not sw:
-        return False
-    fig, axes = plt.subplots(2, 1, figsize=(10, 7))
+        return []
+    made = []
+
+    # ① 速度-功率
+    fig, ax = plt.subplots(figsize=(9, 4))
     for s in sw:
-        # 每级取末段均值：按占空比分组
-        p = s.power
-        levels = sorted(set(np.round(p, 4)))
-        ps, vs, sds, buses = [], [], [], []
-        for lv in levels:
-            sel = np.abs(p - lv) < 1e-6
-            if np.count_nonzero(sel) < 3:
-                continue
-            ps.append(lv)
-            vs.append(float(np.mean(s.vel[sel])))
-            sds.append(float(np.std(s.vel[sel], ddof=1)))
-            buses.append(float(np.nanmean(s.bus[sel])))
-        axes[0].errorbar(ps, vs, yerr=sds, marker="o", ms=4, capsize=3, lw=1.2, label=s.name[:24])
-        axes[1].plot(ps, buses, "o-", ms=4, lw=1.2, label=f"{s.name[:18]} 母线")
-        axes[1].plot(ps, np.array(ps) * np.array(buses), "s--", ms=4, lw=1.0,
-                     label=f"{s.name[:18]} 端电压≈busV×power")
-        if ps:
-            imax = int(np.argmax(vs))
-            axes[0].annotate(f"极限 {vs[imax]:.0f} @ p={ps[imax]:.2f}",
-                             xy=(ps[imax], vs[imax]), xytext=(ps[imax] * 0.55, vs[imax] * 0.95),
-                             arrowprops=dict(arrowstyle="->", color="k", lw=1), fontsize=9)
-    axes[0].set_xlabel("占空比 power")
-    axes[0].set_ylabel("转速 (tick/s)")
-    axes[0].set_title("阶段① 无控制器扫描：速度-功率（误差棒=各级 sd）")
-    axes[0].grid(alpha=0.3)
-    axes[0].legend(fontsize=8)
-    axes[1].set_xlabel("占空比 power")
-    axes[1].set_ylabel("电压 (V)")
-    axes[1].set_title("阶段① 电压-功率")
-    axes[1].grid(alpha=0.3)
-    axes[1].legend(fontsize=7)
-    fig.tight_layout()
-    fig.savefig(out_png, dpi=150)
-    plt.close(fig)
-    return True
+        ps, vs, sds, _ = sweep_levels(s)
+        if not ps:
+            continue
+        ax.errorbar(ps, vs, yerr=sds, marker="o", ms=4, capsize=3, lw=1.2, label=s.name[:24])
+        imax = int(np.argmax(vs))
+        ax.annotate(f"极限 {vs[imax]:.0f} tick/s @ power={ps[imax]:.2f}",
+                    xy=(ps[imax], vs[imax]),
+                    xytext=(ps[imax] * 0.55, vs[imax] * 0.95),
+                    arrowprops=dict(arrowstyle="->", color="k", lw=1), fontsize=9)
+    ax.set_xlabel("占空比 power (0~1)")
+    ax.set_ylabel("转速 (tick/s)")
+    ax.set_title("阶段① 无控制器扫描 — 速度-功率（误差棒 = 该档位的 sd）")
+    ax.grid(alpha=0.3)
+    ax.legend(fontsize=8)
+    made.append(save_fig(plt, fig, os.path.join(out_dir, "flywheel_sweep_velocity.png")))
+
+    # ② 电压-功率
+    fig, ax = plt.subplots(figsize=(9, 4))
+    for s in sw:
+        ps, _, _, buses = sweep_levels(s)
+        if not ps:
+            continue
+        ax.plot(ps, buses, "o-", ms=4, lw=1.2, label=f"{s.name[:18]} 母线 busV")
+        ax.plot(ps, np.array(ps) * np.array(buses), "s--", ms=4, lw=1.0,
+                label=f"{s.name[:18]} 端电压≈busV×power")
+    ax.axhspan(11.5, 13.0, color="green", alpha=0.08)
+    ax.set_xlabel("占空比 power (0~1)")
+    ax.set_ylabel("电压 (V)")
+    ax.set_title("阶段① 无控制器扫描 — 母线电压 / 端电压 vs 功率")
+    ax.grid(alpha=0.3)
+    ax.legend(fontsize=7)
+    ax.annotate("绿带 = 正常母线区间 11.5~13.0 V", xy=(0.01, 0.98), xycoords="axes fraction",
+                fontsize=8, color="green", va="top")
+    made.append(save_fig(plt, fig, os.path.join(out_dir, "flywheel_sweep_voltage.png")))
+    return made
 
 
-def plot_bench(plt, series_list, out_png):
+def sweep_power_model(plt, series_list, out_dir):
+    """阶段① 补充图：由扫描反算的 Kd 与 kff（转速/占空比 → 前馈增益）。"""
+    sw = [s for s in series_list if s.kind == "sweep"]
+    if not sw:
+        return []
+    made = []
+    fig, ax = plt.subplots(figsize=(9, 4))
+    for s in sw:
+        ps, vs, _, _ = sweep_levels(s)
+        if len(ps) < 2:
+            continue
+        kd, p0 = np.polyfit(ps, vs, 1)      # vs = kd*power + p0
+        xx = np.linspace(0, max(ps) * 1.05, 50)
+        ax.plot(xx, kd * xx + p0, "-", lw=1.2,
+                label=f"{s.name[:18]} Kd≈{kd:.0f} (tick/s)/duty, 截距 {p0:.0f}")
+        ax.plot(ps, vs, "o", ms=4)
+    ax.set_xlabel("占空比 power (0~1)")
+    ax.set_ylabel("转速 (tick/s)")
+    ax.set_title("阶段① 扫描线性化 — 斜率即 Kd（kff = 1/Kd）")
+    ax.grid(alpha=0.3)
+    ax.legend(fontsize=7)
+    made.append(save_fig(plt, fig, os.path.join(out_dir, "flywheel_sweep_kd.png")))
+    return made
+
+
+BENCH_SPECS = (
+    ("velocity", 1, "稳态转速均值 v (tick/s)", "#1f77b4", "v"),
+    ("sd", 3, "转速标准差 sd_v (tick/s) —— 越小越稳", "#d62728", "sd_v"),
+    ("duty", 2, "稳态占空比 p (0~1) —— 控制代价", "#2ca02c", "p"),
+    ("voltage", 5, "稳态母线电压 busV (V) —— 正常 11.5~13.0 V", "#ff7f0e", "busV"),
+)
+
+
+def plot_bench(plt, series_list, out_dir):
+    """基准表（# bench 行）横向对比：v / sd_v / p —— **每项各出一张柱状图**。"""
     rows = []
     for s in series_list:
         rows.extend(s.bench)
     if not rows:
-        return False
+        return []
     # 去掉重复 tag（后出现者覆盖），保持顺序
     seen = {}
     order = []
@@ -278,29 +357,24 @@ def plot_bench(plt, series_list, out_png):
     rows = [seen[k] for k in order]
 
     tags = [r[0] for r in rows]
-    v = [r[1] for r in rows]
-    p = [r[2] for r in rows]
-    sdv = [r[3] for r in rows]
-
-    fig, axes = plt.subplots(3, 1, figsize=(10, 8))
     x = np.arange(len(tags))
-    for ax, data, title, color in (
-            (axes[0], v, "稳态转速均值 v (tick/s)", "#1f77b4"),
-            (axes[1], sdv, "转速标准差 sd_v (tick/s)  —— 越小越稳", "#d62728"),
-            (axes[2], p, "稳态占空比 p (0~1)  —— 控制代价", "#2ca02c")):
+    made = []
+    for key, col, title, color, ylab in BENCH_SPECS:
+        data = [r[col] for r in rows]
+        fig, ax = plt.subplots(figsize=(9, 4))
         bb = ax.bar(x, data, color=color, width=0.6)
-        ax.set_title(title)
+        for rect, val in zip(bb, data):
+            ax.text(rect.get_x() + rect.get_width() / 2, val,
+                    f"{val:.0f}" if abs(val) > 10 else f"{val:.4f}",
+                    ha="center", va="bottom", fontsize=7)
         ax.set_xticks(x)
         ax.set_xticklabels(tags, fontsize=8, rotation=20, ha="right")
+        ax.set_xlabel("基准表 tag（阶段①极限 / ②PID vs 开环 / ③控制律 vs PID）")
+        ax.set_ylabel(ylab)
+        ax.set_title(f"三阶段基准对比 — {title}")
         ax.grid(alpha=0.3, axis="y")
-        for rect, val in zip(bb, data):
-            ax.text(rect.get_x() + rect.get_width() / 2, val, f"{val:.0f}" if abs(val) > 10 else f"{val:.4f}",
-                    ha="center", va="bottom", fontsize=7)
-    fig.suptitle("三阶段基准表对比（阶段①极限 / ②PID vs 开环 / ③控制律 vs PID）")
-    fig.tight_layout()
-    fig.savefig(out_png, dpi=150)
-    plt.close(fig)
-    return True
+        made.append(save_fig(plt, fig, os.path.join(out_dir, f"flywheel_bench_{key}.png")))
+    return made
 
 
 def collect(paths):
@@ -347,14 +421,12 @@ def main(argv=None):
             print(f"[跳过绘图] {e}", file=sys.stderr)
             return 0
         made = []
-        if plot_compare(plt, series_list, os.path.join(out_dir, "flywheel_compare.png")):
-            made.append("flywheel_compare.png")
-        if plot_sweep(plt, series_list, os.path.join(out_dir, "flywheel_sweep.png")):
-            made.append("flywheel_sweep.png")
-        if plot_bench(plt, series_list, os.path.join(out_dir, "flywheel_bench.png")):
-            made.append("flywheel_bench.png")
+        made += plot_compare(plt, series_list, out_dir)
+        made += plot_sweep(plt, series_list, out_dir)
+        made += sweep_power_model(plt, series_list, out_dir)
+        made += plot_bench(plt, series_list, out_dir)
         for m in made:
-            print(f"[图] {os.path.join(out_dir, m)}")
+            print(f"[图] {m}")
         if not made:
             print("没有可绘制的数据（需 fly1_* 扫描文件或 fly2_*/fly3_* 对照文件）")
     return 0

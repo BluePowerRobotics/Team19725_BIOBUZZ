@@ -1,8 +1,14 @@
 package org.firstinspires.ftc.teamcode.utility;
 
 import com.acmerobotics.dashboard.FtcDashboard;
+import com.acmerobotics.dashboard.canvas.Canvas;
 import com.acmerobotics.dashboard.telemetry.TelemetryPacket;
 import com.acmerobotics.roadrunner.Action;
+import com.acmerobotics.roadrunner.Pose2d;
+
+import org.firstinspires.ftc.teamcode.Processors.RobotPosition.RobotPosition;
+import org.firstinspires.ftc.teamcode.RoadRunner.Drawing;
+import org.firstinspires.ftc.teamcode.RoadRunner.MecanumDrive;
 
 import java.util.LinkedList;
 import java.util.Queue;
@@ -43,7 +49,36 @@ public class ActionRunner {
                 currentAction = null; // 执行完毕，准备下一个
             }
         }
+
+        // 每帧绘制机器人的实际运动路径与当前位置（与当前 Action 无关）。
+        // 必须在同一个 packet 上绘制：FTC Dashboard 场地图每帧只渲染最新收到的
+        // packet，另发一个 packet 会把轨迹覆盖掉。
+        drawMotionPath(packet.fieldOverlay());
+
         dashboard.sendTelemetryPacket(packet);
+    }
+
+    /**
+     * 把底盘的实际运动路径（位姿历史，青色）与当前位姿（蓝色）画到场地图上。
+     * 定位系统未初始化时静默跳过。
+     */
+    private void drawMotionPath(Canvas c) {
+        RobotPosition robotPosition = RobotPosition.getInstanceOrNull();
+        if (robotPosition == null) {
+            return;
+        }
+        MecanumDrive drive = robotPosition.getDrive();
+        if (drive == null) {
+            return;
+        }
+
+        drive.drawPoseHistory(c);
+
+        Pose2d pose = robotPosition.getPose2d();
+        if (pose != null) {
+            c.setStroke("#3F51B5");
+            Drawing.drawRobot(c, pose);
+        }
     }
 
     /**
