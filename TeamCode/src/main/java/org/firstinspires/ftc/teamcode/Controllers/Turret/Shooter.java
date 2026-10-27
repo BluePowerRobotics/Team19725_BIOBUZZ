@@ -50,9 +50,10 @@ public class Shooter {
     public static class Params {
         /**
          * 飞轮速度环的完整参数集（前馈 / PI / 两个滤波器 / 电压归一化 / 量化判据）。
-         * 大球传 {@link FlywheelParams#BIG}，小球传 {@link FlywheelParams#SMALL}。
+         * 大球传 {@link FlywheelParams#BIG}，小球传 {@link FlywheelParams#SMALL}；
+         * <b>所有飞轮控制数值只在 {@link FlywheelParams} 里维护，本类不重复定义</b>。
          */
-        public FlywheelParams flywheel = new FlywheelParams();
+        public FlywheelParams flywheel = FlywheelParams.copyOf(FlywheelParams.BIG);
 
         // ---- 机械范围 ----
         /** 俯仰舵机最小位置 */
@@ -67,9 +68,7 @@ public class Shooter {
         public double triggerOffPos = 0.0;
 
         // ---- 就绪判据 ----
-        /** 转速到位容差 (tick/s)：粗判据，仅用于「目标为 0」等边界情况 */
-        public double speedTolerance = 100.0;
-        /** 俯仰舵机动作时间 (秒)：目标变更后经过该时间即视为到位 */
+        /** 俯仰舵机动作时间 (秒)：目标变更后经过该时间即视为到位（转速判据在 {@link FlywheelCalculator#isSettled()}） */
         public double pitchSettleTime = 0.25;
 
         /** 供 Forge / Dashboard 反射使用的空构造 */

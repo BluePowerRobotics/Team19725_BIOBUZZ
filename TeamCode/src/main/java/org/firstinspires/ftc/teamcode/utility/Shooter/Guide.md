@@ -57,8 +57,11 @@ shooter.setTargetVelocity(1700);
 shooter.update();          // 每帧一次：params.applyTo(calculator) + calculate(target, ω, V_bus) + setPower
 ```
 
-参数只写在 `FlywheelParams`（FTC Dashboard 分组 `FlywheelParams`），**新增参数只改一处**，
-`applyTo()` 每帧同步，Dashboard 改值实时生效。
+参数**只在 `FlywheelParams` 里维护**：上半是字段声明（只有含义、没有数值），文件末尾是
+「大球飞轮参数块」与「小球飞轮参数块」两个 `static { }`，两套数值分开各写一遍——要改参数只改那两块
+（FTC Dashboard 分组 `FlywheelParams.BIG` / `FlywheelParams.SMALL`，改值下一帧生效）。
+`FlywheelCalculator` 的参数字段不带工程默认值，必须先 `applyTo(...)` 再 `calculate(...)`，
+`Controllers/Turret/Shooter.Params` 也不再重复定义任何控制量。
 
 ### 2. 离线复算（显式 dt）
 

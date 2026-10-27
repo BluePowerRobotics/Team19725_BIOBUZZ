@@ -42,58 +42,62 @@ package org.firstinspires.ftc.teamcode.utility.Shooter;
 public class FlywheelCalculator {
 
     // ==================== 可调参数（由 FlywheelParams#applyTo 每帧同步） ====================
+    //
+    // 这里<b>不放工程默认值</b>：一套机器一套参数，唯一出处是 utility/Shooter/FlywheelParams.java
+    // 里的 BIG / SMALL 两个块。调用方必须先 applyTo 再 calculate（Controllers 里都是这么做的），
+    // 否则所有增益为 0、输出恒为 dutyMin。
 
     /** 静摩擦前馈 (占空比)，按 {@code kS·sgn(ω*)} 施加 */
-    public double kS = 0.02945;
+    public double kS;
     /** 稳态前馈增益 (占空比)/(tick/s) */
-    public double kff = 3.8307e-4;
+    public double kff;
     /** 比例增益 (占空比)/(tick/s) */
-    public double kp = 1.81917e-3;
+    public double kp;
     /** 积分增益 (占空比)/(tick/s·s) */
-    public double ki = 2.59224e-3;
+    public double ki;
     /** I 项限幅 (占空比) */
-    public double maxI = 0.3;
+    public double maxI;
 
     /** 输出下限 (占空比) */
-    public double dutyMin = 0.0;
+    public double dutyMin;
     /** 输出上限 (占空比) */
-    public double dutyMax = 1.0;
+    public double dutyMax;
 
-    /** 速度量化台阶 (tick/s)，实测 20 */
-    public double quantStep = 20.0;
+    /** 速度量化台阶 (tick/s) */
+    public double quantStep;
     /** 稳态误差带比例：eBand = max(settleFrac·|ω*|, 2·quantStep) */
-    public double settleFrac = 0.02;
+    public double settleFrac;
     /** 连续落在误差带内多少帧算到位 */
-    public int settleFrames = 10;
+    public int settleFrames;
 
     /** 稳态速度滤波时间常数 (s) */
-    public double tauVMax = 0.030;
+    public double tauVMax;
     /** 大误差速度滤波时间常数 (s) */
-    public double tauVMin = 0.008;
+    public double tauVMin;
     /** 误差调度下拐点（倍 eBand） */
-    public double eLoFrac = 0.30;
+    public double eLoFrac;
     /** 误差调度上拐点（倍 eBand） */
-    public double eHiFrac = 0.90;
+    public double eHiFrac;
 
     /** 进入掉速态的阈值（倍 eBand） */
-    public double dropEnterFrac = 3.0;
+    public double dropEnterFrac;
     /** 掉速态下积分最长冻结时间 (s) */
-    public double iFreezeTimeoutSec = 1.5;
+    public double iFreezeTimeoutSec;
 
     /** 是否启用母线电压归一化（只乘前馈） */
-    public boolean useVoltageNorm = false;
+    public boolean useVoltageNorm;
     /** 额定母线电压 (V) */
-    public double vBusNominal = 12.0;
+    public double vBusNominal;
     /** 归一化系数下限 */
-    public double vScaleMin = 0.85;
+    public double vScaleMin;
     /** 归一化系数上限 */
-    public double vScaleMax = 1.25;
+    public double vScaleMax;
     /** 母线电压低通时间常数 (s) */
-    public double tauBus = 1.0;
+    public double tauBus;
     /** 掉速结束后的电压采样 hold-off (s) */
-    public double busHoldOffSec = 0.6;
+    public double busHoldOffSec;
     /** 电压采样最长冻结时间 (s) */
-    public double busFreezeTimeoutSec = 2.0;
+    public double busFreezeTimeoutSec;
 
     // ==================== 运行时状态 ====================
 
