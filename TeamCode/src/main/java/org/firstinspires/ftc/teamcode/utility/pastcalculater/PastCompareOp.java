@@ -1,5 +1,8 @@
 package org.firstinspires.ftc.teamcode.utility.pastcalculater;
 
+import com.acmerobotics.dashboard.FtcDashboard;
+import com.acmerobotics.dashboard.config.Config;
+import com.acmerobotics.dashboard.telemetry.MultipleTelemetry;
 import com.qualcomm.robotcore.eventloop.opmode.LinearOpMode;
 import com.qualcomm.robotcore.eventloop.opmode.TeleOp;
 
@@ -46,14 +49,20 @@ public class PastCompareOp extends LinearOpMode {
     public static int maxVelocity = 3000;
     /** 按住十字键的连调周期 (ms) */
     public static double repeatPeriodMs = 100;
-    /** 每帧都写太浪费；按此周期记一行 */
+    /** 每帧都发太浪费；按此周期发布一组数值遥测 */
     public static double logPeriodMs = 10;
-    public static boolean logToCsv = true;
+    /** 是否发布扁平数值遥测（由 FTC Dashboard 自带 Logging 记录） */
+    public static boolean dashboardLog = true;
 
     public static String motorName = "shooter";
     public static boolean motorReversed = true;
 
-    /** 表头：gen 列 = 本次运行真正驱动的是哪一代（离线回放记 0） */
+    /**
+     * 遥测键名（= Dashboard CSV 的列名）：{@code gen} 列是本次运行真正驱动的是哪一代
+     * （离线回放记 0），其余按代分组：{@code duty_gX, ff_gX, p_gX, i_gX, boost_gX,
+     * drop_gX, iact_gX, stl_gX}（Gen4 无 boost，另有 {@code vscale_g4}）。
+     * 时间列由 Dashboard 自己加。
+     */
     static final String CSV_HEADER =
             "t,gen,target,velocity,vbus,"
             + "duty_g1,ff_g1,p_g1,i_g1,boost_g1,drop_g1,iact_g1,stl_g1,"
@@ -62,7 +71,6 @@ public class PastCompareOp extends LinearOpMode {
 
     // ------------------------------------------------------------ state
 
-    private final TuningLoggerForPast logger = new TuningLoggerForPast();
     private PastCalculator gen1;
     private PastCalculator gen3;
     private PastCalculator.Gen4 gen4;
@@ -74,6 +82,7 @@ public class PastCompareOp extends LinearOpMode {
 
     @Override
     public void runOpMode() {
+        telemetry = new MultipleTelemetry(telemetry, FtcDashboard.getInstance().getTelemetry());
         gen1 = PastCalculator.create(PastGen.GEN1_PIDSVA);
         gen3 = PastCalculator.create(PastGen.GEN3_BOOST);
         gen4 = new PastCalculator.Gen4();
@@ -110,22 +119,11 @@ public class PastCompareOp extends LinearOpMode {
         } else {
             runOnline();
         }
-
-        if (logger.isOpen()) {
-            logger.close();
-        }
     }
 
     // ------------------------------------------------------------ 在线
 
     private void runOnline() {
-        if (logToCsv) {
-            logger.start(hardwareMap.appContext, "PastCompare", CSV_HEADER);
-            logger.log("# activeGen=" + activeGen.label + " motor=" + motorName);
-            logger.log("# aVelocity=" + (int) aVelocity + " bVelocity=" + (int) bVelocity
-                    + " step=" + velocityStep);
-        }
-
         boolean lastUp = false;
         boolean lastDown = false;
         boolean lastY = false;
@@ -222,8 +220,8 @@ public class PastCompareOp extends LinearOpMode {
                 gen1.isSettled(), gen3.isSettled(), gen4.isSettled());
         telemetry.addData("bus voltage", Double.isNaN(vbus) ? "无读数" : String.format(java.util.Locale.US, "%.2f V", vbus));
         telemetry.addData("current", String.format(java.util.Locale.US, "%.2f A", driver.getCurrent()));
-        telemetry.addData("CSV", logger.isOpen() ? logger.getPath() : "未记录");
-        telemetry.addData("rows / frames", "%d / %d", logger.rows(), frames);
+        telemetry.addData("dash log", dashboardLog ? "ON（Dashboard Logging）" : "OFF");
+        telemetry.addData("frames", frames);
         telemetry.update();
     }
 
@@ -281,11 +279,6 @@ public class PastCompareOp extends LinearOpMode {
             return;
         }
 
-        if (logToCsv) {
-            logger.start(hardwareMap.appContext, "PastReplay", CSV_HEADER);
-            logger.log("# replay=" + replayFile + "（gen 列记 0 = 离线回放）");
-        }
-
         double lastT = 0;
         int rows = 0;
         for (int i = headerIdx + 1; i < lines.size(); i++) {
@@ -315,13 +308,13 @@ public class PastCompareOp extends LinearOpMode {
                 telemetry.addData("回放进度", "%d/%d", rows, lines.size() - headerIdx - 1);
                 telemetry.addData("t", "%.2f s", t);
                 telemetry.addData("duty g1 / g3 / g4", "%.4f / %.4f / %.4f", d1, d3, d4);
-                telemetry.addData("CSV", logger.isOpen() ? logger.getPath() : "未记录");
+                telemetry.addData("dash log", dashboardLog ? "ON" : "OFF");
                 telemetry.update();
             }
         }
 
         telemetry.addData("回放完成", "%d 行", rows);
-        telemetry.addData("CSV", logger.isOpen() ? logger.getPath() : "未记录");
+        telemetry.addData("dash log", dashboardLog ? "ON（Dashboard Logging）" : "OFF");
         telemetry.update();
         while (opModeIsActive()) {
             idle();
@@ -352,23 +345,56 @@ public class PastCompareOp extends LinearOpMode {
 
     // ------------------------------------------------------------ 公共
 
+    /**
+     * 把一行数据发布成扁平数值遥测（键名见 {@link #CSV_HEADER}），由 Dashboard 自带
+     * Logging 记录。三代的分量同时发布，所以一次运行就能对比。
+     */
     private void logRow(double t, int genId, double target, double velocity, double vbus,
                         double d1, double d3, double d4) {
-        if (!logger.isOpen()) {
+        if (!dashboardLog) {
             return;
         }
         if (lastLogSec >= 0 && (t - lastLogSec) * 1000.0 < logPeriodMs) {
             return;
         }
         lastLogSec = t;
-        logger.logRowValues(t, genId, target, velocity, num(vbus),
-                d1, gen1.getFfTerm(), gen1.getPTerm(), gen1.getITerm(), gen1.getBoostTerm(),
-                b2d(gen1.isInDrop()), b2d(gen1.isIntegralActive()), b2d(gen1.isSettled()),
-                d3, gen3.getFfTerm(), gen3.getPTerm(), gen3.getITerm(), gen3.getBoostTerm(),
-                b2d(gen3.isInDrop()), b2d(gen3.isIntegralActive()), b2d(gen3.isSettled()),
-                d4, gen4.getFfTerm(), gen4.getPTerm(), gen4.getITerm(),
-                b2d(gen4.isInDrop()), b2d(gen4.isIntegralActive()), b2d(gen4.isSettled()),
-                gen4 instanceof PastCalculator.Gen4 ? ((PastCalculator.Gen4) gen4).getVScale() : 1.0);
+
+        telemetry.addData("gen", genId);
+        telemetry.addData("target", target);
+        telemetry.addData("velocity", velocity);
+        telemetry.addData("vbus", num(vbus));
+
+        publish("duty", 1, d1);
+        publish("ff", 1, gen1.getFfTerm());
+        publish("p", 1, gen1.getPTerm());
+        publish("i", 1, gen1.getITerm());
+        publish("boost", 1, gen1.getBoostTerm());
+        telemetry.addData("drop_g1", b2d(gen1.isInDrop()));
+        telemetry.addData("iact_g1", b2d(gen1.isIntegralActive()));
+        telemetry.addData("stl_g1", b2d(gen1.isSettled()));
+
+        publish("duty", 3, d3);
+        publish("ff", 3, gen3.getFfTerm());
+        publish("p", 3, gen3.getPTerm());
+        publish("i", 3, gen3.getITerm());
+        publish("boost", 3, gen3.getBoostTerm());
+        telemetry.addData("drop_g3", b2d(gen3.isInDrop()));
+        telemetry.addData("iact_g3", b2d(gen3.isIntegralActive()));
+        telemetry.addData("stl_g3", b2d(gen3.isSettled()));
+
+        publish("duty", 4, d4);
+        publish("ff", 4, gen4.getFfTerm());
+        publish("p", 4, gen4.getPTerm());
+        publish("i", 4, gen4.getITerm());
+        telemetry.addData("drop_g4", b2d(gen4.isInDrop()));
+        telemetry.addData("iact_g4", b2d(gen4.isIntegralActive()));
+        telemetry.addData("stl_g4", b2d(gen4.isSettled()));
+        telemetry.addData("vscale_g4", gen4 instanceof PastCalculator.Gen4
+                ? ((PastCalculator.Gen4) gen4).getVScale() : 1.0);
+    }
+
+    private void publish(String what, int gen, double value) {
+        telemetry.addData(what + "_g" + gen, value);
     }
 
     private static double b2d(boolean b) {
@@ -387,101 +413,6 @@ public class PastCompareOp extends LinearOpMode {
                 return gen3;
             default:
                 return gen4;
-        }
-    }
-
-    /**
-     * 极简 CSV 记录器（与 {@code OpModes/Tuning/TuningLogger} 同格式，
-     * 但允许任意列数，且不依赖 OpModes 包）。
-     */
-    static final class TuningLoggerForPast {
-        private java.io.Writer writer;
-        private String path;
-        private int rowCount = 0;
-        private int sinceFlush = 0;
-
-        void start(android.content.Context ctx, String name, String header) {
-            try {
-                File dir = new File(ctx.getExternalFilesDir(null), "tuning");
-                if (!dir.exists()) {
-                    //noinspection ResultOfMethodCallIgnored
-                    dir.mkdirs();
-                }
-                File f = new File(dir, name + "_" + System.currentTimeMillis() + ".csv");
-                path = f.getAbsolutePath();
-                writer = new java.io.BufferedWriter(new java.io.OutputStreamWriter(
-                        new java.io.FileOutputStream(f), StandardCharsets.UTF_8));
-                writer.write("# past compare data (" + name + ")\n");
-                writer.write("# " + header + "\n");
-                writer.write(header + "\n");
-                sinceFlush = 0;
-            } catch (Exception e) {
-                writer = null;
-                path = null;
-            }
-        }
-
-        boolean isOpen() {
-            return writer != null;
-        }
-
-        String getPath() {
-            return path;
-        }
-
-        int rows() {
-            return rowCount;
-        }
-
-        void log(String line) {
-            if (writer == null) {
-                return;
-            }
-            try {
-                writer.write(line);
-                writer.write("\n");
-                flushIfNeeded();
-            } catch (Exception ignored) {
-            }
-        }
-
-        void logRowValues(double... values) {
-            if (writer == null) {
-                return;
-            }
-            StringBuilder sb = new StringBuilder(values.length * 8);
-            for (int i = 0; i < values.length; i++) {
-                if (i > 0) {
-                    sb.append(',');
-                }
-                sb.append(String.format(java.util.Locale.US, "%.4f", values[i]));
-            }
-            try {
-                writer.write(sb.toString());
-                writer.write("\n");
-                rowCount++;
-                flushIfNeeded();
-            } catch (Exception ignored) {
-            }
-        }
-
-        private void flushIfNeeded() throws java.io.IOException {
-            if (++sinceFlush >= 20) {
-                writer.flush();
-                sinceFlush = 0;
-            }
-        }
-
-        void close() {
-            if (writer == null) {
-                return;
-            }
-            try {
-                writer.flush();
-                writer.close();
-            } catch (Exception ignored) {
-            }
-            writer = null;
         }
     }
 }

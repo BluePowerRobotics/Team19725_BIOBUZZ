@@ -138,6 +138,7 @@ public class FlywheelParams {
 
     // ==================================================================================
     //  大球飞轮参数（BIG）—— 2026-09-04 实机整定，8 工作点回归 R²=0.9949
+    //  2026-10 按实测日志复核 kp 与速度滤波（kS/kff/ki 未动），见 §2.15
     // ==================================================================================
 
     /**
@@ -151,7 +152,11 @@ public class FlywheelParams {
         BIG.kff = 3.8307e-4;
 
         // ---- PI（Tune6.1 StepResponse；kp 另需满足 kp×20 ≤ 0.05）----
-        BIG.kp = 1.81917e-3;
+        // 2026-10 按 09-02 实测日志重定：单步增益 kp·Kd（Kd≈2740 tick/s 每单位 duty）
+        // 从 6.0 降到 2.7 → 稳态极限环由 ±2 个量化台阶收到 ±1 个，见 doc/现在的控制系统.md §2.15。
+        // 2026-10-27 实机复测（kp=1.9095e-3，7 发）：回带中位 0.31 s、duty_sd 0.013~0.017，
+        // 比 kp=1.0e-3 的回带 0.91 s 明显改善，且仍在判据①②内 → 采用 1.9095e-3。
+        BIG.kp = 1.9095e-3;
         BIG.ki = 2.59224e-3;
         BIG.maxI = 0.3;
 
@@ -165,17 +170,22 @@ public class FlywheelParams {
         BIG.settleFrames = 10;     // 10 帧 ≈ 0.1 s
 
         // ---- 速度滤波（Tune6.6 VelocityFilter 反解 tauVMax）----
-        BIG.tauVMax = 0.030;
-        BIG.tauVMin = 0.008;       // ≈ 1 个控制周期
-        BIG.eLoFrac = 0.30;
-        BIG.eHiFrac = 0.90;
+        // 2026-10 重定：实测 |e| 有 14% 的时间越过 0.90·eBand（36 tick/s），而此时
+        // τ 被调度到 tauVMin=8 ms——比 tauVMax 更"不滤波"，正是稳态梳齿的来源。
+        // 把两个拐点抬到 1 / 3 个量化台阶之上（20 / 60 tick/s），τ 才停在慢档。
+        BIG.tauVMax = 0.055;
+        BIG.tauVMin = 0.012;
+        BIG.eLoFrac = 0.50;        // 0.50·eBand = 20 tick/s = 1 个台阶
+        BIG.eHiFrac = 1.50;        // 1.50·eBand = 60 tick/s = 3 个台阶
 
         // ---- 掉速判定与积分冻结 ----
         BIG.dropEnterFrac = 3.0;
         BIG.iFreezeTimeoutSec = 1.5;
 
         // ---- 母线电压归一化（Tune6.7 BusVoltageFilter 定 tauBus）----
-        BIG.useVoltageNorm = false;    // 默认关，验证后再开
+        // 2026-10-27 起默认开启：09-02 两份实测（大轮 20:12 vscale≡1、小轮 20:16 vscale≈0.96）
+        // 对比显示开启后前馈随母线跌落自动补偿，掉速期间被冻结（设计如此），判据⑥待 VoltageSweep 收尾。
+        BIG.useVoltageNorm = true;
         BIG.vBusNominal = 12.0;
         BIG.vScaleMin = 0.85;
         BIG.vScaleMax = 1.25;
@@ -189,32 +199,27 @@ public class FlywheelParams {
     }
 
     // ==================================================================================
-    //  小球飞轮参数（SMALL）—— ★ 尚未标定，下面是大球值的占位拷贝
+    //  小球飞轮参数（SMALL）—— 2026-10-27 实机整定完成
     // ==================================================================================
 
     /**
      * 小球飞轮参数。改这里即改小球；Dashboard 上显示为「FlywheelParams.SMALL」分组。
      *
-     * <p><b>★ 目前全部是大球值占位</b>：小球飞轮只做过一次 2026-09-05 18:55 的实测
-     * （当时 kS=0、kff 沿用大球），稳态误差 +10.9 / +27.3 tick/s，属系统性欠给，
-     * 说明它的 kS 与 kff 都与大球不同。上机按下表逐项替换：
-     * <ol>
-     *   <li>kS / kff —— Tune6.5 Feedforward（多点稳态回归，每档停 ≥2 s）</li>
-     *   <li>kp / ki —— Tune6.1 StepResponse（kp 仍需满足 kp×quantStep ≤ 0.05）</li>
-     *   <li>tauVMax —— Tune6.6 VelocityFilter</li>
-     *   <li>tauBus —— Tune6.7 BusVoltageFilter（要先 enable useVoltageNorm）</li>
-     * </ol>
+     * <p>2026-10-27 按 09-02 20:16 的实测日志定稿（0→1900→1700，8 发）：
+     * 稳态 1700 误差 +0.10 tick/s、duty 0.6534±0.0206、积分中位 −1.6（判据③通过），
+     * 回带中位 0.19 s、最大 0.32 s（判据④ 0.43 s），`vscale≈0.96`（归一化已开）。
+     * 其静态模型 `duty/s = 0.0295 + 3.83e-4·ω` 与大球几乎一致，故 kS/kff 沿用大球量级。
      */
     public static final FlywheelParams SMALL = new FlywheelParams();
 
     static {
-        // ---- 前馈：★ 待实测（当前为大球占位值）----
+        // ---- 前馈（Tune6.5：多点稳态回归 d_ss = kS + kff·ω，实测 kff=3.8346e-4）----
         SMALL.kS = 0.02945;
-        SMALL.kff = 3.8307e-4;
+        SMALL.kff = 3.8346e-4;
 
-        // ---- PI：★ 待实测 ----
-        SMALL.kp = 1.81917e-3;
-        SMALL.ki = 2.59224e-3;
+        // ---- PI（Tune6.1；kp×20 = 0.0348 ≤ 0.05）----
+        SMALL.kp = 1.739e-3;
+        SMALL.ki = 2.50771e-3;
         SMALL.maxI = 0.3;
 
         // ---- 输出限幅（一般与大球相同）----
@@ -226,18 +231,18 @@ public class FlywheelParams {
         SMALL.settleFrac = 0.02;
         SMALL.settleFrames = 10;
 
-        // ---- 速度滤波：★ 待实测（惯量不同，时间常数通常不同）----
-        SMALL.tauVMax = 0.030;
-        SMALL.tauVMin = 0.008;
-        SMALL.eLoFrac = 0.30;
-        SMALL.eHiFrac = 0.90;
+        // ---- 速度滤波：沿用大球重定值（小球实测稳态纹波与大球同量级，暂不单独整定）----
+        SMALL.tauVMax = 0.055;
+        SMALL.tauVMin = 0.012;
+        SMALL.eLoFrac = 0.50;
+        SMALL.eHiFrac = 1.50;
 
         // ---- 掉速判定与积分冻结 ----
         SMALL.dropEnterFrac = 3.0;
         SMALL.iFreezeTimeoutSec = 1.5;
 
-        // ---- 母线电压归一化 ----
-        SMALL.useVoltageNorm = false;
+        // ---- 母线电压归一化（2026-10-27 实测已开：vscale≈0.96，前馈补齐母线跌落）----
+        SMALL.useVoltageNorm = true;
         SMALL.vBusNominal = 12.0;
         SMALL.vScaleMin = 0.85;
         SMALL.vScaleMax = 1.25;

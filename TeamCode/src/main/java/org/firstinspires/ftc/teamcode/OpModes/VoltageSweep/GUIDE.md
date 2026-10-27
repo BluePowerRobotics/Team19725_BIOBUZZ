@@ -78,8 +78,12 @@
 
 | 参数 | 默认 | 含义 |
 |---|---|---|
-| `logToCsv` | **true** | 落 CSV（本程序默认开，不记录就没有意义） |
+| `dashboardLog` | **true** | 发布扁平数值遥测，由 **FTC Dashboard 自带 Logging** 记录（本程序默认开，不记录就没有意义） |
 | `logPeriodMs` | 10 | 采样周期 (ms)，≈100 Hz |
+
+> 本程序**不写自定义 CSV**。数据全部走 `telemetry`（已绑 `MultipleTelemetry`），
+> 在 Dashboard 里点 **Logging → Start** 即可记录；导出的 CSV 列名 = 下面的遥测键名，
+> 时间列由 Dashboard 自己加。
 
 ---
 
@@ -107,21 +111,27 @@
 
 ### 4.3 取数据
 
-```bash
-adb pull /sdcard/Android/data/com.qualcomm.ftcrobotcontroller/files/tuning ./tuning_data
+数据在 **Dashboard Logging** 里：程序跑起来后点 `Logging → Start`，跑完点 `Stop`，
+在 Logging 面板里把 CSV 下载下来（列名就是遥测键名，见 §4.4）。
 
+```bash
 # 一图一表：每列一张 PNG + 汇总表（推荐先跑这个）
-python tools/tuning/plot_csv.py ./tuning_data/VoltageSweep_<ts>.csv \
+python tools/tuning/plot_csv.py ./VoltageSweep_log.csv \
        --segment segment_id --out ./tools/tuning/out
 
 # 分量叠图：看 duty 与电压的关系
-python tools/tuning/plot_csv.py ./tuning_data/VoltageSweep_<ts>.csv \
+python tools/tuning/plot_csv.py ./VoltageSweep_log.csv \
        --overlay duty,vbus_meas --tag duty_vs_vbus --out ./tools/tuning/out
 ```
 
-CSV 表头：
-`t,segment_id,vbus_target,vbus_meas,load_power,target,velocity,duty,error,current,inDrop,iActive,settled`
-，段名写在文件开头的 `# seg <id> <name> ...` 注释行里。
+### 4.4 遥测键（Dashboard CSV 的列）
+
+`segment_id, vbus_target, vbus_meas, load_power, target, velocity, duty, error,
+current, indrop, iactive, settled`
+
+- `segment_id`：计划段编号（`_settle/_a1600/_b1900/_pre/_dip/_rec/_rel` 依次递增），
+  段名与电压目标请看程序开跑的遥测屏（或按每段的 `vbus_target` 反查）。
+- `duty`：掉速段读的是电机实际输出（开环值），其余段读闭环命令值。
 
 ---
 
@@ -199,4 +209,4 @@ ff = s·(kS·sgn(ω*) + kff·ω*)
 3. `useVoltageNorm=false` 跑一遍（基线：不补偿差多少）。
 4. Dashboard 打开 `useVoltageNorm=true`，`Tune6.7` 定 `tauBus`。
 5. 再跑一遍（应看到 `duty·V_bus` 差缩小到 ≤3%）。
-6. 把两份 CSV 一起喂给 `plot_csv.py`，`--overlay duty,vbus_meas` 对照。
+6. 把两份 Dashboard 日志一起喂给 `plot_csv.py`，`--overlay duty,vbus_meas` 对照。

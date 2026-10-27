@@ -24,7 +24,7 @@
 | `analyze_launch_events.py` | FTC Dashboard 原始 CSV | 发射掉速逐发分析 | 每发 1 张 + 3 张统计 + 1 份事件 CSV |
 | `plot_speed.m` | clean 表 | MATLAB 转速专图 + 诊断图 | 6 张 |
 | `plot_flywheel.py` | `flywheel/*.csv` 台架表 | 三阶段开环/闭环横向对比 | 10 张 |
-| `plot_csv.py` | **任意 CSV**（Dashboard 原始 / `TuningLogger` / `FlywheelRun` / 电压扫描 / 多代对比） | 通用兜底：列名归一化 + 时间轴修复 + 逐列统计，**不假设格式** | **每列 1 张 + 1 份 `*_summary.txt`** |
+| `plot_csv.py` | **任意 CSV**（Dashboard 原始 / Dashboard Logging 导出 / 旧的 `TuningLogger` 文件） | 通用兜底：列名归一化 + 时间轴修复 + 逐列统计，**不假设格式** | **每列 1 张 + 1 份 `*_summary.txt`** |
 | `export_clean_table.py` | 原始日志 | 生成 `<名字>_clean.csv`（按行序重建时间轴） | 无（只出表） |
 | `fit_steady_state_model.py` | clean 表 | 拟合 `d_ss = kS + kff·ω` | 无（只出表/文本） |
 | `make_samples.py` | 无 | 生成 5 组真值已知的合成 CSV（自检用） | 无 |
@@ -48,7 +48,12 @@
 
 ## 1. 取数据
 
-标定 OpMode 结束会把 CSV 写到 RC 外部存储的 `tuning/` 目录：
+**第 4 代的验证工具（`FlywheelRun` / `VoltageSweep` / `PastCompare` / `TuneGen1/3/4`）不写自定义
+CSV**：它们把每列数据作为扁平遥测键发出（各 OpMode 已绑 `MultipleTelemetry`），
+在 **FTC Dashboard 的 Logging 面板**点 Start/Stop 记录，再在面板里下载 CSV 即可
+（列名 = 遥测键名，时间列由 Dashboard 加）。
+
+只有旧的 Tune6.x 标定 OpMode 仍把 CSV 写到 RC 外部存储的 `tuning/` 目录：
 
 ```
 adb pull /sdcard/Android/data/com.qualcomm.ftcrobotcontroller/files/tuning ./tuning_data
@@ -93,7 +98,7 @@ python tools/tuning/analyze_tuning.py drop04_1.csv --kp 5e-5        # 计算 kBo
 
 ```bash
 # ★ 通用兜底（第 4 代新增）：任意 CSV → 每列一张图 + 汇总表，不用先判断格式
-python tools/tuning/plot_csv.py ./tuning_data/FlywheelRun_xxx.csv --out ./tools/tuning/out
+python tools/tuning/plot_csv.py .\FlywheelRun_log.csv --out ./tools/tuning/out
 python tools/tuning/plot_csv.py cmp.csv --group gen            # 多代对比：图内按代分线
 python tools/tuning/plot_csv.py sweep.csv --segment segment_id # 电压扫描：分段着色 + 逐段表
 

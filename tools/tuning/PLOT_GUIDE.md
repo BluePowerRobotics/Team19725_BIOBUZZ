@@ -36,17 +36,19 @@
 | clean 表 | `*_clean.csv`（11 列 + 可选 `voltage`） | `export_clean_table.py` | 视原始日志 |
 | 整定 OpMode CSV | `tuning/<前缀>_<时间戳>.csv`（`t,duty,velocity` 三列） | `TuningLogger`（RC 外部存储 `/tuning/`） | 无 |
 | 台架 CSV | `flywheel/*.csv`（`t,power,velocity,busV,motorV[,mode]`） | 台架测试程序 | 有（busV） |
-| **FlywheelRun**（第 4 代） | `tuning/FlywheelRun_<时间戳>.csv` | `OpModes/FlywheelRun`（`logToCsv=true`） | **有** |
-| **电压扫描**（第 4 代） | `tuning/VoltageSweep_<时间戳>.csv` | `OpModes/VoltageSweep/VoltageSweepOp` | **有（目标+实测）** |
-| **多代对比**（第 4 代） | `tuning/GenCompare_<时间戳>.csv` | `utility/pastcalculater/...` 对比 OpMode | **有** |
+| **FlywheelRun**（第 4 代） | Dashboard Logging 导出 `*.csv` | `OpModes/FlywheelRun`（`dashboardLog=true` → telemetry） | **有** |
+| **电压扫描**（第 4 代） | Dashboard Logging 导出 `*.csv` | `OpModes/VoltageSweep/VoltageSweepOp`（telemetry） | **有（目标+实测）** |
+| **多代对比**（第 4 代） | Dashboard Logging 导出 `*.csv` | `utility/pastcalculater/PastCompareOp`（telemetry） | **有** |
+| **分代 Tuner**（第 4 代） | Dashboard Logging 导出 `*.csv` | `TuneGen1/3/4Op`（telemetry） | 视程序 |
 
-第 4 代三种新 CSV 的列（全部由 `plot_csv.py` 直接吃）：
+第 4 代这几种日志的列（= 遥测键名，`plot_csv.py` 直接吃；时间列由 Dashboard 自己加）：
 
-| CSV | 列 |
+| 来源 | 列 / 键 |
 |---|---|
-| FlywheelRun | `t,target,velocity,duty,voltage,error,vScale,inDrop,iActive,settled` |
-| 电压扫描 | `t,segment_id,vbus_target,vbus_meas,target,velocity,duty,error,current,inDrop,iActive,settled` |
-| 多代对比 | `t,target,velocity,duty,duty_gen1,duty_gen3,duty_gen4,error,...`（每代一组分量列） |
+| FlywheelRun | `target,velocity,duty,voltage,error,current,integral,pTerm,iTerm,ffTerm,vscale,indrop,iactive,settled` |
+| 电压扫描 | `segment_id,vbus_target,vbus_meas,load_power,target,velocity,duty,error,current,indrop,iactive,settled` |
+| 多代对比 | `gen,target,velocity,vbus,duty_g1,ff_g1,p_g1,i_g1,boost_g1,drop_g1,iact_g1,stl_g1,duty_g3,…_g3,duty_g4,ff_g4,p_g4,i_g4,drop_g4,iact_g4,stl_g4,vscale_g4` |
+| 分代 Tuner | `duty,velocity,phase`（Gen1/3）、Gen4 为 `target,velocity,error,duty,ff,p,i,indrop,iactive,settled,vbus,vscale,phase`，报告数字另以 `fit_*`/`step_*`/`dip_*`/`meas_*` 键发布 |
 
 
 统一约定：时间列单位秒、严格单调；速度 tick/s；占空比 0~1。
@@ -351,13 +353,13 @@ python tools/tuning/check_plot_data.py
 
 ```bash
 # 最常用：任意 CSV → 每列一张图 + 汇总表
-python tools/tuning/plot_csv.py tuning/FlywheelRun_1729...csv --out ./out
+python tools/tuning/plot_csv.py .\FlywheelRun_log.csv --out ./out
 
 # 多代对比：同一张图里按代分线（每列仍是一张图）
-python tools/tuning/plot_csv.py tuning/GenCompare_1729...csv --group gen --out ./out
+python tools/tuning/plot_csv.py .\PastCompare_log.csv --group gen --out ./out
 
 # 电压扫描：按分段列着色 + 逐段统计表
-python tools/tuning/plot_csv.py tuning/VoltageSweep_1729...csv --segment segment_id --out ./out
+python tools/tuning/plot_csv.py .\VoltageSweep_log.csv --segment segment_id --out ./out
 
 # 只看/只叠几列（分量对比常这么用）
 python tools/tuning/plot_csv.py x.csv --cols duty,ff,p,i
@@ -391,12 +393,13 @@ python tools/tuning/plot_csv.py x.csv --overlay duty,duty_gen3,duty_gen4 --tag �
 > `plot_csv.py` **不做物理判据报警**（不打印 `[警告]`），它只保证「有数据就能画」；
 > 要判据请用 1~6 节的专用脚本。
 
-### 12.1 多代对比 CSV（`PastCompare_*` / `PastReplay_*`）怎么读
+### 12.1 多代对比日志（`PastCompareOp` / 离线回放）怎么读
 
-`utility/pastcalculater` 输出的列名带代际后缀，`plot_csv.py` 会当成普通列逐张出图：
+`utility/pastcalculater` 通过 telemetry 发布，Dashboard Logging 导出的列名带代际后缀，
+`plot_csv.py` 会当成普通列逐张出图（时间列由 Dashboard 加）：
 
 ```
-t,gen,target,velocity,vbus,
+gen,target,velocity,vbus,
 duty_g1,ff_g1,p_g1,i_g1,boost_g1,drop_g1,iact_g1,stl_g1,
 duty_g3,ff_g3,p_g3,i_g3,boost_g3,drop_g3,iact_g3,stl_g3,
 duty_g4,ff_g4,p_g4,i_g4,drop_g4,iact_g4,stl_g4,vscale_g4
@@ -404,11 +407,11 @@ duty_g4,ff_g4,p_g4,i_g4,drop_g4,iact_g4,stl_g4,vscale_g4
 
 ```powershell
 # 一次把三代 duty 叠在一张图上（最常用）
-python tools/tuning/plot_csv.py out\PastReplay_xxx.csv --overlay duty_g1,duty_g3,duty_g4
+python tools/tuning/plot_csv.py .\PastCompare_log.csv --overlay duty_g1,duty_g3,duty_g4
 # 三代分量分开看：前馈差多少、P 差多少、积分有没有赖着不走
-python tools/tuning/plot_csv.py out\PastReplay_xxx.csv --cols ff_g1,ff_g3,ff_g4,p_g1,p_g3,p_g4,i_g1,i_g3,i_g4
+python tools/tuning/plot_csv.py .\PastReplay_log.csv --cols ff_g1,ff_g3,ff_g4,p_g1,p_g3,p_g4,i_g1,i_g3,i_g4
 # 在线三次运行（每代一次）分别成组
-python tools/tuning/plot_csv.py out\PastCompare_xxx.csv --group gen
+python tools/tuning/plot_csv.py .\PastCompare_log.csv --group gen
 ```
 
 | 图上看到 | 结论 |

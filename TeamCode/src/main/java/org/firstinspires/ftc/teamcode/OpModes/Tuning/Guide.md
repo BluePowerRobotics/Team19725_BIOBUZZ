@@ -1,3 +1,4 @@
+
 # 飞轮参数整定 OpMode 使用指南（第 4 代）
 
 本目录提供 **5 个** 整定辅助 OpMode，全部只用「占空比输入 + 速度输出 + 母线电压」，
@@ -231,8 +232,13 @@ Start 后按 **A** 全自动跑完（两段），**X** 停转。CSV 前缀 `vf06
 - 选 τ 的判据是**两段都要看**：只看稳态噪声会选到 30 ms，那会让发射冲击段少看 73% 的跌深
   （τ=30 ms 时冲击末只看到真值的 27%，连饱和都进不去）。
 - `tauVMin` 取「约一帧」即可（采样 8.7~9.0 ms → 8 ms）；再小是纯浪费。
-- 拐点 `eLoFrac/eHiFrac` 不再整定：它们与 `eBand` 绑定，`0.30/0.90` 是让残余过冲
-  `≈a_sat·τ(eBand)` 落在 10 tick/s 量级的取值。
+  当前取 **12 ms**（约 1.3 帧）。
+- 拐点 `eLoFrac/eHiFrac` **由量化台阶决定，不由本程序整定**：
+  必须 ≥ 1 个 `quantStep`（20 tick/s）才停得住慢档，所以当前取值是
+  **`eLoFrac=0.50`（20 tick/s）、`eHiFrac=1.50`（60 tick/s）**。
+  早期取值 `0.30/0.90`（12/36 tick/s）低于一个台阶，实测导致 14% 的时间把 τ 调度到
+  `tauVMin`（比 `tauVMax` 更不滤波）——这就是第 4 代早期稳态梳齿的主因，见
+  `doc/现在的控制系统.md` §2.15。
 
 ---
 
@@ -342,17 +348,19 @@ Start 后按 **A** 全自动跑完（两段），**X** 停转。CSV 前缀 `vf06
 
 1. **§2.12 的 6 条验收判据没有一键测量程序**（不是整定，是验收）：
    ②稳态 `v_sd/|误差|/duty_sd`、③`|I integral|` 长期值、⑤`isSettled()` 行为、⑥两种电量对比，
-   都是「跑 → 导出 CSV → 离线算」。现已由 `FlywheelRun` 的 `logToCsv` 提供数据源
-   （表头 `t,target,velocity,duty,voltage,error,vScale,inDrop,iActive,settled`），
-   发射恢复用 `tools/tuning/analyze_launch_events.py`，不同电压的 ⑥ 由
-   `OpModes/VoltageSweep/` 的电压扫描程序一次扫完（见该目录 `GUIDE.md`）。
+   都是「跑 → 记录 → 离线算」。现已由 `FlywheelRun` 提供数据源：数据全部通过 **telemetry**
+    打出（键 `target,velocity,duty,voltage,error,current,integral,pTerm,iTerm,ffTerm,vscale,
+    indrop,iactive,settled`），用 **Dashboard 自带 Logging** 记录导出（不再落自定义 CSV），
+    发射恢复用 `tools/tuning/analyze_launch_events.py`，不同电压的 ⑥ 由
+    `OpModes/VoltageSweep/` 的电压扫描程序一次扫完（见该目录 `GUIDE.md`）。
 2. **`ShooterTuningTester`**（`group=Tests`，464 行，含 `MODE_KS/MODE_KV/step/disturb`）
    与 6.1/6.5 功能重叠，且**只出遥测、不落 CSV**。保留可用（开环 `kS` 截距的第二种来源），
    但不作为正式参数的来源；正式来源以本目录 5 个 Tuner 为准。
 3. 6.6 的 `σ_target` 与 6.7 的 `maxFfDutyError=0.005` 都是经验阈值，尚未在真机复核；
    首次使用时把实测值记进 CSV 注释行，便于后续修订。
-4. `FlywheelParams.SMALL` 仍是 `BIG` 的占位拷贝（小球未经标定）。5 个 Tuner 都能对它跑，
-   但结果需要重新标一遍才有意义。
+4. `FlywheelParams.SMALL` 已于 2026-10-27 实机整定完成（`kff 3.8346e-4` / `kp 1.739e-3` /
+   `ki 2.50771e-3`），不再需要重标；要复标时把 `FlywheelRun` 的 `paramsSet=SMALL` 写法
+   照搬进对应 Tuner 的构造函数即可（只影响加载哪套参数，不影响算法）。
 
 ---
 

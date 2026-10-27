@@ -1,6 +1,8 @@
 package org.firstinspires.ftc.teamcode.utility.pastcalculater;
 
 import com.qualcomm.robotcore.eventloop.opmode.LinearOpMode;
+import com.acmerobotics.dashboard.FtcDashboard;
+import com.acmerobotics.dashboard.telemetry.MultipleTelemetry;
 import com.qualcomm.robotcore.eventloop.opmode.TeleOp;
 
 import java.util.Locale;
@@ -49,15 +51,17 @@ public class TuneGen1Op extends LinearOpMode {
 
     public static String motorName = "shooter";
     public static boolean motorReversed = true;
-    public static boolean logToCsv = true;
+    /** 是否发布扁平数值遥测（由 FTC Dashboard 自带 Logging 记录） */
+    public static boolean dashboardLog = true;
     public static double logPeriodMs = 10;
 
-    static final String CSV_HEADER = "t,duty,velocity,phase";
+    /** 遥测键名（= Dashboard CSV 列名）；时间列由 Dashboard 自己加 */
+    static final String CSV_HEADER = "duty,velocity,phase";
 
     // ------------------------------------------------------------ state
 
-    private final PastCompareOp.TuningLoggerForPast logger = new PastCompareOp.TuningLoggerForPast();
     private PastFlywheelDriver driver;
+    private double lastLogSec = -1;
 
     private final double[] pointDutyUsed = new double[16];
     private final double[] pointOmega = new double[16];
@@ -68,6 +72,7 @@ public class TuneGen1Op extends LinearOpMode {
 
     @Override
     public void runOpMode() {
+        telemetry = new MultipleTelemetry(telemetry, FtcDashboard.getInstance().getTelemetry());
         telemetry.addLine("TuneGen1（第 1/2 代 PIDSVA）");
         telemetry.addLine(String.format(Locale.US, "点=%d 个  d0=%.2f dStep=%.2f",
                 pointDuties.length, d0, dStep));
@@ -88,10 +93,8 @@ public class TuneGen1Op extends LinearOpMode {
             return;
         }
 
-        if (logToCsv) {
-            logger.start(hardwareMap.appContext, "TuneGen1", CSV_HEADER);
-            logger.log("# Gen1 PIDSVA: points=" + pointDuties.length
-                    + " d0=" + d0 + " dStep=" + dStep);
+        if (dashboardLog) {
+            telemetry.addLine("Dash logging: ON（Dashboard Logging 记录 duty/velocity/phase）");
         }
 
         runPoints();
@@ -103,9 +106,6 @@ public class TuneGen1Op extends LinearOpMode {
         }
 
         driver.setOpenLoopPower(0);
-        if (logger.isOpen()) {
-            logger.close();
-        }
     }
 
     // ------------------------------------------------------------ 阶段 1：kS / kV
@@ -124,10 +124,7 @@ public class TuneGen1Op extends LinearOpMode {
                 pointOmega[pointCount] = omega;
                 pointCount++;
             }
-            if (logger.isOpen()) {
-                logger.log(String.format(Locale.US, "# point d=%.3f omega=%.1f", duty, omega));
-            }
-            telemetry.addData("point", "d=%.3f → ω=%.1f", duty, omega);
+            telemetry.addData("point d / omega", "%.3f / %.1f", duty, omega);
             telemetry.update();
         }
 
@@ -155,7 +152,6 @@ public class TuneGen1Op extends LinearOpMode {
         double[] time = new double[cap];
         double[] velocity = new double[cap];
         int n = 0;
-        double lastLog = -1;
 
         while (opModeIsActive() && !gamepad1.x) {
             double t = (System.nanoTime() - startNano) / 1e9;
@@ -168,8 +164,7 @@ public class TuneGen1Op extends LinearOpMode {
                 velocity[n] = v;
                 n++;
             }
-            logFrame(t, dStep, v, "step", lastLog);
-            lastLog = t;
+            logFrame(t, dStep, v, "step");
             telemetry.addData("step t / ω", "%.2f s / %.0f", t, v);
             telemetry.update();
             sleep(5);
@@ -186,10 +181,9 @@ public class TuneGen1Op extends LinearOpMode {
         if (fit != null) {
             telemetry.addData(">>> 建议 kV (slope)", "%.8g", fit[0]);
             telemetry.addData(">>> 建议 kS (intercept)", "%.6g", fit[1]);
-            if (logger.isOpen()) {
-                logger.log(String.format(Locale.US, "# fit kV=%.8g kS=%.6g (%d points)",
-                        fit[0], fit[1], pointCount));
-            }
+            telemetry.addData("fit_kV", fit[0]);
+            telemetry.addData("fit_kS", fit[1]);
+            telemetry.addData("fit_points", pointCount);
         } else {
             telemetry.addData("kS/kV", "拟合失败（点太少或转速没变化）");
         }
@@ -201,17 +195,14 @@ public class TuneGen1Op extends LinearOpMode {
             telemetry.addData(">>> 建议 kP", "%.8g", stepFit[5]);
             telemetry.addData(">>> 建议 kI", "%.8g", stepFit[6]);
             telemetry.addData("（kV 交叉核对 1/Kd）", "%.8g", stepFit[4]);
-            if (logger.isOpen()) {
-                logger.log(String.format(Locale.US,
-                        "# step omega0=%.0f omegaSS=%.0f Kd=%.1f tau=%.4f kP=%.8g kI=%.8g",
-                        stepFit[0], stepFit[1], stepFit[2], stepFit[3], stepFit[5], stepFit[6]));
-            }
+            telemetry.addData("step_kP", stepFit[5]);
+            telemetry.addData("step_kI", stepFit[6]);
         } else {
             telemetry.addData("kP/kI", "阶跃辨识失败");
         }
 
         telemetry.addLine("把建议值手填进 Gen1Params（Dashboard 可改），再跑 PastCompare 验证。");
-        telemetry.addData("CSV", logger.isOpen() ? logger.getPath() : "未记录");
+        telemetry.addData("dash log", dashboardLog ? "ON（Dashboard Logging）" : "OFF");
         telemetry.update();
 
         // 保持结果在屏幕上，按 X 或 STOP 退出
@@ -228,7 +219,6 @@ public class TuneGen1Op extends LinearOpMode {
         double start = getRuntime();
         double sum = 0;
         int n = 0;
-        double lastLog = -1;
         while (opModeIsActive() && !gamepad1.x) {
             double t = getRuntime();
             if (t - start > timeoutSec) {
@@ -239,8 +229,7 @@ public class TuneGen1Op extends LinearOpMode {
                 sum += v;
                 n++;
             }
-            logFrame(getRuntime(), duty, v, phase, lastLog);
-            lastLog = t;
+            logFrame(t, duty, v, phase);
             telemetry.addData("阶段", "%s d=%.3f t=%.1f/%.1f ω=%.0f",
                     phase, duty, t - start, timeoutSec, v);
             telemetry.update();
@@ -250,14 +239,17 @@ public class TuneGen1Op extends LinearOpMode {
         return n > 0 ? sum / n : Double.NaN;
     }
 
-    private void logFrame(double t, double duty, double velocity, String phase, double lastLog) {
-        if (!logger.isOpen()) {
+    private void logFrame(double t, double duty, double velocity, String phase) {
+        if (!dashboardLog) {
             return;
         }
-        if (lastLog >= 0 && (t - lastLog) * 1000.0 < logPeriodMs) {
+        if (lastLogSec >= 0 && (t - lastLogSec) * 1000.0 < logPeriodMs) {
             return;
         }
-        logger.log(String.format(Locale.US, "%.4f,%.4f,%.2f,%d", t, duty, velocity, phaseNum(phase)));
+        lastLogSec = t;
+        telemetry.addData("duty", duty);
+        telemetry.addData("velocity", velocity);
+        telemetry.addData("phase", phaseNum(phase));
     }
 
     /** phase 文本 → 数字码（三份分代 Tuner 共用：1=point/settle 2=measure 3=step 4=dip 5=recover 6=dip_settle） */

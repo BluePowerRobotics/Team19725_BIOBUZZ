@@ -1,6 +1,8 @@
 package org.firstinspires.ftc.teamcode.utility.pastcalculater;
 
 import com.qualcomm.robotcore.eventloop.opmode.LinearOpMode;
+import com.acmerobotics.dashboard.FtcDashboard;
+import com.acmerobotics.dashboard.telemetry.MultipleTelemetry;
 import com.qualcomm.robotcore.eventloop.opmode.TeleOp;
 
 import java.util.Locale;
@@ -50,7 +52,8 @@ public class TuneGen4Op extends LinearOpMode {
 
     public static String motorName = "shooter";
     public static boolean motorReversed = true;
-    public static boolean logToCsv = true;
+    /** 是否发布扁平数值遥测（由 FTC Dashboard 自带 Logging 记录） */
+    public static boolean dashboardLog = true;
     public static double logPeriodMs = 10;
 
     static final String CSV_HEADER =
@@ -58,7 +61,7 @@ public class TuneGen4Op extends LinearOpMode {
 
     // ------------------------------------------------------------ state
 
-    private final PastCompareOp.TuningLoggerForPast logger = new PastCompareOp.TuningLoggerForPast();
+    private double lastLogSec = -1;
     private PastFlywheelDriver driver;
     private PastCalculator.Gen4 calculator;
 
@@ -71,6 +74,7 @@ public class TuneGen4Op extends LinearOpMode {
 
     @Override
     public void runOpMode() {
+        telemetry = new MultipleTelemetry(telemetry, FtcDashboard.getInstance().getTelemetry());
         telemetry.addLine("TuneGen4（闭环验收，参数=Gen4Params）");
         telemetry.addLine(String.format(Locale.US, "点=%d 个  dip=%.2f/%.2fs  kp*step=%.4f%s",
                 targets.length, dipDuty, dipSec,
@@ -93,12 +97,6 @@ public class TuneGen4Op extends LinearOpMode {
             return;
         }
 
-        if (logToCsv) {
-            logger.start(hardwareMap.appContext, "TuneGen4", CSV_HEADER);
-            logger.log("# Gen4 verify: targets=" + targets.length
-                    + " dipDuty=" + dipDuty + " dipSec=" + dipSec);
-            logger.log(Gen4Params.summary());
-        }
 
         runSweep();
         if (opModeIsActive() && !gamepad1.x) {
@@ -109,9 +107,6 @@ public class TuneGen4Op extends LinearOpMode {
         }
 
         driver.setOpenLoopPower(0);
-        if (logger.isOpen()) {
-            logger.close();
-        }
     }
 
     // ------------------------------------------------------------ 阶段 1
@@ -175,9 +170,14 @@ public class TuneGen4Op extends LinearOpMode {
                     "ω*=%.0f  v=%.1f  err=%.3f%%  v_sd=%.2f  duty=%.4f  duty_sd=%.4f  ∫=%.4f  settled=%.0f%%",
                     target, meanV, errPct, sdV, meanD, sdD, meanI, settledPct);
             sweepReport.append(line).append('\n');
-            if (logger.isOpen()) {
-                logger.log("# measure " + line);
-            }
+            telemetry.addData("meas_target", target);
+            telemetry.addData("meas_v_mean", meanV);
+            telemetry.addData("meas_err_pct", errPct);
+            telemetry.addData("meas_v_sd", sdV);
+            telemetry.addData("meas_duty", meanD);
+            telemetry.addData("meas_duty_sd", sdD);
+            telemetry.addData("meas_integral", meanI);
+            telemetry.addData("meas_settled_pct", settledPct);
         }
         driver.setTargetVelocity(0);
         driver.setOpenLoopPower(0);
@@ -249,16 +249,14 @@ public class TuneGen4Op extends LinearOpMode {
         telemetry.addData("恢复期 isSettled 曾翻 false", sawUnsettled ? "是（正确）" : "否（可疑）");
         telemetry.addData("kp×quantStep", "%.4f（合格 ≤0.05）",
                 Gen4Params.kp * Gen4Params.quantStep);
-        telemetry.addData("CSV", logger.isOpen() ? logger.getPath() : "未记录");
+        telemetry.addData("kp_step", Gen4Params.kp * Gen4Params.quantStep);
+        telemetry.addData("dip_depth", dipDepth);
+        telemetry.addData("dip_recovery", Double.isNaN(dipRecovery) ? 0 : dipRecovery);
+        telemetry.addData("dip_overshoot", dipOvershoot);
+        telemetry.addData("dip_saw_unsettled", sawUnsettled ? 1 : 0);
+        telemetry.addData("dash log", dashboardLog ? "ON（Dashboard Logging）" : "OFF");
         telemetry.update();
 
-        if (logger.isOpen()) {
-            logger.log(String.format(Locale.US,
-                    "# dip depth=%.0f recovery=%s overshoot=%.0f unsettled=%s",
-                    dipDepth,
-                    Double.isNaN(dipRecovery) ? "NaN" : String.format(Locale.US, "%.3f", dipRecovery),
-                    dipOvershoot, sawUnsettled));
-        }
 
         while (opModeIsActive() && !gamepad1.x) {
             idle();
@@ -268,18 +266,26 @@ public class TuneGen4Op extends LinearOpMode {
     // ------------------------------------------------------------ 工具
 
     private void logFrame(double t, double target, String phase) {
-        if (!logger.isOpen()) {
+        if (!dashboardLog) {
             return;
         }
-        if (lastLogT >= 0 && (t - lastLogT) * 1000.0 < logPeriodMs) {
+        if (lastLogSec >= 0 && (t - lastLogSec) * 1000.0 < logPeriodMs) {
             return;
         }
-        lastLogT = t;
-        logger.logRowValues(t, target, calculator.getVelocityFiltered(), calculator.getError(),
-                calculator.getDuty(), calculator.getFfTerm(), calculator.getPTerm(),
-                calculator.getITerm(), b2d(calculator.isInDrop()), b2d(calculator.isIntegralActive()),
-                b2d(calculator.isSettled()), driver.getBusVoltage(), calculator.getVScale(),
-                phaseNum(phase));
+        lastLogSec = t;
+        telemetry.addData("target", target);
+        telemetry.addData("velocity", calculator.getVelocityFiltered());
+        telemetry.addData("error", calculator.getError());
+        telemetry.addData("duty", calculator.getDuty());
+        telemetry.addData("ff", calculator.getFfTerm());
+        telemetry.addData("p", calculator.getPTerm());
+        telemetry.addData("i", calculator.getITerm());
+        telemetry.addData("indrop", b2d(calculator.isInDrop()));
+        telemetry.addData("iactive", b2d(calculator.isIntegralActive()));
+        telemetry.addData("settled", b2d(calculator.isSettled()));
+        telemetry.addData("vbus", driver.getBusVoltage());
+        telemetry.addData("vscale", calculator.getVScale());
+        telemetry.addData("phase", phaseNum(phase));
     }
 
     private static double phaseNum(String phase) {

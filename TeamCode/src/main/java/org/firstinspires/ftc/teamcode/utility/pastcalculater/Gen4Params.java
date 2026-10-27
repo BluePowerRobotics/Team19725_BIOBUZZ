@@ -21,7 +21,7 @@ public class Gen4Params {
 
     public static double kS = 0.02945;
     public static double kff = 3.8307e-4;
-    public static double kp = 1.81917e-3;
+    public static double kp = 1.9095e-3;
     public static double ki = 2.59224e-3;
     public static double maxI = 0.3;
 
@@ -32,14 +32,14 @@ public class Gen4Params {
     public static double settleFrac = 0.02;
     public static int settleFrames = 10;
 
-    public static double tauVMax = 0.030;
-    public static double tauVMin = 0.008;
-    public static double eLoFrac = 0.30;
-    public static double eHiFrac = 0.90;
+    public static double tauVMax = 0.055;
+    public static double tauVMin = 0.012;
+    public static double eLoFrac = 0.50;
+    public static double eHiFrac = 1.50;
     public static double dropEnterFrac = 3.0;
     public static double iFreezeTimeoutSec = 1.5;
 
-    public static boolean useVoltageNorm = false;
+    public static boolean useVoltageNorm = true;
     public static double vBusNominal = 12.0;
     public static double vScaleMin = 0.85;
     public static double vScaleMax = 1.25;

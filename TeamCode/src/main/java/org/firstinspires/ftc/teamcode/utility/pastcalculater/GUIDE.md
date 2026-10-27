@@ -63,22 +63,22 @@
 
 ### 4.1 在线跑一代（推荐流程）
 
-1. Dashboard `activeGen` 选 `GEN4_CURRENT`（默认），`logToCsv = true`。
+1. Dashboard `activeGen` 选 `GEN4_CURRENT`（默认），Logging 里点 **Start** 开始记录。
 2. 初始化后按 A/B/十字键给目标（与 `FlywheelRun` 同键位），跑同一套动作：
    `1600 稳定 3 s → 1900 稳定 3 s → 掉速/喂球 → 停`。
 3. 换 `activeGen = GEN3_BOOST`，**重跑同一套动作**；再换 `GEN1_PIDSVA` 重跑。
-4. 三份 `PastCompare_*.csv` 一起出图对比（`gen` 列告诉你这次驱动的是哪一代）。
+4. 三段记录（Dashboard Logging 导出，三代的分量在**同一份**里都有，`gen` 列告诉你这次驱动的是哪一代）一起出图对比。
 
 > 也可以不动 Dashboard：跑动中按 **Y** 循环切代（会清零目标并复位三代滤波器），
 > 一次 OpMode 里就能采三代——但每次切代前最好先回 0 转速，避免切换瞬间的占空比跳变算进数据。
 
 ### 4.2 离线回放（不需要机器人）
 
-1. 先有任意一份含 `velocity`、`target` 列的历史 CSV（`FlywheelRun_*.csv` 就是），
-   文件名填进 `replayFile`，并把文件放进 **`<externalFilesDir>/tuning/`**（就是工控日志同一个目录）。
-2. Dashboard 勾 `offlineReplay = true`，初始化并 START。
-3. 三代计算器把这段真实转速序列各算一遍，输出 `PastReplay_*.csv`（`gen` 列 = 0）。
-4. 只比 duty：`python tools/tuning/plot_csv.py PastReplay_xxx.csv --overlay duty_g1,duty_g3,duty_g4`
+1. 先有任意一份含 `velocity`、`target` 列的历史 CSV（Dashboard 记的 `FlywheelRun` 日志就是），
+   文件名填进 `replayFile`，并把文件放进 **`<externalFilesDir>/tuning/`**（历史 CSV 都堆在这个目录）。
+2. Dashboard 勾 `offlineReplay = true`，初始化并 START（**同时按住 Logging → Start** 记录）。
+3. 三代计算器把这段真实转速序列各算一遍，遥测里 `gen` 键 = 0。
+4. 只比 duty：`python tools/tuning/plot_csv.py 回放日志.csv --overlay duty_g1,duty_g3,duty_g4`
 
 > 回放不需要真实时间，跑得比实时快，几秒读完上百秒的日志。
 > 若 CSV 没有 `vbus`/`voltage` 列，母线电压按 `NaN` 传（第 4 代自动退化为 `s=1`，「不归一化」）。
@@ -86,23 +86,27 @@
 ### 4.3 出图
 
 ```powershell
-python tools/tuning/plot_csv.py out\PastCompare_xxx.csv --group gen            # 每代一张，横轴各自时间
-python tools/tuning/plot_csv.py out\PastReplay_xxx.csv  --overlay duty_g1,duty_g3,duty_g4
-python tools/tuning/plot_csv.py out\PastCompare_xxx.csv --cols duty_g1,duty_g3,duty_g4,velocity,error
+python tools/tuning/plot_csv.py .\PastCompare_log.csv --group gen            # 每代一张，横轴各自时间
+python tools/tuning/plot_csv.py .\PastReplay_log.csv  --overlay duty_g1,duty_g3,duty_g4
+python tools/tuning/plot_csv.py .\PastCompare_log.csv --cols duty_g1,duty_g3,duty_g4,velocity,error
 ```
 
 `plot_csv.py` 一列一张 PNG + 一份 `_summary.txt`，新列（`drop_g1`/`iact_g1`/`stl_g1`…）自动识别。
 
 ---
 
-## 5. CSV 列说明（`PastCompare` / `PastReplay`）
+## 5. 遥测键（Dashboard CSV 的列，`PastCompare` / `PastReplay`）
 
 ```
-t,gen,target,velocity,vbus,
+gen,target,velocity,vbus,
 duty_g1,ff_g1,p_g1,i_g1,boost_g1,drop_g1,iact_g1,stl_g1,
 duty_g3,ff_g3,p_g3,i_g3,boost_g3,drop_g3,iact_g3,stl_g3,
 duty_g4,ff_g4,p_g4,i_g4,drop_g4,iact_g4,stl_g4,vscale_g4
 ```
+
+> 程序**不写自定义 CSV**：全部通过 `telemetry`（已绑 `MultipleTelemetry`）发布，
+> 由 Dashboard 自带 **Logging** 记录，时间列由 Dashboard 加；键名与上面一一对应。
+> 分代 Tuner 的报告数字（`fit_kV`、`step_kp`、`dip_recovery`…）同样是扁平数值键，一并记录。
 
 - `gen`：本次**真正驱动**电机的是哪一代（1/3/4）；离线回放记 **0**。
 - `ff_*`：前馈总量（Gen1 = `kS+kV·ω*+kA·dω*`，Gen3 = `kS+kff·ω*`，Gen4 = `s·(kS+kff·ω*)`）。
@@ -110,13 +114,13 @@ duty_g4,ff_g4,p_g4,i_g4,drop_g4,iact_g4,stl_g4,vscale_g4
 - `drop_*` / `iact_*` / `stl_*`：掉速标志 / 积分激活 / 已稳定，1=真 0=假。
 - `vscale_g4`：第 4 代的电压缩放 `s`；恒为 1 说明 `useVoltageNorm=false` 或电压读数缺失。
 
-分代 Tuner 的 CSV：
+分代 Tuner 的遥测键：
 
-| 程序 | 表头 | 说明 |
+| 程序 | 键 | 说明 |
 |---|---|---|
-| `TuneGen1Op` | `t,duty,velocity,phase` | 纯开环辨识数据 |
-| `TuneGen3Op` | `t,duty,velocity,error,boost,phase` | 含 boost 段 |
-| `TuneGen4Op` | `t,target,velocity,error,duty,ff,p,i,inDrop,iActive,settled,vbus,vscale,phase` | 闭环验收 |
+| `TuneGen1Op` | `duty,velocity,phase` + `fit_kV,fit_kS,step_kP,step_kI` | 纯开环辨识数据 |
+| `TuneGen3Op` | `duty,velocity,error,boost,phase` + `fit_kff,fit_kS,step_kp,step_ki,dip_peak_error,dip_peak_boost,dip_recovery,dip_overshoot` | 含 boost 段 |
+| `TuneGen4Op` | `target,velocity,error,duty,ff,p,i,indrop,iactive,settled,vbus,vscale,phase` + `meas_*`/`kp_step`/`dip_*` | 闭环验收 |
 
 `phase` 数字码（三份通用）：**1** 开环点/稳态前 **2** 判读窗口 **3** 阶跃 **4** 掉速
 **5** 恢复 **6** 掉速前稳定。
@@ -183,3 +187,6 @@ duty_g4,ff_g4,p_g4,i_g4,drop_g4,iact_g4,stl_g4,vscale_g4
 5. 同一台机器**不要同时跑两个本目录 OpMode**（都抢 `shooter` 电机）。
 6. `PastCompare` 的 `gen` 列只表示“这一行是哪次运行/哪一代驱动”，**不是**每行三代代号；
    三代的分量都在同一行里（`duty_g1/g3/g4`）。
+7. **记录方式统一走 Dashboard**：本目录所有 OpMode 都只用 `telemetry` 打数据（已绑
+   `MultipleTelemetry`），由 Dashboard 自带 **Logging**（Start/Stop → 下载 CSV）记录，
+   不再往机器人上写自定义 CSV 文件；需要历史旧文件时才用 `adb pull`。

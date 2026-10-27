@@ -1,6 +1,8 @@
 package org.firstinspires.ftc.teamcode.utility.pastcalculater;
 
 import com.qualcomm.robotcore.eventloop.opmode.LinearOpMode;
+import com.acmerobotics.dashboard.FtcDashboard;
+import com.acmerobotics.dashboard.telemetry.MultipleTelemetry;
 import com.qualcomm.robotcore.eventloop.opmode.TeleOp;
 
 import java.util.Locale;
@@ -55,14 +57,15 @@ public class TuneGen3Op extends LinearOpMode {
 
     public static String motorName = "shooter";
     public static boolean motorReversed = true;
-    public static boolean logToCsv = true;
+    /** 是否发布扁平数值遥测（由 FTC Dashboard 自带 Logging 记录） */
+    public static boolean dashboardLog = true;
     public static double logPeriodMs = 10;
 
-    static final String CSV_HEADER = "t,duty,velocity,error,boost,phase";
+    static final String CSV_HEADER = "duty,velocity,error,boost,phase";
 
     // ------------------------------------------------------------ state
 
-    private final PastCompareOp.TuningLoggerForPast logger = new PastCompareOp.TuningLoggerForPast();
+    private double lastLogSec = -1;
     private PastFlywheelDriver driver;
     private PastCalculator.Gen3 calculator;
 
@@ -80,6 +83,7 @@ public class TuneGen3Op extends LinearOpMode {
 
     @Override
     public void runOpMode() {
+        telemetry = new MultipleTelemetry(telemetry, FtcDashboard.getInstance().getTelemetry());
         telemetry.addLine("TuneGen3（含 boost 的第 3 代）");
         telemetry.addLine(String.format(Locale.US, "点=%d 个  d0=%.2f dStep=%.2f  boost 目标=%.0f",
                 pointDuties.length, d0, dStep, boostTarget));
@@ -100,11 +104,6 @@ public class TuneGen3Op extends LinearOpMode {
             return;
         }
 
-        if (logToCsv) {
-            logger.start(hardwareMap.appContext, "TuneGen3", CSV_HEADER);
-            logger.log("# Gen3 boost: points=" + pointDuties.length
-                    + " d0=" + d0 + " dStep=" + dStep + " boostTarget=" + (int) boostTarget);
-        }
 
         runPoints();
         if (opModeIsActive() && !gamepad1.x) {
@@ -118,9 +117,6 @@ public class TuneGen3Op extends LinearOpMode {
         }
 
         driver.setOpenLoopPower(0);
-        if (logger.isOpen()) {
-            logger.close();
-        }
     }
 
     // ------------------------------------------------------------ 阶段 1
@@ -138,9 +134,6 @@ public class TuneGen3Op extends LinearOpMode {
                 pointDutyUsed[pointCount] = duty;
                 pointOmega[pointCount] = omega;
                 pointCount++;
-            }
-            if (logger.isOpen()) {
-                logger.log(String.format(Locale.US, "# point d=%.3f omega=%.1f", duty, omega));
             }
         }
         if (pointCount >= 2) {
@@ -167,7 +160,6 @@ public class TuneGen3Op extends LinearOpMode {
         double[] time = new double[cap];
         double[] velocity = new double[cap];
         int n = 0;
-        double lastLog = -1;
 
         while (opModeIsActive() && !gamepad1.x) {
             double t = (System.nanoTime() - startNano) / 1e9;
@@ -180,8 +172,7 @@ public class TuneGen3Op extends LinearOpMode {
                 velocity[n] = v;
                 n++;
             }
-            logFrame(t, dStep, v, 0, 0, "step", lastLog);
-            lastLog = t;
+            logFrame(t, dStep, v, 0, 0, "step");
             sleep(5);
         }
 
@@ -195,14 +186,12 @@ public class TuneGen3Op extends LinearOpMode {
     private void runBoost() {
         // 闭环跑到目标
         driver.resetController();
-        double lastLog = -1;
         double t0 = getRuntime();
         while (opModeIsActive() && !gamepad1.x && getRuntime() - t0 < boostSettleSec) {
             driver.update((int) boostTarget);
             double t = getRuntime() - t0;
             logFrame(t, calculator.getDuty(), driver.getVelocity(),
-                    calculator.getError(), calculator.getBoostTerm(), "boost_settle", lastLog);
-            lastLog = t;
+                    calculator.getError(), calculator.getBoostTerm(), "boost_settle");
             telemetry.addData("boost 阶段", "稳定中 t=%.2f/%.2f", t, boostSettleSec);
             telemetry.update();
             sleep(5);
@@ -219,8 +208,7 @@ public class TuneGen3Op extends LinearOpMode {
         while (opModeIsActive() && !gamepad1.x && getRuntime() - dipStart < dipSec) {
             double t = getRuntime() - t0;
             double v = driver.getVelocity();
-            logFrame(t, dipDuty, v, 0, 0, "dip", lastLog);
-            lastLog = t;
+            logFrame(t, dipDuty, v, 0, 0, "dip");
             telemetry.addData("boost 阶段", "掉速中 t=%.2f", t);
             telemetry.update();
             sleep(5);
@@ -250,8 +238,7 @@ public class TuneGen3Op extends LinearOpMode {
                 dipOvershoot = Math.max(dipOvershoot, driver.getVelocity() - boostTarget);
             }
 
-            logFrame(t, calculator.getDuty(), driver.getVelocity(), e, boost, "recover", lastLog);
-            lastLog = t;
+            logFrame(t, calculator.getDuty(), driver.getVelocity(), e, boost, "recover");
             telemetry.addData("boost 阶段", "恢复中 e=%.0f boost=%.4f", e, boost);
             telemetry.update();
             sleep(5);
@@ -266,6 +253,8 @@ public class TuneGen3Op extends LinearOpMode {
         if (fit != null) {
             telemetry.addData(">>> 建议 kff (slope)", "%.8g", fit[0]);
             telemetry.addData(">>> 建议 kS (intercept)", "%.6g", fit[1]);
+            telemetry.addData("fit_kff", fit[0]);
+            telemetry.addData("fit_kS", fit[1]);
         } else {
             telemetry.addData("kS/kff", "拟合失败");
         }
@@ -273,6 +262,8 @@ public class TuneGen3Op extends LinearOpMode {
         if (stepFit != null) {
             telemetry.addData("step Kd / τ", "%.1f / %.3f s", stepFit[2], stepFit[3]);
             telemetry.addData(">>> 建议 kp / ki", "%.8g / %.8g", stepFit[5], stepFit[6]);
+            telemetry.addData("step_kp", stepFit[5]);
+            telemetry.addData("step_ki", stepFit[6]);
         } else {
             telemetry.addData("kp/ki", "阶跃辨识失败");
         }
@@ -280,22 +271,20 @@ public class TuneGen3Op extends LinearOpMode {
         telemetry.addData("boost 峰值误差 / boost", "%.0f / %.4f", dipPeakError, dipPeakBoost);
         telemetry.addData("boost 恢复时间", Double.isNaN(dipRecovery) ? "未恢复" : String.format(Locale.US, "%.3f s", dipRecovery));
         telemetry.addData("boost 过冲", "%.0f tick/s", dipOvershoot);
+        telemetry.addData("dip_peak_error", dipPeakError);
+        telemetry.addData("dip_peak_boost", dipPeakBoost);
+        telemetry.addData("dip_recovery", Double.isNaN(dipRecovery) ? 0 : dipRecovery);
+        telemetry.addData("dip_overshoot", dipOvershoot);
         if (!Double.isNaN(dipRecovery) && dipRecovery > targetRecoverySec * 1.1) {
             double suggested = Gen3Params.kBoost * dipRecovery / targetRecoverySec;
             telemetry.addData(">>> 建议 kBoost（恢复偏慢）", "%.8g", suggested);
+            telemetry.addData("suggest_kBoost", suggested);
         } else if (!Double.isNaN(dipRecovery)) {
             telemetry.addData(">>> kBoost 判读", "恢复已达标，保持 %.8g", Gen3Params.kBoost);
         }
-        telemetry.addData("CSV", logger.isOpen() ? logger.getPath() : "未记录");
+        telemetry.addData("dash log", dashboardLog ? "ON（Dashboard Logging）" : "OFF");
         telemetry.update();
 
-        if (logger.isOpen()) {
-            logger.log(String.format(Locale.US,
-                    "# boost peakErr=%.0f peakBoost=%.5f recovery=%s overshoot=%.0f",
-                    dipPeakError, dipPeakBoost,
-                    Double.isNaN(dipRecovery) ? "NaN" : String.format(Locale.US, "%.3f", dipRecovery),
-                    dipOvershoot));
-        }
 
         while (opModeIsActive() && !gamepad1.x) {
             idle();
@@ -309,7 +298,6 @@ public class TuneGen3Op extends LinearOpMode {
         double start = getRuntime();
         double sum = 0;
         int n = 0;
-        double lastLog = -1;
         while (opModeIsActive() && !gamepad1.x) {
             double t = getRuntime();
             if (t - start > timeoutSec) {
@@ -320,8 +308,7 @@ public class TuneGen3Op extends LinearOpMode {
                 sum += v;
                 n++;
             }
-            logFrame(getRuntime(), duty, v, 0, 0, "point", lastLog);
-            lastLog = t;
+            logFrame(getRuntime(), duty, v, 0, 0, "point");
             telemetry.addData("阶段", "point d=%.3f t=%.1f/%.1f ω=%.0f",
                     duty, t - start, timeoutSec, v);
             telemetry.update();
@@ -332,15 +319,19 @@ public class TuneGen3Op extends LinearOpMode {
     }
 
     private void logFrame(double t, double duty, double velocity, double error, double boost,
-                          String phase, double lastLog) {
-        if (!logger.isOpen()) {
+                          String phase) {
+        if (!dashboardLog) {
             return;
         }
-        if (lastLog >= 0 && (t - lastLog) * 1000.0 < logPeriodMs) {
+        if (lastLogSec >= 0 && (t - lastLogSec) * 1000.0 < logPeriodMs) {
             return;
         }
-        logger.log(String.format(Locale.US, "%.4f,%.4f,%.2f,%.1f,%.5f,%d",
-                t, duty, velocity, error, boost, TuneGen1Op.phaseNum(phase)));
+        lastLogSec = t;
+        telemetry.addData("duty", duty);
+        telemetry.addData("velocity", velocity);
+        telemetry.addData("error", error);
+        telemetry.addData("boost", boost);
+        telemetry.addData("phase", TuneGen1Op.phaseNum(phase));
     }
 
     private void sleepSec(double sec) {

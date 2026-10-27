@@ -9,7 +9,6 @@ import com.qualcomm.robotcore.hardware.DcMotor;
 import com.qualcomm.robotcore.hardware.DcMotorEx;
 
 import org.firstinspires.ftc.teamcode.Controllers.Shooter.PrototypeShooter.PrototypeShooter;
-import org.firstinspires.ftc.teamcode.OpModes.Tuning.TuningLogger;
 import org.firstinspires.ftc.teamcode.utility.Shooter.FlywheelCalculator;
 
 import java.util.ArrayList;
@@ -125,15 +124,16 @@ public class VoltageSweepOp extends LinearOpMode {
 
     // ---------------------------------------------------------------- 记录
 
-    /** 是否落 CSV */
-    public static boolean logToCsv = true;
+    /**
+     * 是否发布扁平数值遥测（由 FTC Dashboard 自带 Logging 记录）。
+     *
+     * <p>键名（Dashboard CSV 的列名）：{@code segment_id, vbus_target, vbus_meas, load_power,
+     * target, velocity, duty, error, current, indrop, iactive, settled}，时间列由 Dashboard 自己加。
+     */
+    public static boolean dashboardLog = true;
 
-    /** CSV 采样周期 (ms) */
+    /** 数值遥测发布周期 (ms) */
     public static long logPeriodMs = 10;
-
-    private static final String CSV_HEADER =
-            "t,segment_id,vbus_target,vbus_meas,load_power,target,velocity,duty,error,"
-                    + "current,inDrop,iActive,settled";
 
     /** 一个计划段。kind：0 = 常态段，1 = 开环掉速段 */
     private static final class Segment {
@@ -157,7 +157,6 @@ public class VoltageSweepOp extends LinearOpMode {
 
     private PrototypeShooter shooter;
     private DcMotorEx loadMotor;
-    private TuningLogger logger;
 
     private final List<Segment> plan = new ArrayList<>();
     /** 每行：{segment_id, t, vbus_target, vbus_meas, velocity, duty, current, error, settled} */
@@ -228,22 +227,6 @@ public class VoltageSweepOp extends LinearOpMode {
             return;
         }
 
-        if (logToCsv) {
-            logger = new TuningLogger();
-            logger.start(hardwareMap.appContext, "VoltageSweep", CSV_HEADER);
-            logger.log("# plan: vbus=" + fmtArray(vbusTargets)
-                    + " a=" + aVelocity + " b=" + bVelocity
-                    + " settle=" + voltageSettleSec + " steady=" + steadySec
-                    + " dip=" + dipSec + "@" + dipDuty
-                    + " recover=" + recoverySec);
-            for (Segment s : plan) {
-                logger.log(String.format(Locale.US,
-                        "# seg %d %s vbus=%.2f wheel=%d dur=%.2f%s",
-                        s.id, s.name, s.vbusTarget, s.wheelTarget, s.durSec,
-                        s.dip ? " (open-loop dip)" : ""));
-            }
-        }
-
         boolean aborted = false;
         boolean userStop = false;
         Segment prev = null;
@@ -287,7 +270,7 @@ public class VoltageSweepOp extends LinearOpMode {
 
                 showTelemetry(seg, t0, vbus);
 
-                if (logger != null && now - lastLogT >= logPeriodMs / 1000.0) {
+                if (dashboardLog && now - lastLogT >= logPeriodMs / 1000.0) {
                     lastLogT = now;
                     logRow(seg, vbus);
                 }
@@ -311,13 +294,6 @@ public class VoltageSweepOp extends LinearOpMode {
             names.put(s.id, s.name);
         }
         String summary = summarize(names);
-        if (logger != null) {
-            for (String line : summary.split("\n")) {
-                logger.log("# " + line);
-            }
-            logger.close();
-            logger = null;
-        }
 
         // 停机后把汇总留在屏幕上（直到按 X 或 Stop）
         while (opModeIsActive() && !isStopRequested()) {
@@ -409,20 +385,18 @@ public class VoltageSweepOp extends LinearOpMode {
     private void logRow(Segment seg, double vbus) {
         FlywheelCalculator c = shooter.getCalculator();
         double duty = dutyOf(seg);
-        logger.logRowValues(
-                getRuntime(),
-                seg.id,
-                seg.vbusTarget,
-                vbus,
-                loadPower,
-                (double) seg.wheelTarget,
-                shooter.getVelocity(),
-                duty,
-                seg.wheelTarget - shooter.getVelocity(),
-                shooter.getCurrent(),
-                c.isInDrop() ? 1.0 : 0.0,
-                c.isIntegralActive() ? 1.0 : 0.0,
-                c.isSettled() ? 1.0 : 0.0);
+        telemetry.addData("segment_id", seg.id);
+        telemetry.addData("vbus_target", seg.vbusTarget);
+        telemetry.addData("vbus_meas", vbus);
+        telemetry.addData("load_power", loadPower);
+        telemetry.addData("target", seg.wheelTarget);
+        telemetry.addData("velocity", shooter.getVelocity());
+        telemetry.addData("duty", duty);
+        telemetry.addData("error", seg.wheelTarget - shooter.getVelocity());
+        telemetry.addData("current", shooter.getCurrent());
+        telemetry.addData("indrop", c.isInDrop() ? 1 : 0);
+        telemetry.addData("iactive", c.isIntegralActive() ? 1 : 0);
+        telemetry.addData("settled", c.isSettled() ? 1 : 0);
         samples.add(new double[]{
                 seg.id, getRuntime(), seg.vbusTarget, vbus,
                 shooter.getVelocity(), duty, shooter.getCurrent(),
