@@ -24,6 +24,7 @@
 | `analyze_launch_events.py` | FTC Dashboard 原始 CSV | 发射掉速逐发分析 | 每发 1 张 + 3 张统计 + 1 份事件 CSV |
 | `plot_speed.m` | clean 表 | MATLAB 转速专图 + 诊断图 | 6 张 |
 | `plot_flywheel.py` | `flywheel/*.csv` 台架表 | 三阶段开环/闭环横向对比 | 10 张 |
+| `plot_csv.py` | **任意 CSV**（Dashboard 原始 / `TuningLogger` / `FlywheelRun` / 电压扫描 / 多代对比） | 通用兜底：列名归一化 + 时间轴修复 + 逐列统计，**不假设格式** | **每列 1 张 + 1 份 `*_summary.txt`** |
 | `export_clean_table.py` | 原始日志 | 生成 `<名字>_clean.csv`（按行序重建时间轴） | 无（只出表） |
 | `fit_steady_state_model.py` | clean 表 | 拟合 `d_ss = kS + kff·ω` | 无（只出表/文本） |
 | `make_samples.py` | 无 | 生成 5 组真值已知的合成 CSV（自检用） | 无 |
@@ -36,6 +37,12 @@
 | 6.3 继电反馈 | `Tune6.3 RelayFeedback` | `relay03_*.csv` | a、Tu、Ku、kp、ki |
 | 6.4 掉速检测 | `Tune6.4 DropDetection` | `drop04_*.csv` | σ、量化台阶、maxDecel、Δω_th、k_th、kBoost |
 | 6.5 前馈标定 | `Tune6.5 Feedforward` | `ff05_*.csv` | 多点回归 Kff（斜率）+ kS（截距） |
+
+> **第 4 代现状**：`Tune6.2 ZieglerNichols` 与 `Tune6.4 DropDetection` 的 OpMode **已删除**
+> （boost 已从控制律移除、6.2 与 6.3 方法重复），`analyze_tuning.py` 仍保留这两种方法的解析，
+> 只为**复核历史 `zn02_/drop04_` CSV**。现行 5 个 Tuner 见
+> [`OpModes/Tuning/Guide.md`](../../TeamCode/src/main/java/org/firstinspires/ftc/teamcode/OpModes/Tuning/Guide.md)。
+> 新增的 `Tune6.6 VelocityFilter` / `Tune6.7 BusVoltageFilter` 的 CSV 前缀为 `vf06_` / `bf07_`。
 
 ---
 
@@ -85,6 +92,11 @@ python tools/tuning/analyze_tuning.py drop04_1.csv --kp 5e-5        # 计算 kBo
 ## 3. Python 版：Dashboard 日志 / 阶跃 / 发射 / 台架
 
 ```bash
+# ★ 通用兜底（第 4 代新增）：任意 CSV → 每列一张图 + 汇总表，不用先判断格式
+python tools/tuning/plot_csv.py ./tuning_data/FlywheelRun_xxx.csv --out ./tools/tuning/out
+python tools/tuning/plot_csv.py cmp.csv --group gen            # 多代对比：图内按代分线
+python tools/tuning/plot_csv.py sweep.csv --segment segment_id # 电压扫描：分段着色 + 逐段表
+
 # Dashboard 原始日志 → 清洗 + 分段统计 + 9 张图（--tail 稳态窗口，默认 1.0 s）
 python tools/tuning/analyze_dashboard_log.py ./raw/log4.csv --out ./tools/tuning/out
 

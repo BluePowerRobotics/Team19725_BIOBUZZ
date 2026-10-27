@@ -321,3 +321,57 @@ Start 后按 **A** 全自动跑完（两段），**X** 停转。CSV 前缀 `vf06
 
 > 全部增益单位为「占空比」。第 4 代的电压归一化只乘前馈，
 > 因此**增益量纲不变**，不需要像「整条输出 × V_nom/V_bus」那样换算成 V 量纲。
+
+---
+
+## 附录 A：整定程序覆盖审计（第 4 代交接时）
+
+对照 `doc/现在的控制系统.md` §2.10 的 6 个参数族逐项核对，结论：**6 族全覆盖，无缺口**，
+因此本目录在本代**不新增/不改动任何 Tuner**（缺的才补，不缺就不动）。
+
+| §2.10 参数族 | 整定程序 | 状态 | 说明 |
+|---|---|---|---|
+| ① `kS` / `kff` | 6.5（主）、6.1（`kff=1/Kd`）、`ShooterTuningTester`（开环截距） | 齐 | 必须 ≥2 点；6.5 强制 `kff=0` 让 PI 扛住稳态 |
+| ② `kp` / `ki` | 6.1（模型初值 ×2~3）、6.3（临界比例度复核） | 齐 | 上限由 `kp×quantStep ≤ 0.05` 卡死，不靠试 |
+| ③ `tauVMax` / `tauVMin` | 6.6 | 齐 | 判据 `σ_filt ≤ max(quantStep/2, 0.5%·ω)` |
+| ④ `tauBus` | 6.7 | 齐 | 仅在 `useVoltageNorm=true` 时有意义 |
+| ⑤ `eBand` / `settleFrames` | 无程序（**不需要**） | 齐 | 由 `quantStep` 直接算：`eBand=max(settleFrac·ω*, 2·quantStep)`、`settleFrames=10` |
+| ⑥ `dropEnterFrac` / `iFreezeTimeoutSec` | 无程序（**不需要**） | 齐 | 由 `eBand` 推：进 3 倍带、出 1 倍带；`iFreezeTimeoutSec` 是安全阀 |
+
+### 明确不算「缺口」的遗留项
+
+1. **§2.12 的 6 条验收判据没有一键测量程序**（不是整定，是验收）：
+   ②稳态 `v_sd/|误差|/duty_sd`、③`|I integral|` 长期值、⑤`isSettled()` 行为、⑥两种电量对比，
+   都是「跑 → 导出 CSV → 离线算」。现已由 `FlywheelRun` 的 `logToCsv` 提供数据源
+   （表头 `t,target,velocity,duty,voltage,error,vScale,inDrop,iActive,settled`），
+   发射恢复用 `tools/tuning/analyze_launch_events.py`，不同电压的 ⑥ 由
+   `OpModes/VoltageSweep/` 的电压扫描程序一次扫完（见该目录 `GUIDE.md`）。
+2. **`ShooterTuningTester`**（`group=Tests`，464 行，含 `MODE_KS/MODE_KV/step/disturb`）
+   与 6.1/6.5 功能重叠，且**只出遥测、不落 CSV**。保留可用（开环 `kS` 截距的第二种来源），
+   但不作为正式参数的来源；正式来源以本目录 5 个 Tuner 为准。
+3. 6.6 的 `σ_target` 与 6.7 的 `maxFfDutyError=0.005` 都是经验阈值，尚未在真机复核；
+   首次使用时把实测值记进 CSV 注释行，便于后续修订。
+4. `FlywheelParams.SMALL` 仍是 `BIG` 的占位拷贝（小球未经标定）。5 个 Tuner 都能对它跑，
+   但结果需要重新标一遍才有意义。
+
+---
+
+## 附录 B：分代整定程序（不在本目录）
+
+历史各代飞轮控制律的整定程序**故意不放在这里**，而是与它们各自的计算器放在一起：
+`TeamCode/src/main/java/org/firstinspires/ftc/teamcode/utility/pastcalculater/`
+
+| 程序 | 整定对象 | 阶段 |
+|---|---|---|
+| `TuneGen1Op` | 第 1/2 代 PIDSVA（`Gen1Params`） | ①开环多点 → `kS`(截距)/`kV`(斜率)；②开环阶跃 → `kP`/`kI` |
+| `TuneGen3Op` | 第 3 代 boost（`Gen3Params`） | ①②同上给 `kS`/`kff`/`kp`/`ki`；③人为掉速 → 判读并给 `kBoost` 建议 |
+| `TuneGen4Op` | 第 4 代（`Gen4Params`） | **不做辨识**，只按 §2.12 闭环验收（稳态量 + 掉速恢复 + `isSettled` 行为） |
+
+为什么分开放：这三份要共用 `utility/pastcalculater` 的 `PastCalculator` / `PastFlywheelDriver` /
+`PastTuneSupport`，而本目录（`OpModes/Tuning`）的 5 个 Tuner 只服务**当前代**、
+参数唯一出处是 `FlywheelParams`。两套参数容器不要混：`FlywheelParams` 是实例字段（Dashboard 改不动），
+`GenXParams` 是全 `static`（Dashboard 能改）。用法见 `pastcalculater/GUIDE.md`。
+
+第 4 代整定仍然走本目录：`kS/kff → 6.5`、`kp/ki → 6.1(+6.3 复核)`、`tauV → 6.6`、`tauBus → 6.7`；
+`TuneGen4Op` 只用于「改完参数后确认闭环达标」。
+

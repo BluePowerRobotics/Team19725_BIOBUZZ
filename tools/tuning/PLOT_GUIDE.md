@@ -7,6 +7,10 @@
 > **本版变化**：所有脚本改成 **一图一文件** —— 每个物理量 / 每个判据单独一张 PNG，
 > 不再把 2×2、1×3、4×1 subplot 拼成一张大图。文件名后缀就是这张图回答的问题。
 > 判据阈值**逐条对着当前源码核对过**（§7.1 标了文件名与行号），与旧版说明不同处以源码为准。
+>
+> **第 4 代补充**：新增 `plot_csv.py`（§12）——**任意 CSV 都能出图**，每列一张 PNG +
+> 一份汇总表，不用先判断它属于哪种日志格式。新程序（`FlywheelRun`、电压扫描、多代对比）
+> 的 CSV 都长得不一样，**先跑 `plot_csv.py`，再按需上专用脚本**。
 
 ---
 
@@ -32,6 +36,18 @@
 | clean 表 | `*_clean.csv`（11 列 + 可选 `voltage`） | `export_clean_table.py` | 视原始日志 |
 | 整定 OpMode CSV | `tuning/<前缀>_<时间戳>.csv`（`t,duty,velocity` 三列） | `TuningLogger`（RC 外部存储 `/tuning/`） | 无 |
 | 台架 CSV | `flywheel/*.csv`（`t,power,velocity,busV,motorV[,mode]`） | 台架测试程序 | 有（busV） |
+| **FlywheelRun**（第 4 代） | `tuning/FlywheelRun_<时间戳>.csv` | `OpModes/FlywheelRun`（`logToCsv=true`） | **有** |
+| **电压扫描**（第 4 代） | `tuning/VoltageSweep_<时间戳>.csv` | `OpModes/VoltageSweep/VoltageSweepOp` | **有（目标+实测）** |
+| **多代对比**（第 4 代） | `tuning/GenCompare_<时间戳>.csv` | `utility/pastcalculater/...` 对比 OpMode | **有** |
+
+第 4 代三种新 CSV 的列（全部由 `plot_csv.py` 直接吃）：
+
+| CSV | 列 |
+|---|---|
+| FlywheelRun | `t,target,velocity,duty,voltage,error,vScale,inDrop,iActive,settled` |
+| 电压扫描 | `t,segment_id,vbus_target,vbus_meas,target,velocity,duty,error,current,inDrop,iActive,settled` |
+| 多代对比 | `t,target,velocity,duty,duty_gen1,duty_gen3,duty_gen4,error,...`（每代一组分量列） |
+
 
 统一约定：时间列单位秒、严格单调；速度 tick/s；占空比 0~1。
 **判读前先确认量化台阶**（本机 log4/log3 为 **20 tick/s**）：所有「稳态误差、极限环幅值、
@@ -201,6 +217,7 @@ MATLAB 同口径、**图名与 Python 完全一致**。
 | 拟合截距 kS | ≤ 0.005 | — | > 0.005 → 建议拆分 kS | `analyze_step_response.py:302` |
 | 工作点转速跨度 | ≥ 300 tick/s 才能分离 kS/kff | — | < 300 → 只报过原点 kff | `analyze_step_response.py:299` |
 | drop04 阈值台阶数 | ≥ 3 个台阶 | — | < 3 → `⚠` 警告 | `analyze_tuning.py:663` |
+| （第 3 代遗留）boost 触发占比 / 参与率 / 峰值 | ≥ 0.1% / ≥ 60% / < 0.399 | — | 第 4 代已无 boost，这三条**只用于复核历史日志** | `analyze_dashboard_log.py:407`、`analyze_launch_events.py:171-173` |
 | 阶跃恢复带 | `band = max(2%·目标, 2·台阶)`，连续 10 帧 | — | 带外即未恢复 | `analyze_step_response.py` / `plot_speed.m` |
 | 发射事件跌幅门限 | `delta = max(100, 6%·ω*)` | — | 低于门限不算事件 | `analyze_launch_events.py` |
 
@@ -218,7 +235,10 @@ MATLAB 同口径、**图名与 Python 完全一致**。
 ## 8. 出图流程（一条命令到全部图）
 
 ```bash
-# 0) 取数（一次性）
+# 0) 只要「有数据就能画」：任意 CSV → 每列一张图 + 汇总表（先跑这个，不用判断格式）
+python tools/tuning/plot_csv.py <任意.csv> --out ./tools/tuning/out
+
+# 0b) 取数（一次性）
 adb pull /sdcard/Android/data/com.qualcomm.ftcrobotcontroller/files/tuning ./tuning_data
 
 # 1) Tune6.x 标定 CSV → 每个文件 2 张图 + 报告（Python 主用）
@@ -282,6 +302,13 @@ python tools/tuning/check_plot_data.py
     图上看不出是谁的功劳。
 11. **`plot_speed.m` 与 `analyze_launch_events.py` 的事件门限不同**（3% vs 6% ω*），
     事件计数对不上时先查这个，不是数据坏了。
+12. **第 4 代的日志没有 `boost` / `boost_term` 列**（boost 已从控制律移除）：
+    §4 的 `<stem>_launch_boost.png` 与 §7.1 里 boost 相关的三条判据**只适用于第 3 代历史数据**。
+    新日志里 `inDrop` / `iActive` / `settled` 才是要看的三个 0/1 列；
+    `analyze_launch_events.py` 遇到缺列会退化（不出 boost 图），不是坏了。
+13. **多代对比表（`--group gen`）不要跨电压比较**：一次对比必须全程同一块电池、
+    同一目标序列，否则 `duty` 差异里混了电压差。第 4 代的前馈会随 `vScale` 变化，
+    版本间比较前先用电压扫描把 `duty·V_bus` 归一到同一电压。
 
 ---
 
@@ -313,3 +340,84 @@ python tools/tuning/check_plot_data.py
 | 2250 段 duty 饱和占比 | 74.9% | 该段一直贴顶，此时 kp 再大也没用 |
 | 稳态 duty sd | 0.0182 ~ 0.020 | 第 4 代目标 ≤ 0.010（被速度滤波压住） |
 | 量化极限环 | 28 ms / 0.50 台阶（好）↔ 51 ms / 1.50 台阶（kp 过大） | 周期 × 幅值一起看 |
+
+---
+
+## 12. `plot_csv.py` —— 通用出图（任意 CSV → 一图一表）
+
+前面 1~6 节的脚本都带「格式假设」（Dashboard 原始列名 / clean 表 11 列 / `t,duty,velocity` 三列），
+**新程序产出的 CSV 不一定符合任何一种**。`plot_csv.py` 是兜底工具：
+**有什么列就画什么列**，一列一张 PNG，再配一份汇总表。
+
+```bash
+# 最常用：任意 CSV → 每列一张图 + 汇总表
+python tools/tuning/plot_csv.py tuning/FlywheelRun_1729...csv --out ./out
+
+# 多代对比：同一张图里按代分线（每列仍是一张图）
+python tools/tuning/plot_csv.py tuning/GenCompare_1729...csv --group gen --out ./out
+
+# 电压扫描：按分段列着色 + 逐段统计表
+python tools/tuning/plot_csv.py tuning/VoltageSweep_1729...csv --segment segment_id --out ./out
+
+# 只看/只叠几列（分量对比常这么用）
+python tools/tuning/plot_csv.py x.csv --cols duty,ff,p,i
+python tools/tuning/plot_csv.py x.csv --overlay duty,duty_gen3,duty_gen4 --tag 四代Duty
+```
+
+### 它做的事（顺序固定）
+
+1. **列名归一化**：大小写、空格、`()`、单位括号都抹平；Dashboard 的 `Target Velocity` /
+   `Power` / `Velocity` 与端上的 `target` / `duty` / `velocity` 映射到同一组规范名，
+   未知列保留 snake_case 原名（**照样出图**）。
+2. **时间轴修复**：识别 `t` / `time_ms` / `Time (ms)`；非单调（Dashboard 会倒退）或缺失时
+   **按行序用中位间隔重建**，并把修正记进汇总表「读入修正」段。
+3. **一列一张图**：`<stem>_<列名>.png`，图上标 `mean` / `sd` 与分段背景色；
+   转速图上自动叠 `target` 虚线。
+4. **一表**：`<stem>_summary.txt` —— 行数、时长、`dt` 中位、**量化台阶（速度列 gcd）**、
+   逐列 `n/mean/sd/min/max`、有 `segment_id` 时给逐段表、有 `gen` 时给逐代表。
+
+### 判读要点
+
+| 图上看到 | 结论 |
+|---|---|
+| `velocity` 与 `target` 贴合，`error` 只在 ±1~2 台阶内 | 稳态正常 |
+| `duty` 的 `sd` ≫ `kp×台阶` | 增益相对量化过大，降 `kp` |
+| `inDrop` 为 1 的时间段里 `iActive` = 0 | 掉速冻结逻辑生效（第 4 代正常行为） |
+| `settled` 在稳态后仍长期为 0 | `isSettled()` 判据不满足 → 查 `eBand` / 抖动 |
+| `vScale` 长期偏离 1.0 | 母线电压偏离 `vBusNominal`；配合电压扫描看是否该开 `useVoltageNorm` |
+| `--group gen` 里某代 `duty` 明显更高/更抖 | 该代前馈或滤波更差（多代对比的核心判据） |
+| `--segment segment_id` 各段 `velocity_mean` 相同但 `duty_mean` 不同 | 电压档差异被前馈正确补偿（`duty·V_bus` 应接近） |
+
+> `plot_csv.py` **不做物理判据报警**（不打印 `[警告]`），它只保证「有数据就能画」；
+> 要判据请用 1~6 节的专用脚本。
+
+### 12.1 多代对比 CSV（`PastCompare_*` / `PastReplay_*`）怎么读
+
+`utility/pastcalculater` 输出的列名带代际后缀，`plot_csv.py` 会当成普通列逐张出图：
+
+```
+t,gen,target,velocity,vbus,
+duty_g1,ff_g1,p_g1,i_g1,boost_g1,drop_g1,iact_g1,stl_g1,
+duty_g3,ff_g3,p_g3,i_g3,boost_g3,drop_g3,iact_g3,stl_g3,
+duty_g4,ff_g4,p_g4,i_g4,drop_g4,iact_g4,stl_g4,vscale_g4
+```
+
+```powershell
+# 一次把三代 duty 叠在一张图上（最常用）
+python tools/tuning/plot_csv.py out\PastReplay_xxx.csv --overlay duty_g1,duty_g3,duty_g4
+# 三代分量分开看：前馈差多少、P 差多少、积分有没有赖着不走
+python tools/tuning/plot_csv.py out\PastReplay_xxx.csv --cols ff_g1,ff_g3,ff_g4,p_g1,p_g3,p_g4,i_g1,i_g3,i_g4
+# 在线三次运行（每代一次）分别成组
+python tools/tuning/plot_csv.py out\PastCompare_xxx.csv --group gen
+```
+
+| 图上看到 | 结论 |
+|---|---|
+| 稳态段 `duty_g1 ≈ duty_g3 > duty_g4`（低电压时最明显） | Gen4 的电压归一化前馈在补电压缺口，Gen1/Gen3 只能靠积分 |
+| `i_g1` / `i_g3` 稳态长期非零且不收敛 | 前馈不足（`kS/kff` 或 `kV` 没标好），也就是 §2.12 第 3 条要治的病 |
+| `boost_g3 > 0` 而 `duty_g3` 并不比 `duty_g4` 更早退饱和 | 掉速段 boost 已被占空比饱和吃掉（第 4 代删 boost 的依据） |
+| 掉速后 `p_g3` 拉出尖峰、`duty_g3` 过冲，`duty_g4` 平缓但更慢 | 两代的核心取舍：过冲 vs 恢复时间 |
+| `stl_g1` 在 Gen1/Gen3 上很少为 1 | 它们没有速度滤波，`v_sd` 大 → 统一判据不容易满足（这是统一判据的预期结果） |
+| `vscale_g4` 恒为 1 | `useVoltageNorm=false` 或电压读数缺失（离线回放无 `vbus` 列时就是这种情况） |
+| `--group gen` 下 `gen=0` 的那组 | 离线回放（不驱动电机），横轴是原日志时间 |
+

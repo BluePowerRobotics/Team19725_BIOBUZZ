@@ -93,3 +93,19 @@ for (int i = 0; i < n; i++) {
 3. **`dV/dt` 掉速检测不可用**：恢复加速度 497~1146 tick/s² × 8.7 ms 每次采样只差 6~10 tick/s，
    小于量化台阶 20，逐帧差分全是噪声。掉速判据改用误差带滞回。
 4. **`useVoltageNorm` 默认关闭**：跨电量一致性验证通过后再开。
+
+## 相关实验目录（都不参与正式控制）
+
+| 目录 | 内容 | 自己的说明 |
+|---|---|---|
+| `OpModes/VoltageSweep/` | 不同母线电压下的适配性测试（负载电机做电气负载、母线电压闭环、四档扫描、分段 CSV） | `VoltageSweep/GUIDE.md` |
+| `utility/pastcalculater/` | 多代计算器对比实验（Gen1/2 · Gen3 · Gen4）+ 分代整定程序 + 离线回放 | `pastcalculater/GUIDE.md` |
+
+为什么参数分两套：
+
+- **正式参数**只认本目录 `FlywheelParams.java` 末尾两个 `static { }` 块（大球 `BIG` / 小球 `SMALL`），
+  它用的是**实例**字段，`@Config` 只对 `static` 字段生效 → **Dashboard 改不动它**。
+- 实验用的 `Gen1Params` / `Gen3Params` / `Gen4Params` 是**全 `static`** 的镜像容器，
+  Dashboard 能实时改；`Gen4Params.applyTo(FlywheelCalculator)` 与 `FlywheelParams.applyTo(...)` 同签名，
+  实验结论要落到正式程序时，仍须手抄回 `FlywheelParams` 的 `static { }` 块。
+
