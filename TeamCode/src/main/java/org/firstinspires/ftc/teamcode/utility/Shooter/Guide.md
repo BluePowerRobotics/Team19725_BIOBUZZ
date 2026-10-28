@@ -57,8 +57,36 @@ shooter.setTargetVelocity(1700);
 shooter.update();          // 每帧一次：params.applyTo(calculator) + calculate(target, ω, V_bus) + setPower
 ```
 
-参数只写在 `FlywheelParams`（FTC Dashboard 分组 `FlywheelParams`），**新增参数只改一处**，
-`applyTo()` 每帧同步，Dashboard 改值实时生效。
+参数**只在 `FlywheelParams` 里维护**：上半是字段声明（只有含义、没有数值），文件末尾是
+「大球飞轮参数块」与「小球飞轮参数块」两个 `static { }`，两套数值分开各写一遍——要改参数只改那两块
+（FTC Dashboard 分组 `FlywheelParams.BIG` / `FlywheelParams.SMALL`，改值下一帧生效）。
+`FlywheelCalculator` 的参数字段不带工程默认值，必须先 `applyTo(...)` 再 `calculate(...)`，
+`Controllers/Turret/Shooter.Params` 也不再重复定义任何控制量。
+
+### 1.1 选大球 / 小球那一套参数
+
+构造函数有两个：
+
+```java
+new PrototypeShooter(hardwareMap, telemetry);                       // = (…, "shooter", FlywheelParams.BIG)
+new PrototypeShooter(hardwareMap, telemetry, "smallFlywheel", FlywheelParams.SMALL);
+```
+
+第二个参数是 **Robot Config 里的电机名**，第四个是要用的参数实例。`PrototypeShooter` 持有的是
+**引用**（不是拷贝），所以 Dashboard 改 `FlywheelParams.SMALL.*` 同样下一帧生效。
+测试程序里 `OpModes/FlywheelRun.java` 已经把这个选择做成 Dashboard 开关：
+`paramsSet` 填 `BIG` / `SMALL`、`motorName` 填电机名；其余程序（`PrototypeShooterTest`、
+`ShooterTuningTester`、`OpModes/Tuning/` 下 5 个 Tuner）目前都硬编码 `new PrototypeShooter(hardwareMap, telemetry)`，
+**只跑 BIG**。要标小球，照 `FlywheelRun` 的写法把这两行换掉即可：
+
+```java
+FlywheelParams chosen = "SMALL".equalsIgnoreCase(paramsSet) ? FlywheelParams.SMALL : FlywheelParams.BIG;
+shooter = new PrototypeShooter(hardwareMap, telemetry, motorName, chosen);
+```
+
+`SMALL` 已于 2026-10-27 实机整定完成（`kff 3.8346e-4` / `kp 1.739e-3` / `ki 2.50771e-3`，
+其余与大球相同），不再是占位拷贝；两份参数现在只有增益三项不同，因为两台飞轮的静态模型
+`duty/s = kS + kff·ω` 实测几乎一致。换机构时 `motorReversed` / `speedMax` / `quantStep` 仍需按实际重测。
 
 ### 2. 离线复算（显式 dt）
 
@@ -90,3 +118,19 @@ for (int i = 0; i < n; i++) {
 3. **`dV/dt` 掉速检测不可用**：恢复加速度 497~1146 tick/s² × 8.7 ms 每次采样只差 6~10 tick/s，
    小于量化台阶 20，逐帧差分全是噪声。掉速判据改用误差带滞回。
 4. **`useVoltageNorm` 默认关闭**：跨电量一致性验证通过后再开。
+
+## 相关实验目录（都不参与正式控制）
+
+| 目录 | 内容 | 自己的说明 |
+|---|---|---|
+| `OpModes/VoltageSweep/` | 不同母线电压下的适配性测试（负载电机做电气负载、母线电压闭环、四档扫描、分段遥测） | `VoltageSweep/GUIDE.md` |
+| `utility/pastcalculater/` | 多代计算器对比实验（Gen1/2 · Gen3 · Gen4）+ 分代整定程序 + 离线回放 | `pastcalculater/GUIDE.md` |
+
+为什么参数分两套：
+
+- **正式参数**只认本目录 `FlywheelParams.java` 末尾两个 `static { }` 块（大球 `BIG` / 小球 `SMALL`），
+  它用的是**实例**字段，`@Config` 只对 `static` 字段生效 → **Dashboard 改不动它**。
+- 实验用的 `Gen1Params` / `Gen3Params` / `Gen4Params` 是**全 `static`** 的镜像容器，
+  Dashboard 能实时改；`Gen4Params.applyTo(FlywheelCalculator)` 与 `FlywheelParams.applyTo(...)` 同签名，
+  实验结论要落到正式程序时，仍须手抄回 `FlywheelParams` 的 `static { }` 块。
+

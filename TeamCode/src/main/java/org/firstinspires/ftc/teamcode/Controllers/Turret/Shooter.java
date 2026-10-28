@@ -8,6 +8,7 @@ import com.qualcomm.robotcore.hardware.Servo;
 import com.qualcomm.robotcore.hardware.VoltageSensor;
 
 import org.firstinspires.ftc.robotcore.external.Telemetry;
+import org.firstinspires.ftc.robotcore.external.navigation.CurrentUnit;
 import org.firstinspires.ftc.teamcode.utility.Shooter.FlywheelCalculator;
 import org.firstinspires.ftc.teamcode.utility.Shooter.FlywheelParams;
 
@@ -50,9 +51,10 @@ public class Shooter {
     public static class Params {
         /**
          * 飞轮速度环的完整参数集（前馈 / PI / 两个滤波器 / 电压归一化 / 量化判据）。
-         * 大球传 {@link FlywheelParams#BIG}，小球传 {@link FlywheelParams#SMALL}。
+         * 大球传 {@link FlywheelParams#BIG}，小球传 {@link FlywheelParams#SMALL}；
+         * <b>所有飞轮控制数值只在 {@link FlywheelParams} 里维护，本类不重复定义</b>。
          */
-        public FlywheelParams flywheel = new FlywheelParams();
+        public FlywheelParams flywheel = FlywheelParams.copyOf(FlywheelParams.BIG);
 
         // ---- 机械范围 ----
         /** 俯仰舵机最小位置 */
@@ -67,9 +69,7 @@ public class Shooter {
         public double triggerOffPos = 0.0;
 
         // ---- 就绪判据 ----
-        /** 转速到位容差 (tick/s)：粗判据，仅用于「目标为 0」等边界情况 */
-        public double speedTolerance = 100.0;
-        /** 俯仰舵机动作时间 (秒)：目标变更后经过该时间即视为到位 */
+        /** 俯仰舵机动作时间 (秒)：目标变更后经过该时间即视为到位（转速判据在 {@link FlywheelCalculator#isSettled()}） */
         public double pitchSettleTime = 0.25;
 
         /** 供 Forge / Dashboard 反射使用的空构造 */
@@ -124,6 +124,13 @@ public class Shooter {
 
     /** 最近一次下发的占空比（供遥测） */
     private double power = 0;
+
+    /** 最近一次 update() 采到的飞轮转速 (tick/s)，供读取与遥测复用 */
+    private double cachedVelocity = 0;
+    /** 最近一次 update() 采到的电机电流 (A)，供读取与遥测复用 */
+    private double cachedCurrent = 0;
+    /** 最近一次 update() 采到的母线电压 (V)，无有效读数时为 NaN */
+    private double cachedBusVoltage = Double.NaN;
 
     /**
      * @param hardwareMap      硬件映射
@@ -192,7 +199,11 @@ public class Shooter {
 
         // 飞轮速度闭环：参数每帧同步，Dashboard 改动即时生效
         fw.applyTo(calculator);
-        power = calculator.calculate(targetSpeed, motor.getVelocity(), getBusVoltage());
+        // 本帧唯一的硬件采样点：转速 / 电流 / 母线电压全部缓存，getter 与遥测只读缓存
+        cachedVelocity = motor.getVelocity();
+        cachedCurrent = motor.getCurrent(CurrentUnit.AMPS);
+        cachedBusVoltage = scanBusVoltage();
+        power = calculator.calculate(targetSpeed, cachedVelocity, cachedBusVoltage);
         motor.setPower(power);
 
         return isReady();
@@ -208,7 +219,7 @@ public class Shooter {
         triggerServo.setPosition(params.triggerOffPos);
         motor.setPower(0);
         power = 0;
-        calculator.reset(motor.getVelocity());
+        calculator.reset(cachedVelocity);
     }
 
     // ==================== 读取 ====================
@@ -238,9 +249,9 @@ public class Shooter {
         return name;
     }
 
-    /** @return 当前飞轮转速 (tick/s) */
+    /** @return 最近一次 update() 采到的飞轮转速 (tick/s) */
     public double getVelocity() {
-        return motor.getVelocity();
+        return cachedVelocity;
     }
 
     /** @return 最近一次下发的目标转速 (tick/s) */
@@ -263,15 +274,23 @@ public class Shooter {
         return power;
     }
 
-    /** @return 电机电流 (A) */
+    /** @return 最近一次 update() 采到的电机电流 (A) */
     public double getCurrent() {
-        return motor.getCurrent(org.firstinspires.ftc.robotcore.external.navigation.CurrentUnit.AMPS);
+        return cachedCurrent;
     }
 
     /**
-     * @return 母线电压 (V)：全部电压传感器中正读数的最小值；无有效读数时 NaN
+     * @return 最近一次 update() 采到的母线电压 (V)；无有效读数时 NaN
      */
     public double getBusVoltage() {
+        return cachedBusVoltage;
+    }
+
+    /**
+     * 遍历全部电压传感器采样母线电压：取所有正读数中的最小值。
+     * 只在 {@link #update()} 内调用，其他接口只读 {@link #cachedBusVoltage}。
+     */
+    private double scanBusVoltage() {
         double result = -1;
         for (VoltageSensor sensor : voltageSensors) {
             double voltage = sensor.getVoltage();
@@ -289,7 +308,7 @@ public class Shooter {
      */
     public void setTelemetry() {
         telemetry.addData(name + " speed target (tick/s)", targetSpeed);
-        telemetry.addData(name + " speed current (tick/s)", "%.0f", motor.getVelocity());
+        telemetry.addData(name + " speed current (tick/s)", "%.0f", cachedVelocity);
         telemetry.addData(name + " power", "%.4f", power);
         telemetry.addData(name + " pitch", "%.3f", targetPitch);
         telemetry.addData(name + " trigger released", triggerReleased);
