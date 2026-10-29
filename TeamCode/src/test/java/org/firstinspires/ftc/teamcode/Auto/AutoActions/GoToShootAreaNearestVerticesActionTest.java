@@ -25,33 +25,19 @@ public class GoToShootAreaNearestVerticesActionTest {
     }
 
     @Test
-    public void run_firstLegRunningThenBothDone_returnsTrueThenFalse() {
+    public void run_delegatesToSingleTrajectory() {
         Pose2d start = new Pose2d(81, -12, 0);
         try (MockRobot m = new MockRobot(start)) {
-            // 第1帧第一段运行中(true)；第2帧第一段结束(false)且第二段也结束(false)
-            when(m.trajectoryAction.run(any(TelemetryPacket.class)))
-                    .thenReturn(true, false, false);
+            when(m.trajectoryAction.run(any(TelemetryPacket.class))).thenReturn(true);
             GoToShootAreaNearestVerticesAction action =
                     new GoToShootAreaNearestVerticesAction(TeamColor.RED, HypParams.RedAudienceUp);
 
-            assertTrue(action.run(new TelemetryPacket()));   // 第一段运行中
-            assertFalse(action.run(new TelemetryPacket()));  // 第一段结束 + 第二段结束
-        }
-    }
+            // 单段连续轨迹：运行中返回 true
+            assertTrue(action.run(new TelemetryPacket()));
 
-    @Test
-    public void run_firstLegDoneSecondLegRunning_thenDone() {
-        Pose2d start = new Pose2d(81, -12, 0);
-        try (MockRobot m = new MockRobot(start)) {
-            // 第1帧第一段结束(false)、第二段运行中(true)；第2帧第二段运行中(true)；第3帧第二段结束(false)
-            when(m.trajectoryAction.run(any(TelemetryPacket.class)))
-                    .thenReturn(false, true, true, false);
-            GoToShootAreaNearestVerticesAction action =
-                    new GoToShootAreaNearestVerticesAction(TeamColor.BLUE, HypParams.BlueAudienceUp);
-
-            assertTrue(action.run(new TelemetryPacket()));   // 第一段结束，第二段运行中
-            assertTrue(action.run(new TelemetryPacket()));   // 第二段运行中
-            assertFalse(action.run(new TelemetryPacket()));  // 第二段结束
+            // 轨迹结束后返回 false（无第二段中途停顿）
+            when(m.trajectoryAction.run(any(TelemetryPacket.class))).thenReturn(false);
+            assertFalse(action.run(new TelemetryPacket()));
         }
     }
 }

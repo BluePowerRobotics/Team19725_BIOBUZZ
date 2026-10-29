@@ -19,6 +19,12 @@
 4. **Dashboard 调参**：带 `@Config` 的 Action，其 `public static` 参数可在 FTC Dashboard
    运行时实时修改，无需重新部署。
 5. **单位**：坐标英寸，角度弧度（`strafeToLinearHeading`），时间毫秒。
+6. **时间最优**：所有移动类 Action 都必须以最短时间走完整条路径——
+   起步冲到最大速度、中段巡航、末端最快停止（梯形速度曲线）。
+   实现方式：**一段移动只用一个 `actionBuilder` 链**，中间点作为链式途经点
+   （段间速度连续、不中途停车）；约束来源为 `MecanumDrive.Params` 五参数。
+   原理、标定与验证方法见
+   [`RoadRunner/时间最优运动.md`](../../RoadRunner/时间最优运动.md)。
 
 ## Action 一览
 
@@ -26,11 +32,16 @@
 |--------|------|---------|
 | `GoToStopPose` | 前往停车位姿并停车 | `(MecanumDrive drive, Pose2d stopPose)` |
 | `GoToShootAreaAction` | 抵达指定发射区域内离机器人最近的点，车头预瞄指定球门 | `(TeamColor, int areaIndex, Pose2d goal)` |
-| `GoToShootAreaNearestVerticesAction` | 依次到两个发射区域各自距原点最近的顶点 | `(TeamColor, Pose2d goal)` |
+| `GoToShootAreaNearestVerticesAction` | 单段连续轨迹依次经过两个发射区域各自距原点最近的顶点 | `(TeamColor, Pose2d goal)` |
 | `GoToEatPointAction` | 到指定取球点（intake 到位、车头朝取球点） | `(int pointIndex)` |
 | `GoToNearestEatPointAction` | 自动选近的取球点并前往 | 无 |
+| `GoToUnvisitedEatPointViaHiveAction` | 经 Hive 正下方前往此前未访问的取球点 | `(TeamColor)` |
+| `GoToOtherShootAreaViaHiveAction` | 经 Hive 正下方前往另一发射区域并预瞄球门 | `(TeamColor, Pose2d goal)` |
+| `GoToUnvisitedEatPointAvoidHiveAction` | 绕开 Hive（外侧）前往此前未访问的取球点 | `(TeamColor)` |
+| `GoToOtherShootAreaAvoidHiveAction` | 绕开 Hive（外侧）前往另一发射区域并预瞄球门 | `(TeamColor, Pose2d goal)` |
 | `AutoAimAction` | 原地 PD 转向，自动锁定当前 HIVE 侧球门 | `(TeamColor)` |
 | `EatAction` | 集球器以吃球速度运转指定时长后停转 | `(Sweeper)` 或 `(Sweeper, long durationMs)` |
+| `AdaptiveParkAction` | T-3s 检测整机是否接触场地边框，接触则开到安全位置停靠，否则原地停止 | `(MecanumDrive, ElapsedTime matchTime, long durationMs, long leadTimeMs)` |
 
 ---
 
@@ -65,10 +76,9 @@ new GoToShootAreaAction(TeamColor.RED,
 **作用**：
 1. 计算机器人到本颜色两个发射区域边界的最近距离，确定最近区域与另一区域；
 2. 分别取两个多边形中距场地原点最近的顶点，航向指向传入的具体球门；
-3. 先驶向最近区域的顶点，停稳后再驶向另一区域的顶点（两段轨迹依次执行）。
-
-**注意**：第二段轨迹以第一段名义终点为起点构造，故第一段有跟踪误差时第二段起点
-与实际位姿存在小幅偏差。
+3. 在**同一个** `actionBuilder` 链上用两次 `strafeToLinearHeading` 构建**单段连续轨迹**：
+   起点 → 最近区域顶点 → 另一区域顶点；两个顶点均为途经点，机器人在巡航中依次通过
+   （**不中途停车**），以最短时间完成整条路径。
 
 **构造**：
 ```java
@@ -92,7 +102,71 @@ new GoToShootAreaNearestVerticesAction(TeamColor.RED, HypParams.RedAudienceUp);
 
 **构造**：`new GoToNearestEatPointAction()`。
 
-## 6. AutoAimAction
+## Hive 路线几何约束（`GoTo*ViaHive` / `GoTo*AvoidHive` 共用）
+
+以下 4 个 Action 均继承 `HiveRouteAction` 基类，由 `utility/HiveRoutePlanner` 生成途经点，
+保证对外接矩形（整机轮廓）的几何约束：
+
+- **Hive 正下方矩形**：红队 x∈[-24,24]、y∈[-25,-1]（`HypParams.HiveRectRed`）；
+  蓝队为**中心对称**区域 x∈[-24,24]、y∈[1,25]（`HypParams.HiveRectBlue`）。
+- **Hive 禁线**：红队为 (24,-24)–(-24,-24) 两点间线段（`HypParams.HiveForbiddenLineRedA/B`）；
+  蓝队为 (24,24)–(-24,24)（`HypParams.HiveForbiddenLineBlueA/B`）。
+- **整机轮廓**：底盘外接矩形，半长 / 半宽为 `HypParams.chassisHalfLengthIn` /
+  `chassisHalfWidthIn`，由 `ChassisGeometry.footprintPolygon` 生成。
+- **通过 Hive 正下方**（`throughHive=true`）：轨迹中途存在整机外接矩形**完全落入矩形内**
+  的时刻（`HiveRoutePlanner.isFootprintInsideHiveRect`）。
+- **绕开 Hive**（`throughHive=false`）：中转路线整机始终位于矩形之外。
+
+两者都**不得与 Hive 禁线接触**（`HiveRoutePlanner.isFootprintTouchingForbiddenLine`）。
+
+**规划策略**：中转途经点航向统一为 0（面向 +x），使外接矩形轴对齐；内车道
+`y=±12.5`（禁线与矩形内侧边界的中点），纵向车道 `x=±(24 + 对角半长 + 间隙)`、
+外侧车道 `y=±(25 + 对角半长 + 间隙)`（对角半长 = √(半长²+半宽²)，间隙
+`HypParams.hiveAvoidClearanceIn`）。
+
+**约束边界**：起点、终点分别位于发射区域 / 取球点，可能本身就贴着矩形边缘
+（发射区域与矩形相邻），因此「整机完全位于矩形之外」仅对**中转途经点及其间的车道段**
+成立。车道取值与间隙需**实机标定**。
+
+**队伍对称**：蓝队全部几何为中心对称——取球点取 `(x,y)->(-x,-y)`、矩形与禁线为红队的
+中心对称、车道 y 取反、纵向车道 x 相同。
+
+## 6. GoToUnvisitedEatPointViaHiveAction
+
+**作用**：从机器人所在发射区域出发，**经 Hive 正下方**前往此前未到达过的吸球点。
+1. 「未访问取球点」由 `utility/EatPointTracker` 共享状态决定：在未访问的取球点中选距
+   机器人最近者（两个都已访问时退回取最近者）；红队用共享取球点，蓝队用其中心对称点；
+2. 由 `ChassisGeometry.centerPoseFromIntakeTarget` 反推使 intake 到位、车头朝取球点的中心位姿；
+3. 途经点由 `HiveRoutePlanner.waypoints(..., throughHive=true)` 生成；
+4. 到达后 `onComplete()` 调用 `EatPointTracker.markVisited(pointIndex)`。
+
+**构造**：`new GoToUnvisitedEatPointViaHiveAction(TeamColor.RED)`。
+**访问记账**：由 `AutoRed` / `AutoBlue` 在自动阶段开始时调用 `EatPointTracker.clear()` 清空。
+
+## 7. GoToOtherShootAreaViaHiveAction
+
+**作用**：从机器人所在发射区域出发，**经 Hive 正下方**前往**另一个发射区域**。
+1. 「所在发射区域」按当前位姿自动判断（在位姿内取该区域；否则取边界最近者）；
+2. 终点为另一发射区域内距机器人最近的点，航向指向调用方指定的单个球门
+   （与手动阶段自动瞄准一致，精确瞄准由后续 `AutoAimAction` 完成）；
+3. 途经点由 `HiveRoutePlanner.waypoints(..., throughHive=true)` 生成。
+
+**构造**：`new GoToOtherShootAreaViaHiveAction(TeamColor.RED, HypParams.RedAudienceUp)`。
+
+## 8. GoToUnvisitedEatPointAvoidHiveAction
+
+**作用**：从机器人所在发射区域出发，**绕开 Hive**（经非 Hive 正下方，沿矩形外侧）前往
+此前未到达过的吸球点。终点选择同 `GoToUnvisitedEatPointViaHiveAction`，路径由
+`HiveRoutePlanner.waypoints(..., throughHive=false)` 生成（沿外侧车道 `y=±39.7` 绕过矩形）。
+**构造**：`new GoToUnvisitedEatPointAvoidHiveAction(TeamColor.RED)`。
+
+## 9. GoToOtherShootAreaAvoidHiveAction
+
+**作用**：从机器人所在发射区域出发，**绕开 Hive**（外侧）前往**另一个发射区域**，其余同
+`GoToOtherShootAreaViaHiveAction`，仅路径模式不同。
+**构造**：`new GoToOtherShootAreaAvoidHiveAction(TeamColor.RED, HypParams.RedAudienceUp)`。
+
+## 10. AutoAimAction
 
 **作用**：每帧读融合位姿，依据 `RobotPosition.getHiveState()` 选择球门
 （`AUDIENCE_UP→Up`、`AUDIENCE_DOWN→Down`、`MIDDLE→保持上次锁定，无历史默认 Up`），
@@ -118,7 +192,7 @@ new GoToShootAreaNearestVerticesAction(TeamColor.RED, HypParams.RedAudienceUp);
 
 **构造**：`new AutoAimAction(TeamColor.RED)`。
 
-## 7. EatAction
+## 11. EatAction
 
 **作用**：每帧 `sweeper.setEat()` + `sweeper.update()`（Sweeper 每帧自动归零目标，
 必须每帧重新置位），持续到时后 `setStop()` 并结束。
@@ -133,13 +207,116 @@ new EatAction(sweeper);                       // 用 eatDurationMs 默认时长
 new EatAction(sweeper, 1500);                 // 指定时长
 ```
 
+## 12. AdaptiveParkAction（自适应停靠）
+
+**作用**：自动阶段结束前 **3 秒**（T-3s）检测整机外接矩形是否接触场地边框，并据此决定
+**本局停靠点**。停靠点由当时位姿实时解算，**不是固定点**。
+
+**场地边界**：12 ft × 12 ft 场地以原点为中心，边界为 `|x| = |y| = 72 in`
+（`HypParams.fieldHalfSizeIn`）。
+
+**判定与动作**：
+
+| 检测结果 | 动作 | 停靠点 |
+|---------|------|--------|
+| 四角任一到达/越过 ±72 in（接触） | 沿 `strafeToLinearHeading` 轨迹开到最小平移解 | 解算出的安全位姿（动态） |
+| 四角全部在边界内（不接触） | `setDrivePowers(0,0,0)` 原地停止 | 检测时刻的当前位姿 |
+
+**最小平移解**（`safeParkPose`）：设底盘半长 / 半宽为 `L` / `W`，航向 `θ`，求旋转矩形的
+轴对齐半投影
+
+```
+ex = |L·cosθ| + |W·sinθ|
+ey = |L·sinθ| + |W·cosθ|
+```
+
+再把中心夹到 `[-limit+ex, limit-ex]`（y 同理），其中
+`limit = fieldHalfSizeIn - parkBorderMarginIn`。这样得到的**轴对齐包围盒**完全落在安全区内，
+且位移最小、**不改变航向**。
+
+**执行时序**：
+
+1. 未到 T-3s：每帧保持电机停止并返回 `true`（可提前入队，作为队列最后一个元素）；
+2. 到 T-3s：检测一次，记录 `borderContact` 与 `parkPose`；
+3. 接触 → 建轨迹并跟随；不接触 → 停车并立刻返回 `false`；
+4. 轨迹结束后再次停车并返回 `false`。
+
+**构造**（与 OpMode 共用同一个比赛计时器）：
+
+```java
+ElapsedTime matchTime = new ElapsedTime();   // START 后创建
+
+actionRunner.clear();
+actionRunner.add(new AdaptiveParkAction(
+        drive, matchTime,
+        HypParams.AUTONOMOUS_DURATION_MS,
+        HypParams.PARK_TIME_THRESHOLD_MS));
+```
+
+**参数说明**（均在 `Parameter/HypParams.java`，`@Config` 可在 Dashboard 实时调整）：
+
+| 参数 | 默认值 | 单位 | 含义 |
+|------|--------|------|------|
+| `AUTONOMOUS_DURATION_MS` | 30000 | ms | 自动阶段总时长，作为倒计时基准 |
+| `PARK_TIME_THRESHOLD_MS` | 3000 | ms | 停靠触发阈值（剩余时间 ≤ 该值即检测） |
+| `fieldHalfSizeIn` | 72.0 | in | 场地半边长（12 ft × 12 ft → ±72） |
+| `parkBorderMarginIn` | 3.0 | in | 停靠时整机外接盒与边框保留的安全间隙 |
+| `chassisHalfLengthIn` / `chassisHalfWidthIn` | 见 HypParams | in | 整机轮廓半长 / 半宽，用于外接矩形 |
+
+**遥测键**（FTC Dashboard）：
+
+| 键 | 含义 |
+|----|------|
+| `AdaptivePark` | 阶段文字（`waiting until T-3s` / `no border contact -> stop` / `border contact -> moving inside`） |
+| `AdaptivePark remaining(ms)` | 等待阶段的剩余时间 |
+| `AdaptivePark park x` / `park y` / `park heading(deg)` | 本局停靠点 |
+
+**对外查询**：`borderContact()`、`parkPose()`。
+
+**注意**：
+
+- 位姿来自融合定位，本 Action **不推进定位器**（由 OpMode 每帧唯一一次 `update()`）。
+- 判据依赖定位精度；若实车贴边仍有压线风险，调大 `parkBorderMarginIn`（如 4~5 in）。
+- 极端情况下（外接盒大于安全区）退回场地中心 `(0,0)`，航向不变。
+
 ## 典型串联顺序
 
 ```
 GoToShootAreaAction → AutoAimAction →（发射）
 GoToEatPointAction / GoToNearestEatPointAction → EatAction
-任意阶段超时 → ActionRunner.clear() + GoToStopPose
+GoToOtherShootAreaViaHiveAction / GoToOtherShootAreaAvoidHiveAction → AutoAimAction →（发射）
+GoToUnvisitedEatPointViaHiveAction / GoToUnvisitedEatPointAvoidHiveAction → EatAction
+剩余时间 ≤ PARK_TIME_THRESHOLD_MS → ActionRunner.clear() + AdaptiveParkAction
 ```
+
+## 自动阶段主程序（AutoRed / AutoBlue）
+
+两个 OpMode 使用同一套状态机，仅队伍颜色、起始位姿与预瞄准球门不同：
+
+| 项目 | AutoRed | AutoBlue |
+|------|---------|----------|
+| 队伍 | `TeamColor.RED` | `TeamColor.BLUE` |
+| 起始位姿 | `HypParams.startPoseRed` | `HypParams.startPoseBlue` |
+| 预瞄准球门 | `HypParams.RedAudienceUp` | `HypParams.BlueAudienceUp` |
+
+**状态机与动作循环**（动作队列空闲时投递下一段）：
+
+```
+TO_EAT_POINT   → GoToUnvisitedEatPointAvoidHiveAction（绕开 Hive 去未访问取球点）
+EATING         → EatAction
+TO_SHOOT_AREA  → GoToOtherShootAreaViaHiveAction（经 Hive 正下方去另一发射区）
+TO_SHOOT_AREA 完成 → 回到 TO_EAT_POINT，持续循环
+PARKING        → AdaptiveParkAction
+STOP
+```
+
+**停靠的硬保障**：主循环每帧计算 `remainingMs`；一旦
+`remainingMs <= PARK_TIME_THRESHOLD_MS` 且尚未投递过停靠动作，立即
+`actionRunner.clear()` 中断**正在执行**的任意 Action，再投递 `AdaptiveParkAction`，
+并用 `parkScheduled` 保证只投递一次。因此即使上一段长轨迹尚未跑完，T-3s 也一定会转入停靠。
+
+**结束收尾**：`RobotStateStore.savePose(...)` 记录结束位姿，`sweeper.setStop()` +
+`chassis.stop()` 确保底盘与集球器停稳。
 
 ## 实机测试
 
@@ -153,8 +330,16 @@ GoToEatPointAction / GoToNearestEatPointAction → EatAction
 | `Test: GoToShootAreaVertices` | `GoToShootAreaNearestVerticesAction` |
 | `Test: GoToEatPoint` | `GoToEatPointAction` |
 | `Test: GoToNearestEatPoint` | `GoToNearestEatPointAction` |
+| `Test: GoToUnvisitedEatPointViaHive` | `GoToUnvisitedEatPointViaHiveAction` |
+| `Test: GoToOtherShootAreaViaHive` | `GoToOtherShootAreaViaHiveAction` |
+| `Test: GoToUnvisitedEatPointAvoidHive` | `GoToUnvisitedEatPointAvoidHiveAction` |
+| `Test: GoToOtherShootAreaAvoidHive` | `GoToOtherShootAreaAvoidHiveAction` |
 | `Test: AutoAim` | `AutoAimAction` |
 | `Test: Eat` | `EatAction` |
+
+> `AdaptiveParkAction` 没有独立测试 OpMode：它的触发依赖比赛计时与自动阶段完整流程，
+> 请通过 `AutoRed` / `AutoBlue` 实机联调验证（重点观察 T-3s 是否停车、接触时是否向场内移动、
+> Dashboard 的 `AdaptivePark park x/y` 是否为场内位置）。
 
 **Init 阶段按键选择**：
 

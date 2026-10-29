@@ -17,11 +17,14 @@ import org.firstinspires.ftc.teamcode.Controllers.Shooter.PrototypeShooter.Proto
  *   d = dHigh  (ω* - ω > 0)
  *   d = dLow   (ω* - ω &lt; 0)
  * </pre>
- * 系统产生极限环振荡，测量振荡幅值 {@code a} 与周期 {@code Tu}，临界增益近似：
+ * 系统产生极限环振荡，测量振荡幅值 {@code a} 与周期 {@code Tu}，临界增益：
  * <pre>
- *   Ku = 4·Δd / (π·a),  Δd = dHigh - dLow
+ *   Ku = 4·h / (π·a),   h = Δd / 2 = (dHigh - dLow) / 2   →  Ku = 2·Δd / (π·a)
  *   Kp = 0.45·Ku     Ki = 0.54·Ku/Tu
  * </pre>
+ * <b>量纲注意</b>：{@code h} 是继电器输出的<b>半幅</b>，不是全幅 Δd。以 Δd=0.2、a=165 tick/s 为例，
+ * 正确 Ku = 2·0.2/(π·165) = 7.716e-4；若误把 Δd 当半幅（写成 4Δd/(πa)）会得到 1.543e-3，
+ * 整整高估 2 倍——本文件 2026-10-18 起已修正，旧 CSV 里的 Ku/Kp/Ki 记得除以 2 再用。
  *
  * <p>相比方法二更安全：振荡幅值由 dHigh/dLow 直接限定。
  *
@@ -143,7 +146,8 @@ public class RelayFeedbackTuner extends LinearOpMode {
 
         double deltaD = dHigh - dLow;
         if (amp > 1e-6 && !Double.isNaN(tu) && tu > 0) {
-            ku = 4.0 * deltaD / (Math.PI * amp);
+            // h = Δd/2 是继电器输出的半幅：Ku = 4h/(πa) = 2Δd/(πa)
+            ku = 2.0 * deltaD / (Math.PI * amp);
             sugKp = 0.45 * ku;
             sugKi = 0.54 * ku / tu;
             hasResult = true;

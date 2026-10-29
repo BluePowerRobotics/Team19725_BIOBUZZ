@@ -3,117 +3,161 @@ package org.firstinspires.ftc.teamcode.utility.Shooter;
 /**
  * 飞轮（发射机构）速度环计算器 —— <b>纯计算类</b>，不持有任何硬件引用。
  *
- * <p>本类只做一件事：{@code (目标转速 ω*, 当前转速 ω, dt) → 占空比 duty}。
- * 电机、遥测、硬件初始化全部留在调用方
- * （{@code Controllers.Shooter.PrototypeShooter.PrototypeShooter}），
- * 因此本类可离线跑（给一串转速序列即可复算整条控制轨迹），也便于单独做数值验证。
+ * <p>本类只做一件事：{@code (目标转速 ω*, 当前转速 ω, 母线电压 V_bus, dt) → 占空比 duty}。
+ * 电机、遥测、硬件初始化全部留在调用方（{@code Controllers.Shooter.PrototypeShooter}、
+ * {@code Controllers.Turret.Shooter}），因此本类可离线复算（给一串采样即可回放整条控制轨迹），
+ * 也便于单独做数值验证。
  *
- * <p><b>控制律</b>（静摩擦前馈 + 一阶稳态前馈 + PI 反馈 + 掉速检测触发补偿）：
+ * <p><b>控制律（第 4 代，2026-10-22）</b>：
  * <pre>
- *   duty = kS·sgn(ω*) + Kff·ω* + Kp·err + Ki·∫err + boost
- *   err  = ω* - ω
- *   duty = sat(duty, dutyMin, dutyMax)
+ *   e_raw  = ω* - ω
+ *   e_f    = ω* - ωf,   ωf = EMA(ω, τ(|e_raw|))          // 误差调度速度滤波
+ *   s      = clamp(V_nom / V_busFilt, sMin, sMax)          // 母线电压归一化（只乘前馈）
+ *   ff     = s·(kS·sgn(ω*) + kff·ω*)
+ *   duty   = sat( ff + kp·e_f + ki·∫e_f , dutyMin, dutyMax )
  * </pre>
- * 其中 ω* 为目标转速、ω 为实测转速，单位统一为 {@code DcMotorEx#getVelocity()} 的 tick/s；
- * 所有增益的量纲均为「占空比」，因此不读取电压传感器，本类直接输出占空比。
- *
- * <p><b>为什么要单独的 kS（静摩擦前馈）</b>：稳态实测占空比与转速的关系不是过原点的直线，
- * 而是 {@code d_ss(ω) = kS + Kff·ω}（kS 来自静摩擦、同步带预紧与齿槽转矩：这部分占空比不产生转速，
- * 只用来「推动」机构）。若只用一个 Kff 过原点拟合，低转速段会系统性欠给、高转速段系统性过给，
- * 差额全部压给积分项，表现为积分长期停在非零值（2026-09-04 实测各工作点 I 项都是 −0.04~−0.06）。
- * 拆出 kS 后积分得以真正回零，换速过渡与掉速补偿的起点都更干净。
- * 注意 {@code sgn(ω*)} 不可省：ω*=0 时该项必须为 0，否则停转指令下飞轮会自己转起来。
- *
- * <p><b>I 项语义（上限 / 生效节点 / 清零节点）</b>
+ * 与第 3 代（含 {@code boost} 掉速补偿）的差别：
  * <ul>
- *   <li>上限：对积分项 {@code Ki·∫err} 限幅到 ±{@link #maxI}，饱和时把内部积分回算为 ±maxI/Ki，
- *       防止积分无界增长（抗饱和）。</li>
- *   <li>生效节点：仅当 {@code targetVel != 0} 且 {@code |err| < iZone} 时才累加积分。</li>
- *   <li>清零节点：① 停机（targetVel == 0）；② 误差带外（|err| ≥ iZone）；③ 触发掉速补偿时。</li>
+ *   <li><b>删除 boost</b>：实测发射时刻输出早已饱和（kp·e 一项就够把输出顶到 1.0），
+ *       boost 的 0.4 在饱和段贡献恒为 0；它唯一真实的作用是把退饱和点从
+ *       {@code e_desat=(1-ff)/kp}（102~165 tick/s）推迟到 {@code e≤0}，即抹掉整段线性收敛，
+ *       结构性造成 +50~90 tick/s 过冲。掉速期间「多给一点」在物理上根本不可能——
+ *       占空比已到 1，电机端电压就是母线电压。</li>
+ *   <li><b>积分冻结</b>：掉速（误差出带）期间积分既不累加也不清零，而是<b>冻结</b>；
+ *       误差回到带内才继续累加。这样恢复过程不攒积分、不产生过冲，靠原有稳态积分削掉残差。</li>
+ *   <li><b>速度滤波</b>：稳态用 τ=t{@link #tauVMax} 压掉 20 tick/s 的量化噪声，
+ *       大误差时 τ 收敛到 {@link #tauVMin}（≈1 帧），避免加速/退饱和滞后。</li>
+ *   <li><b>母线电压归一化</b>：只对前馈做 {@code s} 缩放（不乘反馈），
+ *       让「同一目标转速在不同电量下要的占空比」保持一致，积分不必长期负重。
+ *       电压必须经过长时间常数低通并<b>在掉速期间冻结</b>，否则单发发射造成的
+ *       0.4 s 跌落会被当成电池没电，在恢复期末把前馈放大到 &gt;1，人造出一次饱和。</li>
  * </ul>
  *
- * <p><b>掉速检测的「武装」规则</b>：只有当误差回到 {@link #dropThreshold} 以内（即系统已进入稳态）
- * 之后，掉速检测才被允许触发补偿；目标转速一旦改变立刻重新解除武装。这样从 0 拉起时的正常加速段
- * 不会被误判成掉速（否则 boost 会全程挂着并在到速后造成过冲）。
+ * <p><b>量纲</b>：所有增益单位均为「占空比」，所以本类不直接读写硬件，调用方负责把
+ * {@code DcMotorEx#getVelocity()} 的 tick/s 与 {@code VoltageSensor#getVoltage()} 的 V 传进来。
  *
- * <p><b>参数同步约定</b>：{@link #kff} 等增益字段是 public 可变字段，<b>由调用方每帧同步</b>
- * （见 {@code PrototypeShooter#syncCalculator()}）。这样参数仍留在调用方的 {@code @Config} 静态字段上，
- * FTC Dashboard 的分组与现场整定习惯都不受影响。下面的默认值取自 2026-09-04 实机整定结果
- * （kS=0.02945、kff=0.00038307、kp=0.00181917、ki=0.00259224），仅在独立使用本类时作为合理起点。
+ * <p><b>参数从哪来</b>：一套机器一套参数，见 {@link FlywheelParams}（实机有两套：大球 / 小球）。
+ * 调用方每帧把 {@code FlywheelParams#applyTo(FlywheelCalculator)} 调一遍即可，Dashboard 改动实时生效。
  */
 public class FlywheelCalculator {
 
-    // ==================== 可调参数（调用方每帧同步；单位见注释） ====================
+    // ==================== 可调参数（由 FlywheelParams#applyTo 每帧同步） ====================
+    //
+    // 这里<b>不放工程默认值</b>：一套机器一套参数，唯一出处是 utility/Shooter/FlywheelParams.java
+    // 里的 BIG / SMALL 两个块。调用方必须先 applyTo 再 calculate（Controllers 里都是这么做的），
+    // 否则所有增益为 0、输出恒为 dutyMin。
 
-    /**
-     * 静摩擦前馈 (占空比)：稳态模型 {@code d_ss(ω) = kS + Kff·ω} 的截距，
-     * 即「只对抗摩擦、不产生转速」的那份占空比，按 {@code kS·sgn(ω*)} 施加。
-     */
-    public double kS = 0.02945;
-    /** 稳态前馈增益 (占空比)/(tick/s)，稳态模型斜率 */
-    public double kff = 0.00038307;
+    /** 静摩擦前馈 (占空比)，按 {@code kS·sgn(ω*)} 施加 */
+    public double kS;
+    /** 稳态前馈增益 (占空比)/(tick/s) */
+    public double kff;
     /** 比例增益 (占空比)/(tick/s) */
-    public double kp = 0.00181917;
+    public double kp;
     /** 积分增益 (占空比)/(tick/s·s) */
-    public double ki = 0.00259224;
-
-    /** I 项上限 (占空比)：对积分项 Ki·∫err 的限幅 */
-    public double maxI = 0.3;
-    /** I 项生效节点 (tick/s)：|err| 小于该值时才累加积分 */
-    public double iZone = 500.0;
-
-    /** 掉速判定阈值 (tick/s)：err 超过该值判定为掉速 */
-    public double dropThreshold = 100.0;
-    /** 掉速速率阈值 (tick/s²)：dω/dt 低于其负值判定为掉速 */
-    public double dropRateThreshold = 12000.0;
-
-    /** 掉速补偿增益 (占空比)/(tick/s) */
-    public double kBoost = 0.00362834;
-    /** 掉速补偿上限 (占空比) */
-    public double boostMax = 0.4;
-    /** 掉速补偿持续时长 (s)，超时后自动退出 */
-    public double boostDurationSec = 0.3;
+    public double ki;
+    /** I 项限幅 (占空比) */
+    public double maxI;
 
     /** 输出下限 (占空比) */
-    public double dutyMin = 0.0;
+    public double dutyMin;
     /** 输出上限 (占空比) */
-    public double dutyMax = 1.0;
+    public double dutyMax;
+
+    /** 速度量化台阶 (tick/s) */
+    public double quantStep;
+    /** 稳态误差带比例：eBand = max(settleFrac·|ω*|, 2·quantStep) */
+    public double settleFrac;
+    /** 连续落在误差带内多少帧算到位 */
+    public int settleFrames;
+
+    /** 稳态速度滤波时间常数 (s) */
+    public double tauVMax;
+    /** 大误差速度滤波时间常数 (s) */
+    public double tauVMin;
+    /** 误差调度下拐点（倍 eBand） */
+    public double eLoFrac;
+    /** 误差调度上拐点（倍 eBand） */
+    public double eHiFrac;
+
+    /** 进入掉速态的阈值（倍 eBand） */
+    public double dropEnterFrac;
+    /** 掉速态下积分最长冻结时间 (s) */
+    public double iFreezeTimeoutSec;
+
+    /** 是否启用母线电压归一化（只乘前馈） */
+    public boolean useVoltageNorm;
+    /** 额定母线电压 (V) */
+    public double vBusNominal;
+    /** 归一化系数下限 */
+    public double vScaleMin;
+    /** 归一化系数上限 */
+    public double vScaleMax;
+    /** 母线电压低通时间常数 (s) */
+    public double tauBus;
+    /** 掉速结束后的电压采样 hold-off (s) */
+    public double busHoldOffSec;
+    /** 电压采样最长冻结时间 (s) */
+    public double busFreezeTimeoutSec;
 
     // ==================== 运行时状态 ====================
 
-    /** 最近一次输出的占空比（供遥测） */
+    /** 最近一次输出的占空比 */
     private double duty = 0;
 
-    /** 最近一次控制量各分量的值（供遥测：静摩擦 / 前馈 / 比例 / 积分 / 补偿） */
-    private double lastKSTerm = 0, lastFFTerm = 0, lastPTerm = 0, lastITerm = 0, lastBoostTerm = 0;
+    /** 最近一次控制量各分量（供遥测：静摩擦 / 前馈 / 比例 / 积分） */
+    private double lastKSTerm = 0, lastFFTerm = 0, lastPTerm = 0, lastITerm = 0;
 
-    /** 积分累计量 ∫err·dt (tick/s·s) */
+    /** 积分累计量 ∫e_f·dt (tick/s·s) */
     private double integral = 0;
 
-    /** 上一次的实测转速 (tick/s)，用于估计 dω/dt */
-    private double previousVelocity = 0;
+    /** 滤波后的转速 (tick/s) */
+    private double velocityFilt = 0;
 
-    /** 上一次 calculate 的时间戳 (s) */
-    private double lastTime;
+    /** 最近一次原始误差 / 滤波后误差 (tick/s) */
+    private double errorRaw = 0, errorFilt = 0;
 
-    /** 是否处于掉速补偿状态 */
-    private boolean boostActive = false;
+    /** 当前稳态误差带 (tick/s) */
+    private double eBand = 0;
 
-    /** 补偿已持续时长 (s) */
-    private double boostTimer = 0;
+    /** 当前实际使用的速度滤波时间常数 (s) */
+    private double tauVUsed = 0;
 
-    /** 掉速检测是否已「武装」：只有进入稳态（误差回到阈值内）后才允许触发补偿 */
-    private boolean dropArmed = false;
+    /** 母线电压滤波值 (V)，初值 NaN 表示尚未采样 */
+    private double vBusFilt = Double.NaN;
 
-    /** 上一次的目标转速，用于在目标改变时重新解除武装 */
+    /** 当前电压归一化系数 */
+    private double vScale = 1.0;
+
+    /** 掉速态（误差超出 {@link #dropEnterFrac}·eBand 带，带内退出） */
+    private boolean inDrop = false;
+
+    /** 积分是否处于活跃（累加）状态 */
+    private boolean integralActive = false;
+
+    /** 积分冻结累计时长 / 电压冻结累计时长 / 电压 hold-off 剩余时长 (s) */
+    private double iFrozenT = 0, vFrozenT = 0, busHoldT = 0;
+
+    /** 电压采样当前是否被冻结 */
+    private boolean voltageFrozen = false;
+
+    /** 稳态判据：连续在带内的帧数 */
+    private int settleCnt = 0;
+
+    /** 上一次的目标转速，用于检测目标改变 */
     private double lastTargetVel = Double.NaN;
 
-    /** dt 异常（首帧、长时间停顿、时钟回退）时使用的标称循环周期 (s)，避免微分项发散 */
+    /** 是否已完成首帧初始化（首帧直接用实测值播种，避免滤波器从 0 爬升） */
+    private boolean initialized = false;
+
+    /** dt 异常（首帧、长时间停顿、时钟回退）时使用的标称循环周期 (s) */
     public static final double DEFAULT_DT = 0.02;
 
     public FlywheelCalculator() {
         lastTime = now();
     }
+
+    /** 上一次 calculate 的时间戳 (s)，仅 2 参数/3 参数入口使用 */
+    private double lastTime;
 
     private static double now() {
         return System.nanoTime() / 1e9;
@@ -122,122 +166,287 @@ public class FlywheelCalculator {
     // ==================== 计算 ====================
 
     /**
-     * 单步计算：内部自行推进 dt（用单调时钟）。
+     * 单步计算（内部自行推进 dt，用单调时钟）。
      *
-     * <p>每帧只可调用一次（依赖内部计时器推进 dt、维护积分与补偿状态）。
+     * <p>每帧只可调用一次（内部计时器、滤波器与积分状态会推进）。
      *
      * @param targetVel  目标转速 (tick/s)，0 表示停转
      * @param currentVel 当前转速 (tick/s)
+     * @param vBus       母线电压 (V)；≤1 或 NaN 视为无有效读数（沿用上次滤波值）
      * @return 占空比，已限幅到 [dutyMin, dutyMax]
      */
-    public double calculate(double targetVel, double currentVel) {
+    public double calculate(double targetVel, double currentVel, double vBus) {
         double currentTime = now();
         double dt = currentTime - lastTime;
         lastTime = currentTime;
-        return calculate(targetVel, currentVel, dt);
+        return calculate(targetVel, currentVel, vBus, dt);
     }
 
     /**
-     * 单步计算（显式 dt）—— 纯函数入口，供离线复算与单元测试使用，不读写内部计时器。
+     * 单步计算（显式 dt，含母线电压）—— 实机主入口 / 离线复算入口。
      *
      * @param targetVel  目标转速 (tick/s)
      * @param currentVel 当前转速 (tick/s)
+     * @param vBus       母线电压 (V)；≤1 或 NaN 视为无有效读数
      * @param dt         距上一步的时间 (s)；≤0 或 &gt;1 时用 {@link #DEFAULT_DT} 兜底
      * @return 占空比，已限幅到 [dutyMin, dutyMax]
      */
-    public double calculate(double targetVel, double currentVel, double dt) {
+    public double calculate(double targetVel, double currentVel, double vBus, double dt) {
         if (dt <= 0 || dt > 1.0) {
             dt = DEFAULT_DT;
         }
 
-        double error = targetVel - currentVel;
-        double dVelocity = (currentVel - previousVelocity) / dt;
-        previousVelocity = currentVel;
-
-        // ---- 掉速检测「武装」：只有进入稳态（误差回到阈值内）后才允许触发补偿，
-        //      否则从 0 拉起时的正常加速段会被误判为掉速，导致 boost 全程挂着并造成过冲 ----
-        if (targetVel != lastTargetVel) {
-            dropArmed = false; // 目标改变 → 重新等待进入稳态
+        // ---- 首帧：直接用实测值播种滤波器，避免从 0 爬升造成假的「大误差」 ----
+        if (!initialized) {
+            velocityFilt = currentVel;
+            vBusFilt = validVoltage(vBus) ? vBus : vBusNominal;
             lastTargetVel = targetVel;
-        }
-        if (Math.abs(error) < dropThreshold) {
-            dropArmed = true;
+            initialized = true;
         }
 
-        // ---- 掉速检测与触发补偿 ----
-        boolean dropDetected = dropArmed && targetVel != 0
-                && (error > dropThreshold || dVelocity < -dropRateThreshold);
-        if (dropDetected) {
-            boostActive = true;
-            boostTimer = 0.0;
-            integral = 0.0; // 清零节点③：触发补偿时清零，避免与 boost 叠加
+        // ---- 目标改变：清掉瞬态状态（不清积分——积分由停机/超时负责） ----
+        if (targetVel != lastTargetVel) {
+            lastTargetVel = targetVel;
+            inDrop = false;
+            iFrozenT = 0.0;
+            vFrozenT = 0.0;
+            busHoldT = 0.0;
+            settleCnt = 0;
         }
-        if (boostActive) {
-            boostTimer += dt;
-            if (boostTimer >= boostDurationSec || error <= 0) {
-                boostActive = false; // 恢复到位或超时退出
+
+        // ---- 误差与稳态误差带 ----
+        errorRaw = targetVel - currentVel;
+        eBand = bandFor(targetVel);
+
+        // ---- 掉速态：进入用 dropEnterFrac·eBand，退出用 eBand（滞回，防抖） ----
+        if (targetVel == 0) {
+            inDrop = false;
+        } else if (Math.abs(errorRaw) > dropEnterFrac * eBand) {
+            inDrop = true;
+        } else if (Math.abs(errorRaw) < eBand) {
+            inDrop = false;
+        }
+
+        // ---- 速度滤波：τ 由原始误差调度（不能用滤波后的误差，否则会自反馈滞回） ----
+        tauVUsed = tauForError(Math.abs(errorRaw));
+        double alpha = dt / (tauVUsed + dt);
+        velocityFilt += alpha * (currentVel - velocityFilt);
+        errorFilt = targetVel - velocityFilt;
+
+        // ---- 母线电压低通（掉速期间冻结）+ 归一化系数 ----
+        updateBusVoltage(vBus, dt);
+        vScale = 1.0;
+        if (useVoltageNorm && validVoltage(vBusFilt)) {
+            vScale = vBusNominal / vBusFilt;
+            if (vScale < vScaleMin) {
+                vScale = vScaleMin;
+            } else if (vScale > vScaleMax) {
+                vScale = vScaleMax;
             }
         }
 
-        // ---- 积分：生效节点 / 清零节点 ----
-        boolean iActive = targetVel != 0 && Math.abs(error) < iZone;
-        if (iActive) {
-            integral += error * dt; // 生效节点：目标非 0 且 |err| < iZone
-        } else {
-            integral = 0.0; // 清零节点①②：停机 或 |err| ≥ iZone
-        }
-        double iTerm = ki * integral;
-        // 上限：对积分项回算限幅，防止积分饱和
-        if (iTerm > maxI) {
-            iTerm = maxI;
-            if (ki != 0) integral = maxI / ki;
-        } else if (iTerm < -maxI) {
-            iTerm = -maxI;
-            if (ki != 0) integral = -maxI / ki;
-        }
-
-        // ---- 静摩擦前馈 + 稳态前馈 + PI + 补偿，输出占空比 ----
-        double boost = boostActive ? Math.max(0.0, Math.min(kBoost * error, boostMax)) : 0.0;
+        // ---- 前馈（静摩擦 + 稳态）：只有这两项乘电压归一化系数 ----
         // sgn(ω*)：ω*=0 时为 0，避免停转指令下静摩擦前馈把飞轮推转
         double ffSign = targetVel > 0 ? 1.0 : (targetVel < 0 ? -1.0 : 0.0);
-        lastKSTerm = kS * ffSign;
-        lastFFTerm = kff * targetVel;
-        lastPTerm = kp * error;
-        lastITerm = iTerm;
-        lastBoostTerm = boost;
-        double out = lastKSTerm + lastFFTerm + lastPTerm + lastITerm + lastBoostTerm;
-        if (out > dutyMax) out = dutyMax;
-        if (out < dutyMin) out = dutyMin;
+        lastKSTerm = vScale * kS * ffSign;
+        lastFFTerm = vScale * kff * targetVel;
 
-        this.duty = out;
+        // ---- 比例 ----
+        lastPTerm = kp * errorFilt;
+
+        // ---- 积分：只在稳态误差带内累加；停机清零；带外/掉速冻结（超时强制清零） ----
+        integralActive = targetVel != 0 && !inDrop && Math.abs(errorRaw) < eBand;
+        if (integralActive) {
+            integral += errorFilt * dt;
+            iFrozenT = 0.0;
+        } else if (targetVel == 0) {
+            integral = 0.0;
+            iFrozenT = 0.0;
+        } else {
+            iFrozenT += dt;
+            if (iFreezeTimeoutSec > 0 && iFrozenT >= iFreezeTimeoutSec) {
+                integral = 0.0; // 冻结超时：防「误差长期卡在带外 → 积分永久失效」
+                iFrozenT = 0.0;
+            }
+        }
+        double iTerm = ki * integral;
+        // 抗饱和：对积分项回算限幅
+        if (iTerm > maxI) {
+            iTerm = maxI;
+            if (ki != 0) {
+                integral = maxI / ki;
+            }
+        } else if (iTerm < -maxI) {
+            iTerm = -maxI;
+            if (ki != 0) {
+                integral = -maxI / ki;
+            }
+        }
+        lastITerm = iTerm;
+
+        // ---- 合成输出 ----
+        double out = lastKSTerm + lastFFTerm + lastPTerm + lastITerm;
+        if (out > dutyMax) {
+            out = dutyMax;
+        }
+        if (out < dutyMin) {
+            out = dutyMin;
+        }
+        duty = out;
+
+        // ---- 到位判据：连续 settleFrames 帧误差在带内 ----
+        boolean nearBand = targetVel != 0 && Math.abs(errorRaw) <= eBand;
+        if (nearBand) {
+            if (settleCnt < settleFrames) {
+                settleCnt++;
+            }
+        } else {
+            settleCnt = 0;
+        }
+
         return out;
+    }
+
+    /**
+     * 单步计算（内部推进 dt，<b>不含</b>母线电压）—— 兼容旧调用方式，实机请用带 vBus 的重载。
+     *
+     * <p>注意：Java 无法用「第三参数的含义」区分重载，因此<b>没有</b>
+     * {@code calculate(t, ω, dt)} 这个三参数无电压版本。离线回放无电压列的旧日志请用
+     * {@code calculate(t, ω, Double.NaN, dt)}（等价于电压归一化关闭）。
+     *
+     * @param targetVel  目标转速 (tick/s)
+     * @param currentVel 当前转速 (tick/s)
+     * @return 占空比
+     */
+    public double calculate(double targetVel, double currentVel) {
+        return calculate(targetVel, currentVel, Double.NaN);
+    }
+
+    // ==================== 内部工具 ====================
+
+    /**
+     * 稳态误差带：{@code max(settleFrac·|ω*|, 2·quantStep)}。
+     *
+     * <p>下限 2 个量化台阶是物理下限——再小就没有意义，编码器给不出那样的分辨率；
+     * 上限保证高转速下相对误差不会被压到 0（否则永远「不到位」）。
+     *
+     * @param targetVel 目标转速 (tick/s)
+     * @return 误差带 (tick/s)
+     */
+    private double bandFor(double targetVel) {
+        double floor = 2.0 * quantStep;
+        double relative = settleFrac * Math.abs(targetVel);
+        return relative > floor ? relative : floor;
+    }
+
+    /**
+     * 误差调度的速度滤波时间常数：{@code |e| ≤ eLoFrac·eBand} 用 tauVMax，
+     * {@code |e| ≥ eHiFrac·eBand} 用 tauVMin，中间线性过渡。
+     *
+     * <p>拐点必须落在 eBand 附近：残余过冲 ≈ 饱和加速度 × τ(eBand)，
+     * 若 eBand 处 τ 还停在 30 ms，1700 目标下会留下 1146×0.03 ≈ 34 tick/s 的过冲。
+     *
+     * @param absError 原始误差绝对值 (tick/s)
+     * @return τ (s)
+     */
+    private double tauForError(double absError) {
+        double lo = eLoFrac * eBand;
+        double hi = eHiFrac * eBand;
+        double blend;
+        if (hi <= lo) {
+            blend = 1.0;
+        } else {
+            blend = (absError - lo) / (hi - lo);
+            if (blend < 0) {
+                blend = 0;
+            } else if (blend > 1) {
+                blend = 1;
+            }
+        }
+        return tauVMax + (tauVMin - tauVMax) * blend;
+    }
+
+    /** @return 电压读数是否有效 */
+    private static boolean validVoltage(double v) {
+        return !Double.isNaN(v) && v > 1.0;
+    }
+
+    /**
+     * 母线电压低通：<b>掉速期间与 hold-off 期间冻结</b>，其余时间按 τ={@link #tauBus} 做 EMA。
+     *
+     * <p>冻结是「状态保持」而不是清零，因此解冻时没有阶跃；掉速结束后的
+     * {@link #busHoldOffSec} 用于跳过电池电压的 RC 回弹段。
+     *
+     * @param vBus 原始电压读数 (V)
+     * @param dt   步长 (s)
+     */
+    private void updateBusVoltage(double vBus, double dt) {
+        boolean valid = validVoltage(vBus);
+        if (inDrop) {
+            busHoldT = busHoldOffSec;
+        } else if (busHoldT > 0) {
+            busHoldT -= dt;
+            if (busHoldT < 0) {
+                busHoldT = 0;
+            }
+        }
+
+        voltageFrozen = inDrop || busHoldT > 0;
+        if (voltageFrozen) {
+            vFrozenT += dt;
+            // 冻结超时：强制用当前读数重新播种，避免长期冻结导致 s 永久失真
+            if (valid && busFreezeTimeoutSec > 0 && vFrozenT >= busFreezeTimeoutSec) {
+                vBusFilt = vBus;
+                vFrozenT = 0;
+            }
+        } else {
+            vFrozenT = 0;
+            if (valid) {
+                if (!validVoltage(vBusFilt)) {
+                    vBusFilt = vBus;
+                } else {
+                    double alpha = dt / (tauBus + dt);
+                    if (alpha > 1) {
+                        alpha = 1;
+                    }
+                    vBusFilt += alpha * (vBus - vBusFilt);
+                }
+            }
+        }
     }
 
     // ==================== 状态重置 ====================
 
-    /** 重置积分与微分状态（从开环切回闭环前调用），假定当前转速为 0 */
+    /** 重置全部瞬态状态（从开环切回闭环前调用），假定当前转速为 0 */
     public void reset() {
         reset(0.0);
     }
 
     /**
-     * 重置积分与微分状态，并把「上一次转速」设为给定值（避免切回闭环的瞬间微分项冲击）。
+     * 重置全部瞬态状态，并用给定转速播种速度滤波器（避免切回闭环的瞬间产生假的误差冲击）。
      *
      * @param currentVelocity 当前实测转速 (tick/s)
      */
     public void reset(double currentVelocity) {
         integral = 0.0;
-        previousVelocity = currentVelocity;
-        boostActive = false;
-        boostTimer = 0.0;
-        dropArmed = false;
-        lastTargetVel = Double.NaN;
-        lastKSTerm = 0;
-        lastFFTerm = 0;
-        lastPTerm = 0;
-        lastITerm = 0;
-        lastBoostTerm = 0;
+        velocityFilt = currentVelocity;
+        errorRaw = 0.0;
+        errorFilt = 0.0;
+        eBand = 0.0;
+        tauVUsed = tauVMax;
         duty = 0.0;
+        lastKSTerm = 0.0;
+        lastFFTerm = 0.0;
+        lastPTerm = 0.0;
+        lastITerm = 0.0;
+        inDrop = false;
+        integralActive = false;
+        iFrozenT = 0.0;
+        vFrozenT = 0.0;
+        busHoldT = 0.0;
+        voltageFrozen = false;
+        settleCnt = 0;
+        lastTargetVel = Double.NaN;
         lastTime = now();
     }
 
@@ -248,22 +457,22 @@ public class FlywheelCalculator {
         return duty;
     }
 
-    /** @return 内部积分累计量 ∫err·dt (tick/s·s) */
+    /** @return 内部积分累计量 ∫e_f·dt (tick/s·s) */
     public double getIntegral() {
         return integral;
     }
 
-    /** @return 最近一次的静摩擦前馈分量 kS·sgn(ω*)（占空比） */
+    /** @return 最近一次的静摩擦前馈分量（占空比，已乘电压归一化系数） */
     public double getKSTerm() {
         return lastKSTerm;
     }
 
-    /** @return 最近一次的前馈分量 Kff·ω*（占空比，不含静摩擦项） */
+    /** @return 最近一次的前馈分量 kff·ω*（占空比，已乘电压归一化系数） */
     public double getFfTerm() {
         return lastFFTerm;
     }
 
-    /** @return 最近一次的比例分量 Kp·err（占空比） */
+    /** @return 最近一次的比例分量 kp·e_f（占空比） */
     public double getPTerm() {
         return lastPTerm;
     }
@@ -273,18 +482,66 @@ public class FlywheelCalculator {
         return lastITerm;
     }
 
-    /** @return 最近一次的掉速补偿分量（占空比） */
-    public double getBoostTerm() {
-        return lastBoostTerm;
+    /** @return 滤波后的转速 (tick/s) */
+    public double getVelocityFiltered() {
+        return velocityFilt;
     }
 
-    /** @return 是否处于掉速补偿状态 */
-    public boolean isBoostActive() {
-        return boostActive;
+    /** @return 最近一次的原始误差 ω*−ω (tick/s) */
+    public double getErrorRaw() {
+        return errorRaw;
     }
 
-    /** @return 掉速检测是否已武装（已进入稳态、允许触发补偿） */
-    public boolean isDropArmed() {
-        return dropArmed;
+    /** @return 最近一次的滤波后误差 ω*−ωf (tick/s) */
+    public double getErrorFiltered() {
+        return errorFilt;
+    }
+
+    /** @return 当前稳态误差带 (tick/s) */
+    public double getErrorBand() {
+        return eBand;
+    }
+
+    /** @return 当前使用的速度滤波时间常数 (s) */
+    public double getTauV() {
+        return tauVUsed;
+    }
+
+    /** @return 母线电压滤波值 (V)；未采样时为 NaN */
+    public double getBusVoltageFiltered() {
+        return vBusFilt;
+    }
+
+    /** @return 当前电压归一化系数 s（未启用恒为 1） */
+    public double getVScale() {
+        return vScale;
+    }
+
+    /** @return 母线电压采样当前是否被冻结 */
+    public boolean isVoltageFrozen() {
+        return voltageFrozen;
+    }
+
+    /** @return 是否处于掉速态 */
+    public boolean isInDrop() {
+        return inDrop;
+    }
+
+    /** @return 积分当前是否在累加（false = 冻结或停机） */
+    public boolean isIntegralActive() {
+        return integralActive;
+    }
+
+    /** @return 是否已到位（连续 {@link #settleFrames} 帧误差在带内） */
+    public boolean isSettled() {
+        return settleCnt >= settleFrames;
+    }
+
+    /**
+     * @return 量化极限环幅值下限 kp × 一个量化台阶（占空比）。
+     *         工程上应 ≤0.05；超过 0.1 会跑出明显的量化极限环，须降 kp 或加滤波。
+     */
+    public double getKpQuantization() {
+        return kp * quantStep;
     }
 }

@@ -18,9 +18,13 @@ import org.firstinspires.ftc.teamcode.Controllers.Shooter.PrototypeShooter.Proto
  *   <li>A 键 → 立即停转（目标转速置 0）</li>
  * </ul>
  *
- * <p><b>整定</b>：在 FTC Dashboard 的 {@code PrototypeShooter} 分组中实时修改
- * kff / kp / ki / iZone / maxI / dropThreshold / kBoost，观察遥测里"实际转速"跟随"目标转速"的
- * 上升时间、超调量与稳态误差。
+ * <p><b>整定</b>：第 4 代（2026-10-22）起参数不在本类也不在 {@code PrototypeShooter} 上，而在
+ * {@link org.firstinspires.ftc.teamcode.utility.Shooter.FlywheelParams#BIG}（Dashboard 分组
+ * {@code FlywheelParams}）：kS / kff / kp / ki / maxI / 两个滤波器时间常数 / 电压归一化开关。
+ * 现场调参时改这四个增益，观察遥测里"实际转速"跟随"目标转速"的上升时间、超调量与稳态误差；
+ * 各参数的整定方法与验收判据见 {@code OpModes/Tuning/Guide.md}。
+ *
+ * <p>勾开 {@code PrototypeShooter.telemetryDetailed} 可展开误差/滤波/电压归一化等诊断行。
  *
  * <p>目标转速被限幅在 ±{@link #MaxTargetVelocity} 内，该值需按电机实际最大转速设置（tick/s）。
  */
@@ -54,7 +58,7 @@ public class PrototypeShooterTest extends LinearOpMode {
 
         telemetry.addLine("Dpad Up/Down: adjust target velocity (hold to repeat)");
         telemetry.addLine("A: stop");
-        telemetry.addLine("Tune kff/kp/ki/iZone/maxI/dropThreshold/kBoost in Dashboard (group: PrototypeShooter)");
+        telemetry.addLine("Tune kS/kff/kp/ki in Dashboard (group: FlywheelParams -> BIG)");
         shooter.setTelemetry();
         telemetry.update();
 

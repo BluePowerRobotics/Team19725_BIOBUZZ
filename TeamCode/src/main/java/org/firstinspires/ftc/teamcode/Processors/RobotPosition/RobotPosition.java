@@ -21,7 +21,7 @@ import org.firstinspires.ftc.teamcode.RoadRunner.MecanumDrive;
 import org.firstinspires.ftc.teamcode.utility.Geometry.ConvexPolygon;
 import org.firstinspires.ftc.teamcode.Parameter.HypParams;
 import org.firstinspires.ftc.teamcode.utility.filter.EMA;
-
+//负责除视觉以外的所有状态估计
 @Config
 public class RobotPosition {
     static MecanumDrive drive;
@@ -39,6 +39,10 @@ public class RobotPosition {
     /** IMU，复用 Road Runner 已初始化的实例（设备名 "imu"） */
     private IMU imu;
 
+    /** 最近一次 update() 采到的 IMU 姿态角，供 getYaw / getYawPitchRollAngles 读取 */
+    private YawPitchRollAngles cachedImuAngles =
+            new YawPitchRollAngles(AngleUnit.DEGREES, 0, 0, 0, 0);
+
     public Pose2d currentPose;
     public PoseVelocity2d currentVelocity2d;
 
@@ -48,6 +52,14 @@ public class RobotPosition {
         if(instance==null){
             throw new IllegalStateException("RobotPosition not initialized, call setInstance first");
         }
+        return instance;
+    }
+
+    /**
+     * @return 已初始化的实例；未初始化时返回 null。
+     *         供可视化等「可选」功能安全访问，避免 {@link #getInstance()} 抛异常。
+     */
+    public static RobotPosition getInstanceOrNull(){
         return instance;
     }
     private RobotPosition(){
@@ -116,6 +128,10 @@ public class RobotPosition {
         }
 
         currentPose = drive.localizer.getPose();
+
+        // IMU 姿态在本帧采样一次并缓存，getYaw / getYawPitchRollAngles 只读缓存
+        cachedImuAngles = imu.getRobotYawPitchRollAngles();
+
         return currentPose;
     }
 
@@ -154,18 +170,18 @@ public class RobotPosition {
     // ---- IMU 功能（原 IMUSensor.java 合并于此） ----
 
     /**
-     * 读取 IMU 的 yaw/pitch/roll 角。
+     * 最近一次 update() 采到的 IMU 的 yaw/pitch/roll 角。
      */
     public YawPitchRollAngles getYawPitchRollAngles() {
-        return imu.getRobotYawPitchRollAngles();
+        return cachedImuAngles;
     }
 
     /**
-     * 获取指定单位的 yaw（航向角）。
+     * 获取指定单位的 yaw（航向角），取自最近一次 update() 的 IMU 采样。
      * @param angleUnit 角度单位
      */
     public double getYaw(AngleUnit angleUnit) {
-        return imu.getRobotYawPitchRollAngles().getYaw(angleUnit);
+        return cachedImuAngles.getYaw(angleUnit);
     }
 
     /**

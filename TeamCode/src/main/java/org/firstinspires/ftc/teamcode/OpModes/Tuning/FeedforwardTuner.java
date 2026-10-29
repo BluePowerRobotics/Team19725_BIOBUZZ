@@ -8,6 +8,7 @@ import com.qualcomm.robotcore.eventloop.opmode.TeleOp;
 import com.qualcomm.robotcore.util.ElapsedTime;
 
 import org.firstinspires.ftc.teamcode.Controllers.Shooter.PrototypeShooter.PrototypeShooter;
+import org.firstinspires.ftc.teamcode.utility.Shooter.FlywheelParams;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -17,11 +18,13 @@ import java.util.Locale;
  * 标定方法五（研究报告 6.5）：<b>无模型前馈增益标定</b>。
  *
  * <p>让飞轮在目标转速 {@code ω*} 下闭环稳定运行（本 OpMode 强制 kff=0，由 PI 提供全部占空比），
- * 记录稳态占空比 {@code d_ss}，则
+ * 记录稳态占空比 {@code d_ss}。注意第 4 代控制律还有静摩擦前馈 kS，因此真实关系是
  * <pre>
- *   Kff = d_ss / ω*      （占空比/(tick/s)）
+ *   d_ss = kS + kff·ω*
  * </pre>
- * 可在多个目标转速下各测一点，用最小二乘拟合出 Kff（过原点斜率），提高泛化性。
+ * <b>必须至少测 2 个转速点</b>，用最小二乘同时得到斜率（= kff）与截距（= kS）；
+ * 只测 1 个点时给不出 kff（截距被当成 0 会高估 kff，kS≈0.03 时在 1700 tick/s 处约高估 4.6%）。
+ * 测 3~4 个点（如 1700 / 1900 / 2100 / 2300）覆盖实际工作区最好。
  *
  * <p><b>操作</b>
  * <ul>
@@ -77,7 +80,7 @@ public class FeedforwardTuner extends LinearOpMode {
     public void runOpMode() throws InterruptedException {
         telemetry = new MultipleTelemetry(telemetry, FtcDashboard.getInstance().getTelemetry());
         shooter = new PrototypeShooter(hardwareMap, telemetry);
-        origKff = PrototypeShooter.kff;
+        origKff = shooter.getParams().kff;
 
         telemetry.addLine("Method 6.5  Feedforward gain calibration");
         telemetry.addLine("Dpad U/D: target    A: measure point    B: clear");
@@ -103,7 +106,7 @@ public class FeedforwardTuner extends LinearOpMode {
             if (targetVelocity < 0) targetVelocity = 0;
 
             // 强制 kff=0：让 PI 提供全部稳态占空比
-            PrototypeShooter.kff = 0.0;
+            shooter.getParams().kff = 0.0;
 
             shooter.setTargetVelocity(targetVelocity);
             shooter.update();
@@ -121,7 +124,7 @@ public class FeedforwardTuner extends LinearOpMode {
         }
 
         shooter.motor.setPower(0);
-        PrototypeShooter.kff = origKff;
+        shooter.getParams().kff = origKff;
         logger.close();
     }
 
@@ -130,7 +133,7 @@ public class FeedforwardTuner extends LinearOpMode {
         // 稳定阶段（用独立的计时器，避免重置主循环的日志时间轴 → 否则 CSV 时间列会非单调）
         measureTimer.reset();
         while (opModeIsActive() && measureTimer.seconds() < settleSec) {
-            PrototypeShooter.kff = 0.0;
+            shooter.getParams().kff = 0.0;
             shooter.setTargetVelocity(targetVelocity);
             shooter.update();
             telemetry.addData("Status", "settling... %.1f", measureTimer.seconds());
@@ -143,7 +146,7 @@ public class FeedforwardTuner extends LinearOpMode {
         int n = 0;
         measureTimer.reset();
         while (opModeIsActive() && measureTimer.seconds() < windowSec) {
-            PrototypeShooter.kff = 0.0;
+            shooter.getParams().kff = 0.0;
             shooter.setTargetVelocity(targetVelocity);
             shooter.update();
             sumDuty += shooter.getDuty();
@@ -185,13 +188,14 @@ public class FeedforwardTuner extends LinearOpMode {
                 sO += p[0];
                 sD += p[1];
             }
-            telemetry.addData("Kff (through origin)", "%.8f", sOO > 1e-9 ? sOD / sOO : 0);
+            telemetry.addData("Kff (origin fit, only if kS=0)", "%.8f", sOO > 1e-9 ? sOD / sOO : 0);
             if (n >= 2) {
                 double denom = n * sOO - sO * sO;
                 if (Math.abs(denom) > 1e-9) {
                     double slope = (n * sOD - sO * sD) / denom;
                     double intercept = (sD - slope * sO) / n;
-                    telemetry.addData("Kff (fit) / intercept", "%.8f / %.4f", slope, intercept);
+                    // 斜率 = kff，截距 = kS（≥2 点才有意义）
+                    telemetry.addData("Kff (fit) / kS (intercept)", "%.8f / %.4f", slope, intercept);
                 }
             }
         }

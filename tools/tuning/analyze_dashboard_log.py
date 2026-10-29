@@ -11,10 +11,16 @@
     因此**按文件行序重建均匀时间轴** dt = span/(n-1)，并统计毫秒倒退处数；
   * 报出速度**量化台阶**（实测速度的最大公约数），任何稳态精度/阈值结论都要先看它。
 
-输出：
-  <stem>_overview.png  目标/实测、误差、占空比与 FF/P/I 分量、电流
-  <stem>_zoom.png      稳态段放大：转速台阶 vs 占空比跳变（看 P 增益是否过大）
-  <stem>_scatter.png   占空比-误差 散点（反演 kP）与 转速-占空比（看前馈/饱和）
+输出（**一图一文件**，`<stem>` = 日志文件名去掉扩展名，每张 PNG 只画一个物理量）：
+  <stem>_velocity.png                 目标 vs 实测转速（绿虚线 = boost 触发时刻）
+  <stem>_error.png                    误差 e = 目标 − 实测（±1 个量化台阶 + ±2% 目标带）
+  <stem>_duty.png                     占空比与 FF / P / I 各分量（看是否被限幅截掉）
+  <stem>_current.png                  电机电流（绿色阴影 = boost 生效区间）
+  <stem>_voltage.png                  母线电压（绿带 = 正常 11.5~13.0 V）
+  <stem>_zoom_velocity.png            末段稳态放大：转速只在量化台阶之间跳
+  <stem>_zoom_duty.png                同一时刻的占空比与 P 项（看 P 增益是否过大）
+  <stem>_scatter_p_vs_error.png       P 项 vs 误差（斜率 = kp，台阶状 = 量化）
+  <stem>_scatter_duty_vs_velocity.png 转速 vs 占空比（右侧下垂 = 饱和）
 并打印：分段统计、增益反演（kff/kp/ki）、饱和占比、掉速补偿触发情况、诊断结论。
 
 用法：python analyze_dashboard_log.py <log.csv> [--out DIR] [--no-plot]
@@ -41,6 +47,7 @@ CAND = {
     "boostflag": ["Shooter boost", "boost"],
     "boostterm": ["Shooter boost term", "boost term"],
     "current": ["Shooter current (A)", "current (A)"],
+    "voltage": ["Shooter voltage (V)", "voltage (V)"],
     "duty": ["Shooter power (duty)", "Shooter duty", "duty", "power"],
     "error": ["Shooter error (tick/s)", "error (tick/s)"],
     "target": ["Shooter target (tick/s)", "target (tick/s)"],
@@ -200,7 +207,7 @@ def analyze(path, out_dir, do_plot, tail=1.0):
 
     vel, tgt, err, duty = d["velocity"], d["target"], d["error"], d["duty"]
     ff, it, pt, boost = d["ff"], d["i"], d["p"], d["boostflag"]
-    cur = d["current"]
+    cur, vol = d["current"], d["voltage"]
 
     step = gcd_step(vel)
     # 剔除收尾异常帧：例如 stop() 之后速度读数归零、而目标仍是原值（会把 sd 和幅值撑大）
@@ -211,6 +218,7 @@ def analyze(path, out_dir, do_plot, tail=1.0):
     if cut < n:
         t, vel, tgt, err, duty = t[:cut], vel[:cut], tgt[:cut], err[:cut], duty[:cut]
         ff, it, pt, cur, boost = ff[:cut], it[:cut], pt[:cut], cur[:cut], boost[:cut]
+        vol = vol[:cut]
         add(f"（已剔除末尾 {n - cut} 帧收尾异常帧：目标仍为原值但转速读数已丢失/归零）")
         n = cut
         step = gcd_step(vel)
@@ -284,7 +292,7 @@ def analyze(path, out_dir, do_plot, tail=1.0):
             + (f"    当前使用 {kff_used:.8f}，偏差 {100.0 * (kff_used - kff_fit) / kff_fit:+.1f}%"
                if np.isfinite(kff_used) else ""))
         add(f"  线性拟合 d = {sl:.8e}·ω {ic:+.4f}"
-            + ("    （截距 > 0 → 存在静摩擦，当前控制律无 kS 项）" if ic > 0.01 else ""))
+            + ("    （截距 > 0 → 静摩擦项 kS；本机控制律已含 kS，可直接填进 kS）" if ic > 0.01 else ""))
 
     # ---- 掉速补偿触发分析 ----
     if np.any(np.isfinite(boost)):
@@ -413,110 +421,216 @@ def analyze(path, out_dir, do_plot, tail=1.0):
 
     if do_plot:
         try:
-            make_plots(stem, out_dir, t, tgt, vel, err, duty, ff, it, pt, cur, boost, segs, step)
+            make_plots(stem, out_dir, t, tgt, vel, err, duty, ff, it, pt, cur, boost, segs,
+                       step, vol)
         except Exception as e:
             print(f"[绘图失败] {type(e).__name__}: {e}", file=sys.stderr)
     return 0
 
 
-def make_plots(stem, out_dir, t, tgt, vel, err, duty, ff, it, pt, cur, boost, segs, step):
+def make_plots(stem, out_dir, t, tgt, vel, err, duty, ff, it, pt, cur, boost, segs, step, vol=None):
+    """**一图一文件**：每个物理量各出一张 PNG（dpi=150, bbox_inches='tight'）。"""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     plt.rcParams["font.sans-serif"] = ["Microsoft YaHei", "SimHei", "DejaVu Sans"]
     plt.rcParams["axes.unicode_minus"] = False
 
-    # ---- 总览 ----
-    fig, ax = plt.subplots(4, 1, figsize=(12, 10), sharex=True)
-    ax[0].plot(t, tgt, "r--", lw=1.2, label="目标 ω*")
-    ax[0].plot(t, vel, "b-", lw=1.0, label="实测 ω")
-    ax[0].set_ylabel("转速 (tick/s)")
-    ax[0].set_title(f"{stem}  —  目标 vs 实测")
-    ax[0].grid(alpha=0.3)
-    ax[0].legend(fontsize=8)
+    def save(fig, suffix):
+        fp = os.path.join(out_dir, f"{stem}_{suffix}.png")
+        fig.savefig(fp, dpi=150, bbox_inches="tight")
+        plt.close(fig)
+        return fp
 
-    ax[1].plot(t, err, color="#7f7f7f", lw=1.0)
-    ax[1].axhline(0, color="k", lw=0.8)
+    made = []
+    tmax = float(np.nanmax(np.abs(tgt))) if np.any(np.isfinite(tgt)) else 0.0
+    on = (boost > 0.5) if np.any(np.isfinite(boost)) else None
+    onset = (np.nonzero(on[1:] & ~on[:-1])[0] + 1) if on is not None else np.array([], int)
+    tail = segs[-1]["tail"] if segs else None
+
+    # ---- ① 转速：目标 vs 实测 ----
+    fig, ax = plt.subplots(figsize=(9, 4))
+    ax.plot(t, tgt, "r--", lw=1.2, label="目标 ω*")
+    ax.plot(t, vel, "b-", lw=1.0, label="实测 ω")
+    for i in onset:
+        ax.axvline(t[i], color="g", ls="--", lw=0.9, alpha=0.6)
+    if tail is not None:
+        tgt_last = float(segs[-1]["target"])
+        sd_steps = (tail["vsd"] / step) if step else float("nan")
+        ax.annotate(f"末段稳态（目标 {tgt_last:.0f}）：v = {tail['vmean']:.0f} tick/s, "
+                    f"sd = {tail['vsd']:.1f} tick/s（{sd_steps:.2f} 个台阶）",
+                    xy=(0.01, 0.02), xycoords="axes fraction", fontsize=8,
+                    bbox=dict(boxstyle="round", fc="white", alpha=0.8))
+    ax.set_xlabel("时间 (s)")
+    ax.set_ylabel("转速 (tick/s)")
+    ax.set_title(f"{stem} — 转速：目标 vs 实测"
+                 + (f"（绿虚线 = boost 触发 {len(onset)} 次）" if len(onset) else ""))
+    ax.grid(alpha=0.3)
+    ax.legend(fontsize=8)
+    made.append(save(fig, "velocity"))
+
+    # ---- ② 误差 ----
+    fig, ax = plt.subplots(figsize=(9, 4))
+    ax.plot(t, err, color="#7f7f7f", lw=1.0)
+    ax.axhline(0, color="k", lw=0.8)
     if step:
-        ax[1].axhline(step, color="r", ls=":", lw=1)
-        ax[1].axhline(-step, color="r", ls=":", lw=1)
-    ax[1].set_ylabel("误差 (tick/s)")
-    ax[1].set_title(f"误差（红虚线 = ±1 个量化台阶 = ±{step:.0f} tick/s）")
-    ax[1].grid(alpha=0.3)
+        ax.axhline(step, color="r", ls=":", lw=1)
+        ax.axhline(-step, color="r", ls=":", lw=1)
+    if tmax:
+        ax.axhline(0.02 * tmax, color="g", ls="--", lw=1)
+        ax.axhline(-0.02 * tmax, color="g", ls="--", lw=1)
+    ax.annotate(f"红点线 = ±1 个量化台阶 = ±{step:.0f} tick/s\n"
+                f"绿虚线 = ±2% 最大目标 = ±{0.02 * tmax:.0f} tick/s",
+                xy=(0.01, 0.02), xycoords="axes fraction", fontsize=8, va="bottom",
+                bbox=dict(boxstyle="round", fc="white", alpha=0.8))
+    ax.set_xlabel("时间 (s)")
+    ax.set_ylabel("误差 e = ω* − ω (tick/s)")
+    ax.set_title(f"{stem} — 速度误差（|e| ≤ 2% 目标或 ≤ 2 台阶为合格）")
+    ax.grid(alpha=0.3)
+    made.append(save(fig, "error"))
 
-    ax[2].plot(t, duty, color="#d97a26", lw=1.2, label="duty（限幅后）")
-    ax[2].plot(t, ff, color="#1f77b4", lw=0.9, label="FF")
-    ax[2].plot(t, it, color="#2ca02c", lw=0.9, label="I")
-    ax[2].plot(t, pt, color="#9467bd", lw=0.9, label="P")
-    ax[2].plot(t, ff + it + pt, "k:", lw=0.8, label="FF+P+I（限幅前）")
-    ax[2].axhline(1.0, color="r", lw=1.0)
-    ax[2].axhline(0.0, color="r", lw=1.0)
-    ax[2].set_ylabel("占空比")
-    ax[2].set_title("占空比与各分量（黑点线超过红线上限=被限幅）")
-    ax[2].grid(alpha=0.3)
-    ax[2].legend(fontsize=7, ncol=3)
+    # ---- ③ 占空比与各分量 ----
+    fig, ax = plt.subplots(figsize=(9, 4))
+    ax.plot(t, duty, color="#d97a26", lw=1.2, label="duty（限幅后）")
+    ax.plot(t, ff, color="#1f77b4", lw=0.9, label="FF")
+    ax.plot(t, it, color="#2ca02c", lw=0.9, label="I")
+    ax.plot(t, pt, color="#9467bd", lw=0.9, label="P")
+    ax.plot(t, ff + it + pt, "k:", lw=0.8, label="FF+P+I（限幅前）")
+    ax.axhline(1.0, color="r", lw=1.0)
+    ax.axhline(0.0, color="r", lw=1.0)
+    sat = 100.0 * np.mean(duty >= 0.999) if np.any(np.isfinite(duty)) else 0.0
+    ax.annotate(f"饱和(≥0.999) 占比 {sat:.1f}%\n黑点线越过红实线 = 被限幅截掉",
+                xy=(0.01, 0.02), xycoords="axes fraction", fontsize=8, va="bottom",
+                bbox=dict(boxstyle="round", fc="white", alpha=0.8))
+    ax.set_xlabel("时间 (s)")
+    ax.set_ylabel("占空比 (0~1)")
+    ax.set_title(f"{stem} — 占空比与 FF/P/I 分量")
+    ax.grid(alpha=0.3)
+    ax.legend(fontsize=7, ncol=3)
+    made.append(save(fig, "duty"))
 
-    ax[3].plot(t, cur, color="#8c564b", lw=1.0)
-    ax[3].set_ylabel("电流 (A)")
-    ax[3].set_xlabel("时间 (s)")
-    ax[3].set_title("电机电流")
-    ax[3].grid(alpha=0.3)
-    if np.any(np.isfinite(boost)):
-        on = boost > 0.5
-        for i in range(1, len(on)):
-            if on[i] and not on[i - 1]:
-                for a in ax:
-                    a.axvline(t[i], color="g", ls="--", lw=1.0, alpha=0.7)
-    fig.tight_layout()
-    fig.savefig(os.path.join(out_dir, stem + "_overview.png"), dpi=150)
-    plt.close(fig)
+    # ---- ④ 电流 ----
+    fig, ax = plt.subplots(figsize=(9, 4))
+    ax.plot(t, cur, color="#8c564b", lw=1.0, label="电流 (A)")
+    if on is not None:
+        j = 1
+        n = len(on)
+        while j < n:
+            if on[j]:
+                k2 = j
+                while k2 + 1 < n and on[k2 + 1]:
+                    k2 += 1
+                ax.axvspan(t[j], t[k2], color="g", alpha=0.15)
+                j = k2 + 1
+            else:
+                j += 1
+    if np.any(np.isfinite(cur)):
+        ax.annotate(f"峰值 {np.nanmax(cur):.2f} A    均值 {np.nanmean(cur):.2f} A\n"
+                    f"绿阴影 = 掉速补偿 boost 生效区间",
+                    xy=(0.01, 0.98), xycoords="axes fraction", fontsize=8, va="top",
+                    bbox=dict(boxstyle="round", fc="white", alpha=0.8))
+    ax.set_xlabel("时间 (s)")
+    ax.set_ylabel("电流 (A)")
+    ax.set_title(f"{stem} — 电机电流")
+    ax.grid(alpha=0.3)
+    ax.legend(fontsize=8)
+    made.append(save(fig, "current"))
 
-    # ---- 稳态放大 ----
+    # ---- ⑤ 母线电压 ----
+    if vol is not None and np.any(np.isfinite(vol)):
+        fig, ax = plt.subplots(figsize=(9, 4))
+        ax.plot(t, vol, color="#17becf", lw=1.0, label="母线电压 busV")
+        ax.axhspan(11.5, 13.0, color="green", alpha=0.08)
+        ax.set_ylim(min(10.0, float(np.nanmin(vol)) - 0.2),
+                    max(13.4, float(np.nanmax(vol)) + 0.2))
+        ax.annotate(f"绿带 = 正常母线区间 11.5~13.0 V\n"
+                    f"本次 min {np.nanmin(vol):.2f} V / median {np.nanmedian(vol):.2f} V"
+                    f" / 跌落 {np.nanmax(vol) - np.nanmin(vol):.2f} V",
+                    xy=(0.01, 0.98), xycoords="axes fraction", fontsize=8, va="top",
+                    bbox=dict(boxstyle="round", fc="white", alpha=0.8))
+        ax.set_xlabel("时间 (s)")
+        ax.set_ylabel("母线电压 (V)")
+        ax.set_title(f"{stem} — 母线电压（判读供电能力与 τ_bus 滤波是否够）")
+        ax.grid(alpha=0.3)
+        made.append(save(fig, "voltage"))
+
+    # ---- ⑥ 稳态放大：转速 ----
     if segs:
         s = segs[-1]
         i0, i1 = s["i0"], s["i1"]
         j0 = max(i0, i1 - int(2.0 / max(t[1] - t[0], 1e-6)))
         tt = t[j0:i1] - t[j0]
-        fig, ax = plt.subplots(2, 1, figsize=(11, 6), sharex=True)
-        ax[0].plot(tt, vel[j0:i1], "b.-", ms=3, lw=1.0, label="实测 ω")
-        ax[0].axhline(s["target"], color="r", ls="--", lw=1.0, label="目标")
+        fig, ax = plt.subplots(figsize=(9, 4))
+        ax.plot(tt, vel[j0:i1], "b.-", ms=3, lw=1.0, label="实测 ω")
+        ax.axhline(s["target"], color="r", ls="--", lw=1.0, label="目标 ω*")
         if step:
             for k in range(-3, 4):
-                ax[0].axhline(s["target"] + k * step, color="gray", ls=":", lw=0.6)
-        ax[0].set_ylabel("转速 (tick/s)")
-        ax[0].set_title(f"稳态放大（最后 2 s）：转速台阶 {step:.0f} tick/s")
-        ax[0].grid(alpha=0.3)
-        ax[0].legend(fontsize=8)
-        ax[1].plot(tt, duty[j0:i1], color="#d97a26", lw=1.2, label="duty")
-        ax[1].plot(tt, pt[j0:i1], color="#9467bd", lw=1.0, label="P term")
-        ax[1].axhline(1.0, color="r", lw=1.0)
-        ax[1].set_ylabel("占空比")
-        ax[1].set_xlabel("时间 (s，段内相对)")
-        ax[1].set_title("同样的时刻：转速只跳一格，占空比却在大范围跳")
-        ax[1].grid(alpha=0.3)
-        ax[1].legend(fontsize=8)
-        fig.tight_layout()
-        fig.savefig(os.path.join(out_dir, stem + "_zoom.png"), dpi=150)
-        plt.close(fig)
+                ax.axhline(s["target"] + k * step, color="gray", ls=":", lw=0.6)
+        ax.annotate(f"量化台阶 {step:.0f} tick/s（灰点线 = ±1/2/3 台阶）\n"
+                    f"末 2 s：sd {np.nanstd(vel[j0:i1], ddof=1):.1f} tick/s"
+                    f" = {np.nanstd(vel[j0:i1], ddof=1) / step if step else float('nan'):.2f} 个台阶",
+                    xy=(0.01, 0.98), xycoords="axes fraction", fontsize=8, va="top",
+                    bbox=dict(boxstyle="round", fc="white", alpha=0.8))
+        ax.set_xlabel("时间 (s，段内相对)")
+        ax.set_ylabel("转速 (tick/s)")
+        ax.set_title(f"{stem} — 稳态放大（最后 2 s）— 转速只在量化台阶之间跳")
+        ax.grid(alpha=0.3)
+        ax.legend(fontsize=8)
+        made.append(save(fig, "zoom_velocity"))
 
-    # ---- 散点 ----
-    fig, ax = plt.subplots(1, 2, figsize=(11, 4.5))
+        # ---- ⑦ 稳态放大：占空比 / P 项 ----
+        fig, ax = plt.subplots(figsize=(9, 4))
+        ax.plot(tt, duty[j0:i1], color="#d97a26", lw=1.2, label="duty")
+        ax.plot(tt, pt[j0:i1], color="#9467bd", lw=1.0, label="P term")
+        ax.axhline(1.0, color="r", lw=1.0)
+        ax.annotate(f"duty 极差 {np.nanmax(duty[j0:i1]) - np.nanmin(duty[j0:i1]):.3f}"
+                    f"    sd {np.nanstd(duty[j0:i1], ddof=1):.4f}\n"
+                    f"sd>0.05 说明增益相对量化台阶过大，会抖",
+                    xy=(0.01, 0.02), xycoords="axes fraction", fontsize=8, va="bottom",
+                    bbox=dict(boxstyle="round", fc="white", alpha=0.8))
+        ax.set_xlabel("时间 (s，段内相对)")
+        ax.set_ylabel("占空比 (0~1)")
+        ax.set_title(f"{stem} — 稳态放大（最后 2 s）— 转速只跳一格、占空比却在大范围跳")
+        ax.grid(alpha=0.3)
+        ax.legend(fontsize=8)
+        made.append(save(fig, "zoom_duty"))
+
+    # ---- ⑧ P 项 vs 误差 ----
     m = np.isfinite(pt) & np.isfinite(err)
-    ax[0].plot(err[m], pt[m], ".", ms=3, alpha=0.5)
-    ax[0].set_xlabel("误差 e (tick/s)")
-    ax[0].set_ylabel("P term (占空比)")
-    ax[0].set_title("P 项 vs 误差（斜率 = kp，台阶状=量化）")
-    ax[0].grid(alpha=0.3)
+    fig, ax = plt.subplots(figsize=(9, 4))
+    ax.plot(err[m], pt[m], ".", ms=3, alpha=0.5)
+    mm = m & (np.abs(err) > 1e-9) & (np.abs(pt) > 1e-9)
+    if np.any(mm):
+        kp_est = float(np.median(pt[mm] / err[mm]))
+        ax.annotate(f"反演 kp = median(P/e) = {kp_est:.8f}\n"
+                    f"kp×台阶 = {abs(kp_est) * step:.4f} 占空比"
+                    f"（≥0.20 严重 / ≥0.05 警告 / 否则正常）",
+                    xy=(0.02, 0.98), xycoords="axes fraction", fontsize=8, va="top",
+                    bbox=dict(boxstyle="round", fc="white", alpha=0.8))
+    ax.set_xlabel("误差 e (tick/s)")
+    ax.set_ylabel("P term (占空比)")
+    ax.set_title(f"{stem} — P 项 vs 误差（斜率 = kp，台阶状 = 量化）")
+    ax.grid(alpha=0.3)
+    made.append(save(fig, "scatter_p_vs_error"))
+
+    # ---- ⑨ 转速 vs 占空比 ----
     m2 = np.isfinite(duty) & np.isfinite(vel)
-    ax[1].plot(duty[m2], vel[m2], ".", ms=3, alpha=0.5)
-    ax[1].set_xlabel("占空比")
-    ax[1].set_ylabel("转速 (tick/s)")
-    ax[1].set_title("转速 vs 占空比（右侧下垂=饱和）")
-    ax[1].grid(alpha=0.3)
-    fig.tight_layout()
-    fig.savefig(os.path.join(out_dir, stem + "_scatter.png"), dpi=150)
-    plt.close(fig)
-    print(f"[图] {os.path.join(out_dir, stem)}_overview.png / _zoom.png / _scatter.png")
+    fig, ax = plt.subplots(figsize=(9, 4))
+    ax.plot(duty[m2], vel[m2], ".", ms=3, alpha=0.5)
+    ax.set_xlabel("占空比 (0~1)")
+    ax.set_ylabel("转速 (tick/s)")
+    ax.set_title(f"{stem} — 转速 vs 占空比（右侧下垂 = 饱和；斜率 ≈ Kd）")
+    ax.grid(alpha=0.3)
+    if np.any(m2) and np.nanmax(duty[m2]) - np.nanmin(duty[m2]) > 1e-6:
+        kd_est = float(np.polyfit(duty[m2], vel[m2], 1)[0])
+        ax.annotate(f"线性斜率 ≈ {kd_est:.0f} (tick/s)/duty → kff ≈ {1.0 / kd_est:.8f}"
+                    if abs(kd_est) > 1e-9 else "",
+                    xy=(0.01, 0.98), xycoords="axes fraction", fontsize=8, va="top",
+                    bbox=dict(boxstyle="round", fc="white", alpha=0.8))
+    made.append(save(fig, "scatter_duty_vs_velocity"))
+
+    print("[图] " + "  ".join(os.path.basename(p) for p in made))
+    return made
 
 
 def main(argv=None):

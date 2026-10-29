@@ -383,7 +383,31 @@ public class ConvexPolygon {
     }
 
     /**
-     * 判断两条线段 p1p2 与 p3p4 是否相交（含端点接触与共线重叠）。
+     * 判断给定线段 {@code (a, b)} 是否与当前多边形接触（相交或端点落在多边形内/边界上）。
+     *
+     * <p>用于判定机器人外接矩形是否接触 Hive 禁线等线段障碍：
+     * 先看线段端点是否落在多边形内，再逐条边做线段相交测试（含共线重叠）。
+     *
+     * @param a 线段端点之一
+     * @param b 线段另一端点
+     * @return 线段与多边形有任意公共点时返回 {@code true}
+     */
+    public boolean IntersectsSegment(Vector2D a, Vector2D b) {
+        if (Contains(a) || Contains(b)) {
+            return true;
+        }
+        for (int i = 0; i < n; i++) {
+            Vector2D v1 = vertices[i];
+            Vector2D v2 = vertices[(i + 1) % n];
+            if (segmentsIntersect(v1, v2, a, b)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * 判断两条线段 {@code p1p2} 与 {@code p3p4} 是否相交（含端点接触与共线重叠）。
      */
     private boolean segmentsIntersect(Vector2D p1, Vector2D p2, Vector2D p3, Vector2D p4) {
         double d1 = isLeft(p3, p4, p1);

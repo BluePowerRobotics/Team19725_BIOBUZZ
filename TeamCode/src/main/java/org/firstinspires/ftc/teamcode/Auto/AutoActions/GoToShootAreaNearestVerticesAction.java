@@ -34,24 +34,20 @@ import org.firstinspires.ftc.teamcode.utility.Vector2D;
  * {@code Chassis#update(double, double, Pose2d)} 自动瞄准传入的目标点为同一个球门，
  * 航向公式 {@code atan2(goalY-y, goalX-x)} 与 {@code Chassis#aimOmega} 完全相同。
  *
- * <p>随后用 RoadRunner {@code strafeToLinearHeading} 构建两段轨迹并依次执行：
- * 先驶向最近区域的最近原点顶点并停稳，再驶向另一区域的最近原点顶点。
- * 两段轨迹均在构造时刻固化（第二段以第一段名义终点为起点），因此应在入队前、
- * 机器人位置基本确定后再创建本 Action。
+ * <p>随后在<b>同一个</b> RoadRunner {@code actionBuilder} 链上用两次
+ * {@code strafeToLinearHeading} 构建<b>单段连续轨迹</b>：起点 → 最近区域顶点 → 另一区域顶点。
+ * 两个顶点均为轨迹途经点，机器人在最高速巡航中依次通过（<b>不中途停车</b>），
+ * 从而以最短时间完成整条路径。轨迹在构造时刻固化，因此应在入队前、机器人位置基本确定后
+ * 再创建本 Action。
  */
 public class GoToShootAreaNearestVerticesAction implements Action {
 
-    /** 第一段轨迹：驶向距离机器人最近的发射区域中距原点最近的顶点 */
-    private final Action firstLeg;
-    /** 第二段轨迹：驶向另一个发射区域中距原点最近的顶点 */
-    private final Action secondLeg;
-    /** 第一段目标位姿 */
+    /** 单段连续轨迹：起点 → 第一顶点 → 第二顶点 */
+    private final Action trajectoryAction;
+    /** 第一段目标位姿（最近发射区域中距原点最近的顶点） */
     private final Pose2d firstVertexPose;
-    /** 第二段目标位姿 */
+    /** 第二段目标位姿（另一发射区域中距原点最近的顶点） */
     private final Pose2d secondVertexPose;
-
-    /** 第一段轨迹是否已完成 */
-    private boolean firstLegDone = false;
 
     /**
      * @param teamColor 队伍颜色
@@ -78,32 +74,23 @@ public class GoToShootAreaNearestVerticesAction implements Action {
         this.firstVertexPose = nearestVertexToOriginPose(nearestArea, goal);
         this.secondVertexPose = nearestVertexToOriginPose(otherArea, goal);
 
-        this.firstLeg = drive.actionBuilder(currentPose)
+        // 单个 actionBuilder 链：两个顶点依次作为途经点，段间速度连续、不中途停车
+        this.trajectoryAction = drive.actionBuilder(currentPose)
                 .strafeToLinearHeading(firstVertexPose.position, firstVertexPose.heading.toDouble())
-                .build();
-        this.secondLeg = drive.actionBuilder(firstVertexPose)
                 .strafeToLinearHeading(secondVertexPose.position, secondVertexPose.heading.toDouble())
                 .build();
     }
 
     @Override
     public boolean run(@NonNull TelemetryPacket packet) {
-        if (!firstLegDone) {
-            packet.put("ShootVertices", "Leg1: nearest area origin-nearest vertex");
-            packet.put("Leg1 target x", firstVertexPose.position.x);
-            packet.put("Leg1 target y", firstVertexPose.position.y);
-            packet.put("Leg1 heading(deg)", Math.toDegrees(firstVertexPose.heading.toDouble()));
-            if (firstLeg.run(packet)) {
-                return true;
-            }
-            firstLegDone = true;
-        }
-
-        packet.put("ShootVertices", "Leg2: other area origin-nearest vertex");
-        packet.put("Leg2 target x", secondVertexPose.position.x);
-        packet.put("Leg2 target y", secondVertexPose.position.y);
-        packet.put("Leg2 heading(deg)", Math.toDegrees(secondVertexPose.heading.toDouble()));
-        return secondLeg.run(packet);
+        packet.put("ShootVertices", "nearest-area vertex -> other-area vertex");
+        packet.put("First vertex x", firstVertexPose.position.x);
+        packet.put("First vertex y", firstVertexPose.position.y);
+        packet.put("First vertex heading(deg)", Math.toDegrees(firstVertexPose.heading.toDouble()));
+        packet.put("Second vertex x", secondVertexPose.position.x);
+        packet.put("Second vertex y", secondVertexPose.position.y);
+        packet.put("Second vertex heading(deg)", Math.toDegrees(secondVertexPose.heading.toDouble()));
+        return trajectoryAction.run(packet);
     }
 
     /** 机器人位姿到多边形边界的最近距离（位于多边形内时为 0） */
