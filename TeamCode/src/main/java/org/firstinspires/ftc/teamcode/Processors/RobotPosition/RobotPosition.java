@@ -36,12 +36,8 @@ public class RobotPosition {
      */
     private MT1Localizer.HiveState hiveState = MT1Localizer.HiveState.MIDDLE;
 
-    /** IMU，复用 Road Runner 已初始化的实例（设备名 "imu"） */
+    /** IMU，复用 Road Runner 已初始化的实例（设备名 "imu"），仅用于 resetYaw() */
     private IMU imu;
-
-    /** 最近一次 update() 采到的 IMU 姿态角，供 getYaw / getYawPitchRollAngles 读取 */
-    private YawPitchRollAngles cachedImuAngles =
-            new YawPitchRollAngles(AngleUnit.DEGREES, 0, 0, 0, 0);
 
     public Pose2d currentPose;
     public PoseVelocity2d currentVelocity2d;
@@ -128,10 +124,6 @@ public class RobotPosition {
         }
 
         currentPose = drive.localizer.getPose();
-
-        // IMU 姿态在本帧采样一次并缓存，getYaw / getYawPitchRollAngles 只读缓存
-        cachedImuAngles = imu.getRobotYawPitchRollAngles();
-
         return currentPose;
     }
 
@@ -170,18 +162,19 @@ public class RobotPosition {
     // ---- IMU 功能（原 IMUSensor.java 合并于此） ----
 
     /**
-     * 最近一次 update() 采到的 IMU 的 yaw/pitch/roll 角。
+     * 最近一帧的 IMU 的 yaw/pitch/roll 角。
+     * 由 {@code AdaptiveEKFLocalizer.update()} 每帧采样一次后上传，此处不读硬件。
      */
     public YawPitchRollAngles getYawPitchRollAngles() {
-        return cachedImuAngles;
+        return fusionLocalizer.getImuAngles();
     }
 
     /**
-     * 获取指定单位的 yaw（航向角），取自最近一次 update() 的 IMU 采样。
+     * 获取指定单位的 yaw（航向角），取自 {@code AdaptiveEKFLocalizer} 最近一帧的 IMU 采样。
      * @param angleUnit 角度单位
      */
     public double getYaw(AngleUnit angleUnit) {
-        return cachedImuAngles.getYaw(angleUnit);
+        return fusionLocalizer.getImuAngles().getYaw(angleUnit);
     }
 
     /**
