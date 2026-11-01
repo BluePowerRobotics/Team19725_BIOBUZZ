@@ -8,6 +8,7 @@ import com.qualcomm.robotcore.hardware.Servo;
 
 import org.firstinspires.ftc.robotcore.external.Telemetry;
 import org.firstinspires.ftc.robotcore.external.navigation.CurrentUnit;
+import org.firstinspires.ftc.teamcode.Processors.RobotPosition.RobotPosition;
 
 @Config
 /**
@@ -40,6 +41,13 @@ public class Sweeper {
     public static int EatVel = 700;
     public static int GiveTheArtifactVel = 2000;
     public static int OutputVel = -500;
+
+    /**
+     * 球道最大容量：当 RobotPosition.getBallCount() ≥ BallMax 时，自动停止 intake 吸球，
+     * 防止球道溢出。出球（OutputVel < 0）不受此限制，允许把球排空。
+     * 可在 FTC Dashboard 实时调整。
+     */
+    public static int BallMax = 4;
 
     /** 固件速度闭环 PIDF 系数（REV Hub 内置速度 PID，可在 FTC Dashboard 实时调参） */
     public static double VelocityP = 1.17;
@@ -123,6 +131,15 @@ public class Sweeper {
     }
 
     public void update() {
+        // ---- 球道满自动停止 intake ----
+        // 仅在"进入模式"（targetVelocity > 0，即 setEat 被调用）且球道计数 ≥ BallMax 时停转，
+        // 出球模式（targetVelocity < 0）不受限制，允许把球排空。
+        // RobotPosition 未初始化（如 SweeperTester 单独调试）时跳过，不影响 Sweeper 本身功能。
+        RobotPosition rp = RobotPosition.getInstanceOrNull();
+        if (targetVelocity > 0 && rp != null && rp.getBallCount() >= BallMax) {
+            targetVelocity = 0;
+        }
+
         // 固件闭环：把目标速度下发给 Hub 内置速度 PID
         motor.setVelocity(targetVelocity);
         lastTargetVelocity = targetVelocity;

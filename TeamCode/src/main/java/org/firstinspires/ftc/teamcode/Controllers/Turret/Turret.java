@@ -4,6 +4,7 @@ import com.acmerobotics.dashboard.config.Config;
 import com.qualcomm.robotcore.hardware.HardwareMap;
 
 import org.firstinspires.ftc.robotcore.external.Telemetry;
+import org.firstinspires.ftc.teamcode.Processors.RobotPosition.RobotPosition;
 import org.firstinspires.ftc.teamcode.utility.Vector2D;
 
 /**
@@ -63,6 +64,11 @@ public class Turret {
 
     private final Telemetry telemetry;
 
+    /** 上一帧大球扳机是否释放（true = 释放/发射），用于检测发射完成的下降沿 */
+    private boolean lastTriggerBig = false;
+    /** 上一帧小球扳机是否释放，用于检测发射完成的下降沿 */
+    private boolean lastTriggerSmall = false;
+
     public Turret(HardwareMap hardwareMap, Telemetry telemetry) {
         this.telemetry = telemetry;
         this.yawController = new YawController(hardwareMap, telemetry);
@@ -110,6 +116,20 @@ public class Turret {
         boolean bigReady = shooterBig.update(speedBig, pitchBig, triggerBig);
         boolean smallReady = shooterSmall.update(speedSmall, pitchSmall, triggerSmall);
 
+        // ---- 发射完成检测：扳机下降沿（true → false）= 一次发射结束 ----
+        // 当大球或小球扳机从"释放"回到"关闭"时，认为该次发射已完成，球道清空，
+        // 通知 RobotPosition 清零球道计数。RobotPosition 未初始化时安全跳过。
+        boolean bigShotComplete = lastTriggerBig && !triggerBig;
+        boolean smallShotComplete = lastTriggerSmall && !triggerSmall;
+        if (bigShotComplete || smallShotComplete) {
+            RobotPosition rp = RobotPosition.getInstanceOrNull();
+            if (rp != null) {
+                rp.resetBallCount();
+            }
+        }
+        lastTriggerBig = triggerBig;
+        lastTriggerSmall = triggerSmall;
+
         return new FireReady(yawReady && bigReady, yawReady && smallReady);
     }
 
@@ -118,6 +138,9 @@ public class Turret {
         yawController.stop();
         shooterBig.stop();
         shooterSmall.stop();
+        // 复位扳机边沿检测状态，避免停止后重启时误判"发射完成"
+        lastTriggerBig = false;
+        lastTriggerSmall = false;
     }
 
     /** 输出遥测（调用方需自行 telemetry.update()） */

@@ -9,9 +9,9 @@ package org.firstinspires.ftc.teamcode.Processors.Sensors;
  *      0 = 进入模式（intake），1 = 出球模式（output）。它只决定"上升沿来了
  *      计数 +1 还是 -1"，不表示球有没有挡住光电门。
  *   2. 光电门信号（BreakBeamSensor 的 isBlocked()）：
- *      本项目光电门约定：0 = 遮挡，1 = 未遮挡（对应 BreakBeamSensor 的
- *      blockedOnState = false）。由数字电平经 EMA 滤波 + 阈值判定得到，
- *      用于检测上升沿（"球挡光"这一事件）。
+ *      本项目光电门约定：0 = 遮挡，1 = 未遮挡。BreakBeamSensor 内部已按
+ *      "滤波电压低于阈值 = 遮挡"判定，与 0=遮挡 一致，无需额外设置极性。
+ *      由模拟电平经 EMA 滤波 + 阈值判定得到，用于检测上升沿（"球挡光"这一事件）。
  *
  * 计数规则：
  *   进入模式（外部信息 = 0，intake）：光电门每检测到一个上升沿，count +1
@@ -33,9 +33,8 @@ package org.firstinspires.ftc.teamcode.Processors.Sensors;
  *   做去抖，只负责"上升沿检测 + 方向计数"。
  *
  * 用法（OpMode 主循环中，每帧调用 update(externalState)）：
- *   注意：本项目光电门 0 = 遮挡，创建 BreakBeamSensor 时需令 blockedOnState = false。
+ *   注意：本项目光电门 0 = 遮挡，BreakBeamSensor 内部已按此极性判定，无需额外设置。
  *   BreakBeamSensor beam = new BreakBeamSensor(hardwareMap, "breakBeam");
- *   beam.setBlockedOnState(false);                 // 0 = 遮挡
  *   BallCounter counter = new BallCounter(beam);
  *   while (opModeIsActive()) {
  *       int externalState = ...;                   // 0 = 进入(intake), 1 = 出球(output)
