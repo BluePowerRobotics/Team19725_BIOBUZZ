@@ -9,6 +9,7 @@ import com.qualcomm.robotcore.eventloop.opmode.LinearOpMode;
 import org.firstinspires.ftc.teamcode.Controllers.Chassis.Chassis;
 import org.firstinspires.ftc.teamcode.Processors.RobotPosition.RobotPosition;
 import org.firstinspires.ftc.teamcode.Controllers.Sweeper.Sweeper;
+import org.firstinspires.ftc.teamcode.Processors.Sensors.BallCounter;
 import org.firstinspires.ftc.teamcode.RoadRunner.Drawing;
 import org.firstinspires.ftc.teamcode.utility.ActionRunner;
 import org.firstinspires.ftc.teamcode.Parameter.HypParams;
@@ -69,9 +70,25 @@ public class TeleOpBlue extends LinearOpMode {
         waitForStart();
 
         while (opModeIsActive()) {
-            RobotPosition.getInstance().update();
-
             // ======== P1 Controls ========
+
+            // Sweeper 指令：先设置集球器模式，再同步球道计数方向，
+            // 确保后续 RobotPosition.update() 用本帧的模式计数（避免一帧延迟）。
+            if (gamepad1.left_bumper) {
+                sweeper.setEat();
+                RobotPosition.getInstance().setBallCounterMode(BallCounter.MODE_INTAKE);
+            } else if (gamepad1.right_bumper) {
+                sweeper.setOutput();
+                RobotPosition.getInstance().setBallCounterMode(BallCounter.MODE_OUTPUT);
+            }
+
+            // 手动清空球道计数（Y 键，仅按下瞬间生效一次）
+            if (gamepad1.yWasReleased()) {
+                RobotPosition.getInstance().resetBallCount();
+            }
+
+            // 推进总状态估计（位姿 + 球道计数）
+            RobotPosition.getInstance().update();
 
             // 底盘移动：左摇杆平移 + 右摇杆旋转；
             // 按下扳机进入瞄准模式（右摇杆失效，航向自动指向所选球门）
@@ -99,14 +116,6 @@ public class TeleOpBlue extends LinearOpMode {
                 telemetry.addData("ResetPose", "Reset to " + (teamColor == TeamColor.BLUE ? "Blue" : "Red"));
             }
 
-            if (gamepad1.left_bumper) {
-                sweeper.setEat();
-            }
-
-            if (gamepad1.right_bumper) {
-                sweeper.setOutput();
-            }
-
 
             // ======== 更新 & 遥测 ========
 
@@ -123,6 +132,10 @@ public class TeleOpBlue extends LinearOpMode {
             telemetry.addData("Pose X", "%.2f in", RobotPosition.getInstance().getX());
             telemetry.addData("Pose Y", "%.2f in", RobotPosition.getInstance().getY());
             telemetry.addData("Pose Theta", "%.2f deg", Math.toDegrees(RobotPosition.getInstance().getTheta()));
+
+            // 球道计数
+            telemetry.addData("Ball Count", RobotPosition.getInstance().getBallCount());
+            telemetry.addData("Ball Max (Sweeper.BallMax)", Sweeper.BallMax);
 
             chassis.telemetry();
             sweeper.setTelemetry();

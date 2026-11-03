@@ -7,7 +7,6 @@ import com.qualcomm.robotcore.eventloop.opmode.LinearOpMode;
 import com.qualcomm.robotcore.eventloop.opmode.TeleOp;
 
 import org.firstinspires.ftc.teamcode.Processors.Sensors.BallCounter;
-import org.firstinspires.ftc.teamcode.Processors.Sensors.BreakBeamSensor;
 /**
  * BallCounter 小球计数器测试程序（基于对射光电门，模拟信号接口）。
  *
@@ -36,8 +35,8 @@ import org.firstinspires.ftc.teamcode.Processors.Sensors.BreakBeamSensor;
  *   4. 置 output = true 切到出球模式后，每挡一个球 Ball Count 应 -1，
  *      减到 0 后继续挡球不会变成负数。
  *
- * 注意：BallCounter.update() 内部已调用 BreakBeamSensor.update()，
- *      本程序中不要再单独调用 beam.update()，否则滤波器每帧会被推进两次。
+ * 注意：BallCounter 内部自己创建 BreakBeamSensor 并在 update() 中调用其采样，
+ *      本程序中只需每帧调用 counter.update()，不再单独管理 BreakBeamSensor。
  *
  * 校准建议：先在"有遮挡 / 无遮挡"两种情况下观察 Raw Voltage，
  *   确认未遮挡为高电压、遮挡为低电压；再按抖动情况调整 alpha
@@ -73,8 +72,7 @@ public class BallCounterTestOp extends LinearOpMode {
     public void runOpMode() throws InterruptedException {
         telemetry = new MultipleTelemetry(telemetry, FtcDashboard.getInstance().getTelemetry());
 
-        BreakBeamSensor beam = new BreakBeamSensor(hardwareMap, DEVICE_NAME);
-        BallCounter counter = new BallCounter(beam);
+        BallCounter counter = new BallCounter(hardwareMap, DEVICE_NAME);
 
         telemetry.addData("Device", DEVICE_NAME);
         telemetry.addData("Status", "Initialized");
@@ -96,19 +94,19 @@ public class BallCounterTestOp extends LinearOpMode {
             lastResetCounter = resetCounter;
 
             // 每帧应用 Dashboard 参数（带范围保护，避免非法值抛异常）
-            beam.setThreshold(clamp01(threshold));                  // threshold ∈ [0, 1]
-            beam.setAlpha(Math.max(0.01, Math.min(1.0, alpha)));     // alpha ∈ (0, 1]
+            counter.setThreshold(clamp01(threshold));                  // threshold ∈ [0, 1]
+            counter.setAlpha(Math.max(0.01, Math.min(1.0, alpha)));     // alpha ∈ (0, 1]
 
             // ---- 遥测 ----
             telemetry.addData("External State", externalState);
             telemetry.addData("Ball Count", counter.getCount());
             telemetry.addData("Mode", output ? "OUTPUT (1)" : "INTAKE (0)");
             telemetry.addData("New Ball", newBall ? 1 : 0);
-            telemetry.addData("Blocked", beam.isBlocked() ? 1 : 0);
-            telemetry.addData("Raw Voltage", "%.3f", beam.getRawVoltage());
-            telemetry.addData("Filtered Voltage", "%.3f", beam.getVoltage());
-            telemetry.addData("Threshold", "%.3f", beam.getThreshold());
-            telemetry.addData("Alpha", "%.3f", beam.getAlpha());
+            telemetry.addData("Blocked", counter.isBlocked() ? 1 : 0);
+            telemetry.addData("Raw Voltage", "%.3f", counter.getRawVoltage());
+            telemetry.addData("Filtered Voltage", "%.3f", counter.getFilteredVoltage());
+            telemetry.addData("Threshold", "%.3f", counter.getThreshold());
+            telemetry.addData("Alpha", "%.3f", counter.getAlpha());
             telemetry.update();
         }
     }

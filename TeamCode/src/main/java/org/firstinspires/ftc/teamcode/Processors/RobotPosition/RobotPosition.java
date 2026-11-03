@@ -16,6 +16,7 @@ import org.firstinspires.ftc.robotcore.external.navigation.YawPitchRollAngles;
 
 import org.firstinspires.ftc.teamcode.Parameter.TeamColor;
 import org.firstinspires.ftc.teamcode.Processors.FusionLocalizer.AdaptiveEKFLocalizer;
+import org.firstinspires.ftc.teamcode.Processors.Sensors.BallCounter;
 import org.firstinspires.ftc.teamcode.Processors.VisionLocalizer.MT1Localizer;
 import org.firstinspires.ftc.teamcode.RoadRunner.MecanumDrive;
 import org.firstinspires.ftc.teamcode.utility.Geometry.ConvexPolygon;
@@ -38,6 +39,25 @@ public class RobotPosition {
 
     /** IMU，复用 Road Runner 已初始化的实例（设备名 "imu"），仅用于 resetYaw() */
     private IMU imu;
+
+    // ==================== 球道计数（BallCounter 透传） ====================
+
+    /** 对射光电门在硬件配置中的设备名 */
+    private static final String BREAK_BEAM_DEVICE_NAME = "breakBeam";
+
+    /**
+     * 球道计数器（基于对射光电门的上升沿检测）。
+     * 透传对象：本类只负责每帧调用其 update() / reset()，并把 getCount() 暴露给上层。
+     * 若硬件未配置（设备名不存在），此字段为 null，所有球道计数接口安全降级（计数恒为 0）。
+     */
+    private BallCounter ballCounter;
+
+    /**
+     * 球道计数方向（每帧由上层根据 Sweeper 模式设置）：
+     * {@link BallCounter#MODE_INTAKE} = 进入模式（球挡光 +1），
+     * {@link BallCounter#MODE_OUTPUT} = 出球模式（球挡光 -1）。
+     */
+    private int ballCounterMode = BallCounter.MODE_INTAKE;
 
     public Pose2d currentPose;
     public PoseVelocity2d currentVelocity2d;
@@ -96,6 +116,18 @@ public class RobotPosition {
         instance.drive = new MecanumDrive(hardwareMap, instance.fusionLocalizer);
         // IMU 复用 Road Runner 已初始化的实例
         instance.imu = instance.drive.lazyImu.get();
+
+        // ---- 球道计数器 ----
+        // BallCounter 内部自己创建 BreakBeamSensor，RobotPosition 只传入 HardwareMap + 设备名，
+        // 严格遵循"RobotPosition → BallCounter → BreakBeam → 光电门"的层级。
+        // 硬件可能未配置（调试用 OpMode），故用 try-catch 降级：
+        // 创建失败时 ballCounter 保持 null，球道计数接口返回 0 且不抛异常。
+        try {
+            instance.ballCounter = new BallCounter(hardwareMap, BREAK_BEAM_DEVICE_NAME);
+        } catch (Exception e) {
+            instance.ballCounter = null;
+        }
+
         return instance;
     }
 
@@ -124,7 +156,62 @@ public class RobotPosition {
         }
 
         currentPose = drive.localizer.getPose();
+
+        // ---- 球道计数（透传）：每帧推进一次 BallCounter ----
+        // 方向由 ballCounterMode 决定（上层每帧根据 Sweeper 模式设置）；
+        // ballCounter 为 null 时（硬件未配置）直接跳过，不影响位姿估计。
+        if (ballCounter != null) {
+            ballCounter.update(ballCounterMode);
+        }
+
         return currentPose;
+    }
+
+    // ==================== 球道计数（BallCounter 透传接口） ====================
+
+    /**
+     * 设置球道计数方向。
+     * 应在每帧根据 Sweeper 的当前模式调用：
+     *   Sweeper 吃球（intake）→ {@link BallCounter#MODE_INTAKE}（球挡光 +1）
+     *   Sweeper 出球（output）→ {@link BallCounter#MODE_OUTPUT}（球挡光 -1）
+     *
+     * @param mode {@link BallCounter#MODE_INTAKE} 或 {@link BallCounter#MODE_OUTPUT}
+     */
+    public void setBallCounterMode(int mode) {
+        if (mode != BallCounter.MODE_INTAKE && mode != BallCounter.MODE_OUTPUT) {
+            throw new IllegalArgumentException(
+                    "mode must be MODE_INTAKE (0) or MODE_OUTPUT (1), got: " + mode);
+        }
+        this.ballCounterMode = mode;
+    }
+
+    /**
+     * 清空球道计数并复位光电门边缘检测状态。
+     * 由上层在以下时机调用：
+     *   1. 炮台发射完毕（球已射出，球道清空）；
+     *   2. 操作手手动清零。
+     * <b>不读取硬件</b>：复用 BallCounter.reset() 的约定，以最近一帧遮挡状态为基准。
+     */
+    public void resetBallCount() {
+        if (ballCounter != null) {
+            ballCounter.reset();
+        }
+    }
+
+    /**
+     * @return 当前球道内累计的小球个数（始终 ≥ 0）。
+     *         硬件未配置（ballCounter == null）时返回 0。
+     */
+    public int getBallCount() {
+        return (ballCounter != null) ? ballCounter.getCount() : 0;
+    }
+
+    /**
+     * @return 球道计数器实例，供需要直接访问（如调试遥测）的上层使用；
+     *         硬件未配置时返回 null。
+     */
+    public BallCounter getBallCounter() {
+        return ballCounter;
     }
 
 
