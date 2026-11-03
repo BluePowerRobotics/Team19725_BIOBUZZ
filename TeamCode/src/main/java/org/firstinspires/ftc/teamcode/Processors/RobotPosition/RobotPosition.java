@@ -17,7 +17,6 @@ import org.firstinspires.ftc.robotcore.external.navigation.YawPitchRollAngles;
 import org.firstinspires.ftc.teamcode.Parameter.TeamColor;
 import org.firstinspires.ftc.teamcode.Processors.FusionLocalizer.AdaptiveEKFLocalizer;
 import org.firstinspires.ftc.teamcode.Processors.Sensors.BallCounter;
-import org.firstinspires.ftc.teamcode.Processors.Sensors.BreakBeamSensor;
 import org.firstinspires.ftc.teamcode.Processors.VisionLocalizer.MT1Localizer;
 import org.firstinspires.ftc.teamcode.RoadRunner.MecanumDrive;
 import org.firstinspires.ftc.teamcode.utility.Geometry.ConvexPolygon;
@@ -118,14 +117,13 @@ public class RobotPosition {
         // IMU 复用 Road Runner 已初始化的实例
         instance.imu = instance.drive.lazyImu.get();
 
-        // ---- 球道计数器（透传） ----
-        // 对射光电门用于球道计数，硬件可能未配置（调试用 OpMode），故用 try-catch 降级：
+        // ---- 球道计数器 ----
+        // BallCounter 内部自己创建 BreakBeamSensor，RobotPosition 只传入 HardwareMap + 设备名，
+        // 严格遵循"RobotPosition → BallCounter → BreakBeam → 光电门"的层级。
+        // 硬件可能未配置（调试用 OpMode），故用 try-catch 降级：
         // 创建失败时 ballCounter 保持 null，球道计数接口返回 0 且不抛异常。
         try {
-            BreakBeamSensor breakBeam = new BreakBeamSensor(hardwareMap, BREAK_BEAM_DEVICE_NAME);
-            // 本项目光电门约定 0 = 遮挡，BreakBeamSensor 内部已按"滤波电压低于阈值 = 遮挡"
-            // 判定，极性与约定一致，无需额外设置。
-            instance.ballCounter = new BallCounter(breakBeam);
+            instance.ballCounter = new BallCounter(hardwareMap, BREAK_BEAM_DEVICE_NAME);
         } catch (Exception e) {
             instance.ballCounter = null;
         }

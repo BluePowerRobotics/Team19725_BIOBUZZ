@@ -1,8 +1,16 @@
 package org.firstinspires.ftc.teamcode.Processors.Sensors;
 
+import com.qualcomm.robotcore.hardware.HardwareMap;
+
 /**
  * 小球计数器：基于对射光电门（BreakBeamSensor）的上升沿检测（边缘检测）
  * 统计经过的小球个数，计数方向由外部每帧传入的 0/1 信息决定。
+ *
+ * 依赖关系（严格层级）：
+ *   调用方（RobotPosition / OpMode）→ BallCounter → BreakBeamSensor → 光电门
+ *   BallCounter 内部自己创建并持有 BreakBeamSensor，上层无需（也不应）
+ *   知道 BreakBeamSensor 的存在——本类同时暴露对 BreakBeam 调参/遥测的
+ *   透传方法，保证所有外部调用只走 BallCounter 这一条链路。
  *
  * 两路 0/1 信号的区别（不要混淆）：
  *   1. 外部模式信息（update 的 externalState 参数）：
@@ -33,13 +41,15 @@ package org.firstinspires.ftc.teamcode.Processors.Sensors;
  *   做去抖，只负责"上升沿检测 + 方向计数"。
  *
  * 用法（OpMode 主循环中，每帧调用 update(externalState)）：
- *   注意：本项目光电门 0 = 遮挡，BreakBeamSensor 内部已按此极性判定，无需额外设置。
- *   BreakBeamSensor beam = new BreakBeamSensor(hardwareMap, "breakBeam");
- *   BallCounter counter = new BallCounter(beam);
+ *   // BallCounter 内部自己创建 BreakBeamSensor，上层只指定 HardwareMap + 设备名
+ *   BallCounter counter = new BallCounter(hardwareMap, "breakBeam");
  *   while (opModeIsActive()) {
  *       int externalState = ...;                   // 0 = 进入(intake), 1 = 出球(output)
  *       counter.update(externalState);             // 采样 + 边缘检测计数
  *       telemetry.addData("balls", counter.getCount());  // 实时计数
+ *       // 调参 / 遥测也走 BallCounter 的透传方法：
+ *       counter.setThreshold(0.5);
+ *       telemetry.addData("blocked", counter.isBlocked());
  *   }
  */
 public class BallCounter {
@@ -49,6 +59,7 @@ public class BallCounter {
     /** 外部信息：出球模式（output，球挡光计数 -1） */
     public static final int MODE_OUTPUT = 1;
 
+    /** BallCounter 自己创建并持有的对射光电门 */
     private final BreakBeamSensor breakBeam;
 
     /** 上一帧的遮挡状态，用于与当前帧比较以检测跳变 */
@@ -58,13 +69,43 @@ public class BallCounter {
     private int count;
 
     /**
-     * @param breakBeam 已创建好的对射光电门（本类内部负责调用其 update()）
+     * 用默认阈值与平滑系数创建球道计数器（内部创建 BreakBeamSensor）。
+     *
+     * @param hardwareMap 硬件映射表
+     * @param deviceName  对射光电门（AnalogInput）在配置中的设备名
      */
+    public BallCounter(HardwareMap hardwareMap, String deviceName) {
+        this(new BreakBeamSensor(hardwareMap, deviceName));
+    }
+
+    /**
+     * 指定阈值与平滑系数创建球道计数器（内部创建 BreakBeamSensor）。
+     *
+     * @param hardwareMap 硬件映射表
+     * @param deviceName  对射光电门在配置中的设备名
+     * @param alpha       EMA 平滑系数，范围 (0, 1]
+     * @param threshold   归一化遮挡阈值，范围 [0, 1]
+     */
+    public BallCounter(HardwareMap hardwareMap, String deviceName,
+                       double alpha, double threshold) {
+        this(new BreakBeamSensor(hardwareMap, deviceName, alpha, threshold));
+    }
+
+    /**
+     * 用已创建的 BreakBeamSensor 构造（测试注入 / 向后兼容）。
+     * 正常用法请走 (HardwareMap, String) 构造，把 BreakBeamSensor 的生命周期
+     * 完全交给 BallCounter 管理，严格遵循调用方 → BallCounter → BreakBeam 的层级。
+     *
+     * @param breakBeam 已创建好的对射光电门（本类内部负责调用其 update() / reset()）
+     */
+    @Deprecated
     public BallCounter(BreakBeamSensor breakBeam) {
         this.breakBeam = breakBeam;
         this.lastBlocked = false;
         this.count = 0;
     }
+
+    // ==================== 核心接口 ====================
 
     /**
      * 采样一次并做上升沿检测计数。
@@ -114,5 +155,54 @@ public class BallCounter {
         count = 0;
         breakBeam.reset();
         lastBlocked = breakBeam.isBlocked();
+    }
+
+    // ==================== BreakBeam 透传接口（调参 / 遥测） ====================
+    //
+    // BallCounter 是外部访问 BreakBeamSensor 的唯一入口；以下方法全部
+    // 直接转发给内部的 breakBeam 实例，保持严格的层级封装。
+
+    /** 当前是否遮挡（滤波电压低于阈值），由最近一次 update() 计算得到 */
+    public boolean isBlocked() {
+        return breakBeam.isBlocked();
+    }
+
+    /** 归一化遮挡阈值 [0,1]，滤波电压低于它即判定为遮挡 */
+    public void setThreshold(double threshold) {
+        breakBeam.setThreshold(threshold);
+    }
+
+    /** 当前归一化遮挡阈值 */
+    public double getThreshold() {
+        return breakBeam.getThreshold();
+    }
+
+    /** 调节 EMA 平滑系数，实时生效。范围 (0, 1] */
+    public void setAlpha(double alpha) {
+        breakBeam.setAlpha(alpha);
+    }
+
+    /** 当前 EMA 平滑系数 */
+    public double getAlpha() {
+        return breakBeam.getAlpha();
+    }
+
+    /** 归一化原始电压（未滤波），来自最近一次 update()，范围 [0,1] */
+    public double getRawVoltage() {
+        return breakBeam.getRawVoltage();
+    }
+
+    /** 归一化滤波电压（EMA 输出），来自最近一次 update()，范围 [0,1] */
+    public double getFilteredVoltage() {
+        return breakBeam.getVoltage();
+    }
+
+    /**
+     * @return 内部 BreakBeamSensor 实例。
+     * 警告：仅用于需要直接访问 BreakBeam 底层接口的高级场景（如自定义滤波）；
+     * 日常调参与遥测请走本类的透传方法，避免破坏 BallCounter 作为唯一入口的封装。
+     */
+    public BreakBeamSensor getBreakBeamSensor() {
+        return breakBeam;
     }
 }
