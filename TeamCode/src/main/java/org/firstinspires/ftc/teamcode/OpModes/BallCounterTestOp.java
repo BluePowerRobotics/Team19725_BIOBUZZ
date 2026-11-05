@@ -11,7 +11,7 @@ import org.firstinspires.ftc.teamcode.Processors.Sensors.BreakBeamSensor;
 /**
  * BallCounter 小球计数器测试程序（基于对射光电门，模拟信号接口）。
  *
- * 每帧调用 counter.update(externalState) 采样并做上升沿检测计数，实时显示：
+ * 每帧调用 counter.update(externalState) 完成上升沿检测计数（内部随后触发光电门采样），实时显示：
  *   External State   本帧传入的外部信息（0 = 进入(intake)，1 = 出球(output)）
  *   Mode             当前生效的计数方向（INTAKE (0) / OUTPUT (1)）
  *   Ball Count       累计计数的小球个数
@@ -36,8 +36,9 @@ import org.firstinspires.ftc.teamcode.Processors.Sensors.BreakBeamSensor;
  *   4. 置 output = true 切到出球模式后，每挡一个球 Ball Count 应 -1，
  *      减到 0 后继续挡球不会变成负数。
  *
- * 注意：BallCounter.update() 内部已调用 BreakBeamSensor.update()，
- *      本程序中不要再单独调用 beam.update()，否则滤波器每帧会被推进两次。
+ * 注意：每帧只调用一次 counter.update(externalState)。计数器在完成本帧计数后
+ *      会自动触发其下属光电门采样，因此本程序不要再单独调用 beam.update()，
+ *      否则滤波器每帧会被推进两次。
  *
  * 校准建议：先在"有遮挡 / 无遮挡"两种情况下观察 Raw Voltage，
  *   确认未遮挡为高电压、遮挡为低电压；再按抖动情况调整 alpha
@@ -87,9 +88,10 @@ public class BallCounterTestOp extends LinearOpMode {
             // 采样 + EMA 滤波 + 上升沿检测计数（必须每帧调用）
             // 外部信息：0 = 进入模式（intake，+1），1 = 出球模式（output，-1）
             int externalState = output ? BallCounter.MODE_OUTPUT : BallCounter.MODE_INTAKE;
+            // 计数器先用上一帧的遮挡结果完成计数，再在内部触发光电门采样（单向串行）
             boolean newBall = counter.update(externalState);
 
-            // 上升沿清零计数（同时重置底层滤波器）
+            // 上升沿清零计数（counter.reset 同时重置底层滤波器）
             if (resetCounter && !lastResetCounter) {
                 counter.reset();
             }

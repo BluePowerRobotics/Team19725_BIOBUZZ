@@ -8,6 +8,7 @@ import com.qualcomm.robotcore.hardware.Servo;
 
 import org.firstinspires.ftc.robotcore.external.Telemetry;
 import org.firstinspires.ftc.robotcore.external.navigation.CurrentUnit;
+import org.firstinspires.ftc.teamcode.Processors.RobotPosition.RobotPosition;
 
 @Config
 /**
@@ -49,6 +50,9 @@ public class Sweeper {
 
     private int targetVelocity = 0;
     private int lastTargetVelocity = 0;
+
+    /** 球道最多容纳的小球数：计数达到该值后自动停止吸球（出球方向不受限制） */
+    public static int BallMax = 4;
 
     /** 最近一次 update() 采到的功率，供读取与遥测复用 */
     private double cachedPower = 0;
@@ -123,6 +127,14 @@ public class Sweeper {
     }
 
     public void update() {
+        // 吸球上限：球道计数由 RobotPosition 每帧更新，本类只读取其状态（不重复推进计数）。
+        // 达到 BallMax 后停止吸球；出球（负目标速度）不受限制，便于把球送回或排出球道。
+        RobotPosition robotPosition = RobotPosition.getInstanceOrNull();
+        if (robotPosition != null && targetVelocity > 0
+                && robotPosition.getBallCount() >= BallMax) {
+            targetVelocity = 0;
+        }
+
         // 固件闭环：把目标速度下发给 Hub 内置速度 PID
         motor.setVelocity(targetVelocity);
         lastTargetVelocity = targetVelocity;
