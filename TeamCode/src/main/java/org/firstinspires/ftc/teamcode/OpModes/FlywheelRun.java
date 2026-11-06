@@ -14,9 +14,9 @@ import org.firstinspires.ftc.teamcode.utility.Shooter.FlywheelParams;
 import java.util.Locale;
 
 /**
- * 飞轮运转程序（第 4 代控制系统验证用）：Start 后飞轮<b>不转</b>，目标转速完全由按键给出。
+ * 飞轮运转程序（SimpleShooter 验证用）：Start 后飞轮<b>不转</b>，目标转速完全由按键给出。
  *
- * <p>面向「现场验证第 4 代控制律」而非整定：整定参数固化在
+ * <p>面向「现场验证 SimpleShooter 控制律」而非整定：整定参数固化在
  * {@link org.firstinspires.ftc.teamcode.utility.Shooter.FlywheelParams} 的 {@code BIG} 参数集里
  * （Dashboard 分组 {@code FlywheelParams}），本程序只做目标转速管理、发起闭环绕组、并按需落 CSV。
  *
@@ -35,7 +35,7 @@ import java.util.Locale;
  * Logging 记录。{@link #dashboardLog} 为 {@code true}（默认）时每 {@link #logPeriodMs} 毫秒发布一组
  * <b>扁平数值键</b>，Dashboard 记下来的 CSV 列名就是这些键：
  * {@code target, velocity, duty, voltage, error, current, integral, pTerm, iTerm, ffTerm,
- * vscale, indrop, iactive, settled}（时间列由 Dashboard 自己加），可直接喂给
+ * vscale, izone, iactive, settled}（时间列由 Dashboard 自己加），可直接喂给
  * {@code tools/tuning} 的出图脚本（见 {@code tools/tuning/PLOT_GUIDE.md}）。
  * 关掉开关则退回给人看的整表遥测（{@code shooter.setTelemetry()}）。
  *
@@ -44,7 +44,6 @@ import java.util.Locale;
 @Config
 @TeleOp(name = "FlywheelRun", group = "Tests")
 public class FlywheelRun extends LinearOpMode {
-
     /** A 键目标转速 (tick/s) */
     public static int aVelocity = 1600;
 
@@ -93,12 +92,10 @@ public class FlywheelRun extends LinearOpMode {
     @Override
     public void runOpMode() throws InterruptedException {
         telemetry = new MultipleTelemetry(telemetry, FtcDashboard.getInstance().getTelemetry());
-
         final boolean useSmall = "SMALL".equalsIgnoreCase(paramsSet);
         final FlywheelParams chosen = useSmall ? FlywheelParams.SMALL : FlywheelParams.BIG;
         shooter = new PrototypeShooter(hardwareMap, telemetry, motorName, chosen);
         shooter.stop();
-
         telemetry.addLine("Start -> no spin (target = 0)");
         telemetry.addLine("A -> " + aVelocity + " tick/s    B -> " + bVelocity + " tick/s");
         telemetry.addLine("Dpad Up/Down: adjust target (hold to repeat)    X: stop");
@@ -117,13 +114,10 @@ public class FlywheelRun extends LinearOpMode {
             shooter.setTelemetry();
         }
         telemetry.update();
-
         waitForStart();
-
         // Start 后不转：目标转速为 0，等按键指令
         shooter.setTargetVelocity(0);
         logTimer.reset();
-
         while (opModeIsActive()) {
             if (gamepad1.xWasPressed()) {
                 shooter.stop(); // 立即停转
@@ -134,7 +128,6 @@ public class FlywheelRun extends LinearOpMode {
             if (gamepad1.bWasPressed()) {
                 shooter.setTargetVelocity(clampVelocity(bVelocity));
             }
-
             // 方向键上下调节目标转速：按下立即走一步，按住则按 repeatPeriodMs 连续调节
             int dir = (gamepad1.dpad_up ? 1 : 0) - (gamepad1.dpad_down ? 1 : 0);
             if (dir != lastDir) {
@@ -147,7 +140,6 @@ public class FlywheelRun extends LinearOpMode {
                 repeatTimer.reset();
             }
             lastDir = dir;
-
             shooter.update();
             if (dashboardLog) {
                 if (logTimer.milliseconds() >= logPeriodMs) {
@@ -159,7 +151,6 @@ public class FlywheelRun extends LinearOpMode {
             }
             telemetry.update();
         }
-
         // 退出前收油门
         shooter.stop();
         shooter.update();
@@ -184,7 +175,7 @@ public class FlywheelRun extends LinearOpMode {
         telemetry.addData("iTerm", calc.getITerm());
         telemetry.addData("ffTerm", calc.getFfTerm());
         telemetry.addData("vscale", calc.getVScale());
-        telemetry.addData("indrop", calc.isInDrop() ? 1 : 0);
+        telemetry.addData("izone", calc.getIZone());
         telemetry.addData("iactive", calc.isIntegralActive() ? 1 : 0);
         telemetry.addData("settled", calc.isSettled() ? 1 : 0);
     }

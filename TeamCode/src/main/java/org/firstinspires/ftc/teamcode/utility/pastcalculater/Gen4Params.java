@@ -6,7 +6,7 @@ import org.firstinspires.ftc.teamcode.utility.Shooter.FlywheelCalculator;
 import org.firstinspires.ftc.teamcode.utility.Shooter.FlywheelParams;
 
 /**
- * 第 4 代（现行控制律）的参数容器 —— 对比实验专用副本。
+ * SimpleShooter 现行控制律的参数容器 —— 对比实验专用副本。
  *
  * <p>{@link FlywheelParams} 的字段是<b>实例</b>字段（为了同时存 BIG / SMALL 两套），
  * Dashboard 只能改 {@code static} 字段，所以它本身改不动。
@@ -18,12 +18,13 @@ import org.firstinspires.ftc.teamcode.utility.Shooter.FlywheelParams;
  */
 @Config
 public class Gen4Params {
-
     public static double kS = 0.02945;
     public static double kff = 3.8307e-4;
     public static double kp = 1.9095e-3;
     public static double ki = 2.59224e-3;
     public static double maxI = 0.3;
+    /** 积分门限 (tick/s)：|e| < iZone 才累加，否则冻结 */
+    public static double iZone = 120.0;
 
     public static double dutyMin = 0.0;
     public static double dutyMax = 1.0;
@@ -32,20 +33,10 @@ public class Gen4Params {
     public static double settleFrac = 0.02;
     public static int settleFrames = 10;
 
-    public static double tauVMax = 0.055;
-    public static double tauVMin = 0.012;
-    public static double eLoFrac = 0.50;
-    public static double eHiFrac = 1.50;
-    public static double dropEnterFrac = 3.0;
-    public static double iFreezeTimeoutSec = 1.5;
-
     public static boolean useVoltageNorm = true;
     public static double vBusNominal = 12.0;
     public static double vScaleMin = 0.85;
     public static double vScaleMax = 1.25;
-    public static double tauBus = 1.0;
-    public static double busHoldOffSec = 0.6;
-    public static double busFreezeTimeoutSec = 2.0;
 
     /** 把 {@link FlywheelParams#BIG} 的值抄进本容器（单向：BIG → 这里）。 */
     public static void syncFromBig() {
@@ -60,23 +51,16 @@ public class Gen4Params {
         quantStep = p.quantStep;
         settleFrac = p.settleFrac;
         settleFrames = p.settleFrames;
-        tauVMax = p.tauVMax;
-        tauVMin = p.tauVMin;
-        eLoFrac = p.eLoFrac;
-        eHiFrac = p.eHiFrac;
-        dropEnterFrac = p.dropEnterFrac;
-        iFreezeTimeoutSec = p.iFreezeTimeoutSec;
+        iZone = p.iZone;
         useVoltageNorm = p.useVoltageNorm;
         vBusNominal = p.vBusNominal;
         vScaleMin = p.vScaleMin;
         vScaleMax = p.vScaleMax;
-        tauBus = p.tauBus;
-        busHoldOffSec = p.busHoldOffSec;
-        busFreezeTimeoutSec = p.busFreezeTimeoutSec;
     }
 
     /** 把本容器的值灌进一个 {@link FlywheelParams} 实例（每帧调用，Dashboard 改动即时生效）。 */
     public static void applyTo(FlywheelParams p) {
+        p.iZone = iZone;
         p.kS = kS;
         p.kff = kff;
         p.kp = kp;
@@ -87,19 +71,10 @@ public class Gen4Params {
         p.quantStep = quantStep;
         p.settleFrac = settleFrac;
         p.settleFrames = settleFrames;
-        p.tauVMax = tauVMax;
-        p.tauVMin = tauVMin;
-        p.eLoFrac = eLoFrac;
-        p.eHiFrac = eHiFrac;
-        p.dropEnterFrac = dropEnterFrac;
-        p.iFreezeTimeoutSec = iFreezeTimeoutSec;
         p.useVoltageNorm = useVoltageNorm;
         p.vBusNominal = vBusNominal;
         p.vScaleMin = vScaleMin;
         p.vScaleMax = vScaleMax;
-        p.tauBus = tauBus;
-        p.busHoldOffSec = busHoldOffSec;
-        p.busFreezeTimeoutSec = busFreezeTimeoutSec;
         p.motorReversed = FlywheelParams.BIG.motorReversed;
         p.speedMax = FlywheelParams.BIG.speedMax;
     }
@@ -114,9 +89,9 @@ public class Gen4Params {
     /** 一行摘要，写进 CSV 注释。 */
     public static String summary() {
         return String.format(java.util.Locale.US,
-                "kS=%.6g kff=%.6g kp=%.6g ki=%.6g iZone=- tauV=%.3f/%.3f "
-                        + "dropX=%.2f iFreeze=%.2f vNorm=%b vBusNom=%.2f tauBus=%.2f",
-                kS, kff, kp, ki, tauVMax, tauVMin, dropEnterFrac,
-                iFreezeTimeoutSec, useVoltageNorm, vBusNominal, tauBus);
+                "kS=%.6g kff=%.6g kp=%.6g ki=%.6g iZone=%.1f "
+                        + "vNorm=%b vBusNom=%.2f",
+                kS, kff, kp, ki, iZone,
+                useVoltageNorm, vBusNominal);
     }
 }

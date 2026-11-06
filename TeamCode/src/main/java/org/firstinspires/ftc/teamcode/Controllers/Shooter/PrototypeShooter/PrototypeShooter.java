@@ -20,15 +20,14 @@ import org.firstinspires.ftc.teamcode.utility.Shooter.FlywheelParams;
  * {@code FlywheelParams.SMALL}）。本类每帧 {@code params.applyTo(calculator)}，
  * 因此 Dashboard 上改参数依旧实时生效。
  *
- * <p><b>控制律（第 4 代，2026-10-22）</b>：
+ * <p><b>控制律（SimpleShooter）</b>：
  * <pre>
- *   duty = s·(kS·sgn(ω*) + kff·ω*) + kp·(ω*-ωf) + ki·∫(ω*-ωf)
- *   s    = clamp(V_nom / V_busFilt, 0.85, 1.25)   （只乘前馈；未启用时为 1）
- *   ωf   = EMA(ω, τ(|ω*-ω|))                      （稳态 30 ms，大误差 8 ms）
+ *   duty = s·(kS·sgn(ω*) + kff·ω*) + kp·(ω*-ω) + ki·∫(ω*-ω)
+ *   s    = clamp(V_nom / V_bus_raw, 0.85, 1.25)   （只乘前馈；无电压滤波）
+ *   积分项仅在 |ω*-ω| < iZone 时累加，否则冻结。
  * </pre>
- * 掉速期间积分<b>冻结</b>（既不加也不清），误差回到稳态带内才继续累加；
- * 第 3 代的 boost 掉速补偿已删除（实测其饱和段贡献恒为 0，唯一作用是抹掉退饱和段、
- * 结构性造成 +50~90 tick/s 过冲）。
+ * 积分在 |error| >= iZone 时保持原值（冻结）；目标为 0 时清零。
+
  *
  * <p>电机置于 {@link DcMotor.RunMode#RUN_WITHOUT_ENCODER}，{@code setPower} 直接控制占空比。
  *
@@ -37,19 +36,18 @@ import org.firstinspires.ftc.teamcode.utility.Shooter.FlywheelParams;
  * 默认折叠（{@link #telemetryDetailed}=false），复盘时在 Dashboard 勾开。
  * 需要研究的量清单（与类同名的 Guide 里也有）：
  * <ol>
- *   <li>{@code error raw / filtered}：原始与滤波后误差，判断滤波是否造成滞后</li>
- *   <li>{@code velocity filtered}：滤波后转速，与原始转速之差就是滤波吃掉的量</li>
- *   <li>{@code tauV}：当前实际滤波时间常数，验证误差调度是否按设计生效</li>
- *   <li>{@code eBand}：当前稳态误差带，掉速/冻结判据的共同基准</li>
- *   <li>{@code vScale / vBusFilt}：电压归一化系数与滤波电压，判断电量估计是否跟手</li>
+ *   <li>{@code error}：原始误差，P/I 直接使用</li>
+ *   <li>{@code iZone}：积分门限，|error| &lt; iZone 时才累加</li>
+
+ *   <li>{@code eBand}：当前稳态误差带，用于到位判据</li>
+ *   <li>{@code vScale}：原始母线电压归一化系数</li>
  *   <li>{@code kS / FF / P / I term}：控制量分解，判断积分是否长期负重</li>
  *   <li>{@code kp×step}：量化极限环幅值下限，&gt;0.05 应立即告警</li>
- *   <li>{@code inDrop / integralActive / settled}：三个状态位</li>
+ *   <li>{@code integralActive / settled}：积分是否累加 / 是否到位</li>
  * </ol>
  */
 @Config
 public class PrototypeShooter {
-
     /** 默认电机名 */
     private static final String DEFAULT_MOTOR_NAME = "shooter";
 
@@ -74,7 +72,7 @@ public class PrototypeShooter {
     /** 目标转速 (tick/s)，0 表示停转 */
     public static int targetVelocity = 0;
 
-    /** 是否在标准 5 行之外展开诊断行（控制量分解 / 滤波器状态 / 量化告警） */
+    /** 是否在标准 5 行之外展开诊断行（控制量分解 / 积分状态 / 量化告警） */
     public static boolean telemetryDetailed = false;
 
     /**
@@ -99,13 +97,11 @@ public class PrototypeShooter {
         this.name = motorName;
         this.motor = hardwareMap.get(DcMotorEx.class, motorName);
         this.voltageSensors = hardwareMap.voltageSensor;
-
         motor.setDirection(this.params.motorReversed ? DcMotor.Direction.REVERSE : DcMotor.Direction.FORWARD);
         // 软件闭环：关闭固件速度环，让 setPower 直接控制占空比
         motor.setMode(DcMotor.RunMode.RUN_WITHOUT_ENCODER);
         // 飞轮惯性大，停转后让其自然滑行
         motor.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.FLOAT);
-
         this.params.applyTo(calculator);
         calculator.reset();
     }
@@ -129,7 +125,7 @@ public class PrototypeShooter {
     /**
      * 速度环单步计算：输入目标与当前转速，输出占空比（内部推进 dt）。
      *
-     * <p>每帧只可调用一次（内部计时器、滤波器与积分状态会推进）。
+     * <p>每帧只可调用一次（内部计时器与积分状态会推进）。
      *
      * @param targetVel  目标转速 (tick/s)
      * @param currentVel 当前转速 (tick/s)
@@ -157,7 +153,7 @@ public class PrototypeShooter {
 
     /** 重置闭环控制器的瞬态状态（从开环切回闭环前调用） */
     public void resetController() {
-        calculator.reset(motor.getVelocity());
+        calculator.reset();
     }
 
     // ==================== 读取 ====================
@@ -233,7 +229,6 @@ public class PrototypeShooter {
         telemetry.addData(name + " power (duty)", "%.4f", getDuty());
         telemetry.addData(name + " current (A)", "%.2f", getCurrent());
         telemetry.addData(name + " voltage (V)", "%.2f", getBusVoltage());
-
         if (telemetryDetailed) {
             addDiagnosticTelemetry();
         }
@@ -261,26 +256,21 @@ public class PrototypeShooter {
     /**
      * 诊断段：需要研究的量逐行列出。
      *
-     * <p>顺序按「看这个量是为了回答什么问题」排列：误差 → 滤波 → 掉速/稳态状态 →
+     * <p>顺序按「看这个量是为了回答什么问题」排列：误差 → 积分门控/稳态状态 →
      * 电压归一化 → 控制量分解 → 量化告警。
      */
     private void addDiagnosticTelemetry() {
         telemetry.addLine("-- " + name + " research --");
-        // 1. 误差：原始 vs 滤波
-        telemetry.addData(name + " error raw (tick/s)", "%.0f", calculator.getErrorRaw());
-        telemetry.addData(name + " error filt (tick/s)", "%.0f", calculator.getErrorFiltered());
-        // 2. 滤波：滤波后转速与当前实际 τ
-        telemetry.addData(name + " velocity filt (tick/s)", "%.0f", calculator.getVelocityFiltered());
-        telemetry.addData(name + " tauV (ms)", "%.1f", calculator.getTauV() * 1000.0);
-        // 3. 状态位：掉速 / 积分活跃 / 到位
+        // 1. 原始误差
+        telemetry.addData(name + " error (tick/s)", "%.0f", calculator.getErrorRaw());
+        // 2. 控制器状态
+        // 3. 积分门限 / 积分活跃 / 到位
         telemetry.addData(name + " eBand (tick/s)", "%.0f", calculator.getErrorBand());
-        telemetry.addData(name + " inDrop", calculator.isInDrop());
+        telemetry.addData(name + " iZone (tick/s)", "%.0f", calculator.getIZone());
         telemetry.addData(name + " integral active", calculator.isIntegralActive());
         telemetry.addData(name + " settled", calculator.isSettled());
-        // 4. 电压归一化
-        telemetry.addData(name + " vBus filt (V)", "%.2f", calculator.getBusVoltageFiltered());
+        // 4. 原始母线电压归一化
         telemetry.addData(name + " vScale", "%.3f", calculator.getVScale());
-        telemetry.addData(name + " vBus frozen", calculator.isVoltageFrozen());
         // 5. 控制量分解
         telemetry.addData(name + " kS term", "%.4f", calculator.getKSTerm());
         telemetry.addData(name + " FF term", "%.4f", calculator.getFfTerm());

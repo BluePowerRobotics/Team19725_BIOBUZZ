@@ -1,4 +1,6 @@
-# 飞轮图表判读指南（PLOT_GUIDE）
+# 飞轮图表判读指南（PLOT_GUIDE，SimpleShooter）
+
+> SimpleShooter 已删除速度/母线电压滤波，`inDrop` 列不再存在；下文相关旧判读项仅适用于历史 CSV。
 
 本文件是 `tools/tuning/` 全部**图片产物**的清单与判读手册。
 脚本总览、取数流程、CSV 格式见 [README.md](README.md)；端上标定操作见
@@ -45,10 +47,10 @@
 
 | 来源 | 列 / 键 |
 |---|---|
-| FlywheelRun | `target,velocity,duty,voltage,error,current,integral,pTerm,iTerm,ffTerm,vscale,indrop,iactive,settled` |
-| 电压扫描 | `segment_id,vbus_target,vbus_meas,load_power,target,velocity,duty,error,current,indrop,iactive,settled` |
-| 多代对比 | `gen,target,velocity,vbus,duty_g1,ff_g1,p_g1,i_g1,boost_g1,drop_g1,iact_g1,stl_g1,duty_g3,…_g3,duty_g4,ff_g4,p_g4,i_g4,drop_g4,iact_g4,stl_g4,vscale_g4` |
-| 分代 Tuner | `duty,velocity,phase`（Gen1/3）、Gen4 为 `target,velocity,error,duty,ff,p,i,indrop,iactive,settled,vbus,vscale,phase`，报告数字另以 `fit_*`/`step_*`/`dip_*`/`meas_*` 键发布 |
+| FlywheelRun | `target,velocity,duty,voltage,error,current,integral,pTerm,iTerm,ffTerm,vscale,izone,iactive,settled` |
+| 电压扫描 | `segment_id,vbus_target,vbus_meas,load_power,target,velocity,duty,error,current,iactive,settled` |
+| 多代对比 | `gen,target,velocity,vbus,duty_g1,ff_g1,p_g1,i_g1,boost_g1,drop_g1,iact_g1,stl_g1,duty_g3,…_g3,duty_g4,ff_g4,p_g4,i_g4,iact_g4,stl_g4,vscale_g4` |
+| 分代 Tuner | `duty,velocity,phase`（Gen1/3）、Gen4 为 `target,velocity,error,duty,ff,p,i,iactive,settled,vbus,vscale,phase`，报告数字另以 `fit_*`/`step_*`/`dip_*`/`meas_*` 键发布 |
 
 
 统一约定：时间列单位秒、严格单调；速度 tick/s；占空比 0~1。
@@ -402,7 +404,7 @@ python tools/tuning/plot_csv.py x.csv --overlay duty,duty_gen3,duty_gen4 --tag �
 gen,target,velocity,vbus,
 duty_g1,ff_g1,p_g1,i_g1,boost_g1,drop_g1,iact_g1,stl_g1,
 duty_g3,ff_g3,p_g3,i_g3,boost_g3,drop_g3,iact_g3,stl_g3,
-duty_g4,ff_g4,p_g4,i_g4,drop_g4,iact_g4,stl_g4,vscale_g4
+duty_g4,ff_g4,p_g4,i_g4,iact_g4,stl_g4,vscale_g4
 ```
 
 ```powershell

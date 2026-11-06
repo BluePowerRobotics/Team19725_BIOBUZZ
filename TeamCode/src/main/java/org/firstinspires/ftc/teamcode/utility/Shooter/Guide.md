@@ -1,4 +1,6 @@
-# Shooter 工具库目录说明（第 4 代）
+# Shooter 工具库目录说明（SimpleShooter）
+
+> 本分支已删除飞轮速度滤波和母线电压滤波/冻结；P/I 使用原始误差，母线电压归一化直接使用原始采样。
 
 ## 概述
 
@@ -8,24 +10,24 @@
 
 | 文件 | 功能说明 |
 |---|---|
-| `FlywheelCalculator.java` | 飞轮速度环计算器：`(ω*, ω, V_bus, dt) → duty`。前馈（静摩擦 + 稳态，乘电压归一化）+ 比例（作用在滤波速度上）+ 积分（稳态窄带内累加、掉速冻结）。含误差调度速度滤波、母线电压低通与冻结、抗积分饱和、到位判据 |
+| `FlywheelCalculator.java` | 飞轮速度环计算器：`(ω*, ω, V_bus, dt) → duty`。原始误差 PI + 原始母线电压归一化前馈；`|e| < iZone` 才积分，否则冻结。含 I 项抗饱和与到位判据 |
 | `FlywheelParams.java` | 参数容器（`@Config`）：**一套机器一套完整参数**，内置 `BIG`（大球）与 `SMALL`（小球）两个实例；`applyTo(calculator)` 每帧同步 |
 
 控制器（电机、硬件初始化、遥测、参数面板）位于
 - `Controllers/Shooter/PrototypeShooter/PrototypeShooter.java`（单飞轮原型，默认 `FlywheelParams.BIG`）
 - `Controllers/Turret/Shooter.java`（炮台内的两个飞轮，各自内嵌一个 `FlywheelParams`）
 
-## 控制律（第 4 代）
+## 控制律（SimpleShooter）
 
 ```text
-e_raw = ω* − ω
-ωf    = EMA(ω, τ(|e_raw|))            // τ 在 tauVMax ↔ tauVMin 之间按误差调度
-e_f   = ω* − ωf
-s     = clamp(V_nom/V_busFilt, 0.85, 1.25)        // 只乘前馈
-duty  = sat( s·(kS·sgn(ω*) + kff·ω*) + kp·e_f + ki·∫e_f dt , dutyMin, dutyMax )
+e     = ω* − ω
+P/I   = 直接使用 e                      // 不做速度滤波
+
+s     = clamp(V_nom/V_bus_raw, 0.85, 1.25)         // 只乘前馈
+duty  = sat( s·(kS·sgn(ω*) + kff·ω*) + kp·e + ki·∫e dt , dutyMin, dutyMax )
 ```
 
-**与上一代（含 boost）的差别**：`boost`、`dropThreshold`、`dropRateThreshold`、`iZone` 全部删除。
+**SimpleShooter 的差别**：`boost`、速度滤波、母线电压滤波/冻结全部删除；重新引入 Dashboard 可调积分门限 `iZone`。
 理由（详见 `doc/现在的控制系统.md` §2.5）：发射瞬间 `ff + kp·e` 本来就 >1，boost 在饱和段贡献恒为 0；
 它唯一的作用是把退饱和点从 `e_desat=(1−ff)/kp` 推到 `e≤0`，抹掉线性收敛段、结构性地造成 +50~90 tick/s 过冲。
 

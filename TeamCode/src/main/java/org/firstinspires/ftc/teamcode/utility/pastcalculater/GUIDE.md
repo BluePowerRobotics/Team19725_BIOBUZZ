@@ -1,5 +1,8 @@
 # utility/pastcalculater —— 多代飞轮控制系统对比实验
 
+> SimpleShooter 分支中，“Gen4”已跟随现行简化算法：原始速度/原始母线电压 + `iZone` 积分门控；
+> 本文关于 Gen4 速度滤波和电压滤波的描述仅作历史资料。
+
 > 目录名沿用用户历史写法 `pastcalculater`（少一个 l），**故意不改**，免得引用路径到处对不上。
 > 本目录里的 **OpMode 也放在这里**，不遵守 `TeamCode/.../OpModes/**` 的分层要求（明确例外，
 > 见 `FTC_Format.md` 的说明与用户的直接指示）。它只做实验，不参与正式控制。

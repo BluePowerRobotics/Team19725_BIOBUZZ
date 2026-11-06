@@ -20,7 +20,6 @@ import java.util.List;
  * ③ {@code dt} 由 {@code nanoTime} 推进，异常值兜底 0.02 s。
  */
 public final class PastFlywheelDriver {
-
     private static final double DEFAULT_DT = 0.02;
 
     /** 实际驱动的电机 */
@@ -36,11 +35,9 @@ public final class PastFlywheelDriver {
                               boolean motorReversed, PastCalculator calculator) {
         this.calc = calculator;
         this.motor = hardwareMap.get(DcMotorEx.class, motorName);
-
         for (VoltageSensor s : hardwareMap.voltageSensor) {
             voltageSensors.add(s);
         }
-
         motor.setDirection(motorReversed ? DcMotor.Direction.REVERSE : DcMotor.Direction.FORWARD);
         motor.setMode(DcMotor.RunMode.RUN_WITHOUT_ENCODER);
         motor.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.FLOAT);
@@ -94,7 +91,7 @@ public final class PastFlywheelDriver {
         motor.setPower(power);
     }
 
-    /** 重新播种滤波器（从开环切回闭环、或目标大跳变时用）。 */
+    /** 重置闭环瞬态状态（从开环切回闭环、或目标大跳变时用）。 */
     public void resetController() {
         calc.reset(motor.getVelocity());
         lastNano = 0;

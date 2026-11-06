@@ -104,7 +104,7 @@
    `V_settle → V_a1600 → V_b1900 → V_pre → V_dip → V_rec → V_rel`，
    对 `vbusTargets` 里每个电压点重复一遍。
 2. 全程遥测显示：当前段、进度、`母线 目标/实测/差`、`母线合格 YES/NO`、负载占空比、
-   飞轮 `目标/实测/duty`、电流、`inDrop/iActive/settled`。
+   飞轮 `目标/实测/duty`、电流、`iActive/settled`。
 3. 跑完（或按 **X** 中止）后停在**汇总屏**，按 **X** 退出。
 
 4.6 个电压点 × 7 段 ≈ **47 s**（默认参数）。
@@ -127,7 +127,7 @@ python tools/tuning/plot_csv.py ./VoltageSweep_log.csv \
 ### 4.4 遥测键（Dashboard CSV 的列）
 
 `segment_id, vbus_target, vbus_meas, load_power, target, velocity, duty, error,
-current, indrop, iactive, settled`
+current, iactive, settled`
 
 - `segment_id`：计划段编号（`_settle/_a1600/_b1900/_pre/_dip/_rec/_rel` 依次递增），
   段名与电压目标请看程序开跑的遥测屏（或按每段的 `vbus_target` 反查）。
@@ -153,7 +153,7 @@ current, indrop, iactive, settled`
 | `load_power` 长期贴着 `loadPowerMax` 而 `vbus_meas` 仍高于目标 | 负载不够，**这个点没拉下去** | 加机械负载 / 提高 `loadPowerMax`（谨慎）/ 去掉最高那个电压点 |
 | `load_power` 在 0 与某值之间大幅来回跳 | 电压环增益过大 | 降 `kpVolt`（0.45→0.25）或 `kiVolt`，或降 `loadRateLimit` |
 | `duty·V_bus` 跨点差 > 3% | 前馈**没有**补偿电压（常见：`useVoltageNorm=false`） | 见 §5.3 |
-| `inDrop` 在 `_rec` 段起点为 1 且很快回 0 | 掉速判据正常 | — |
+| `iActive` 在 `_rec` 段恢复后按 `|error|<iZone` 打开 | 简化积分门控正常 | — |
 | `settled` 在稳态段末尾仍为 0 | 该电压点下 `|e|` 进不了 `eBand` | 看 `velocity` 图是否真的抖，或该点电压太低带不动 |
 
 ### 5.3 关键前提：`useVoltageNorm`

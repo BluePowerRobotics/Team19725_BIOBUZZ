@@ -29,11 +29,10 @@ import java.util.List;
  * </ul>
  *
  * <p>按键：A → {@link #aVelocity}，B → {@link #bVelocity}，十字键上下 ±{@link #velocityStep}
- * （按住连调），X → 停（目标 0 并清积分），Y → 切换当前代（并复位三代滤波器）。
+ * （按住连调），X → 停（目标 0 并清积分），Y → 切换当前代。
  */
 @TeleOp(name = "PastCompare 多代对比", group = "PastCompare")
 public class PastCompareOp extends LinearOpMode {
-
     // ------------------------------------------------------------ @Config
 
     /** true = 离线回放 {@link #replayFile}，不驱动任何电机 */
@@ -60,14 +59,14 @@ public class PastCompareOp extends LinearOpMode {
     /**
      * 遥测键名（= Dashboard CSV 的列名）：{@code gen} 列是本次运行真正驱动的是哪一代
      * （离线回放记 0），其余按代分组：{@code duty_gX, ff_gX, p_gX, i_gX, boost_gX,
-     * drop_gX, iact_gX, stl_gX}（Gen4 无 boost，另有 {@code vscale_g4}）。
+     * drop_gX, iact_gX, stl_gX}（drop 仅 Gen1/Gen3；Gen4 无 boost，另有 {@code vscale_g4}）。
      * 时间列由 Dashboard 自己加。
      */
     static final String CSV_HEADER =
             "t,gen,target,velocity,vbus,"
             + "duty_g1,ff_g1,p_g1,i_g1,boost_g1,drop_g1,iact_g1,stl_g1,"
             + "duty_g3,ff_g3,p_g3,i_g3,boost_g3,drop_g3,iact_g3,stl_g3,"
-            + "duty_g4,ff_g4,p_g4,i_g4,drop_g4,iact_g4,stl_g4,vscale_g4";
+            + "duty_g4,ff_g4,p_g4,i_g4,iact_g4,stl_g4,vscale_g4";
 
     // ------------------------------------------------------------ state
 
@@ -87,7 +86,6 @@ public class PastCompareOp extends LinearOpMode {
         gen3 = PastCalculator.create(PastGen.GEN3_BOOST);
         gen4 = new PastCalculator.Gen4();
         gen4.reset(0);
-
         telemetry.addLine("多代对比 PastCompare");
         telemetry.addLine(offlineReplay
                 ? "离线回放：" + replayFile
@@ -96,7 +94,6 @@ public class PastCompareOp extends LinearOpMode {
                 + "  步长=" + velocityStep);
         telemetry.addLine("Y 切换当前代 / X 停 / 十字键上下调目标");
         telemetry.addLine(offlineReplay ? "（离线模式不接电机）" : "电机口：" + motorName);
-
         if (!offlineReplay) {
             try {
                 driver = new PastFlywheelDriver(hardwareMap, motorName, motorReversed,
@@ -108,12 +105,10 @@ public class PastCompareOp extends LinearOpMode {
                 return;
             }
         }
-
         waitForStart();
         if (isStopRequested()) {
             return;
         }
-
         if (offlineReplay) {
             runReplay();
         } else {
@@ -128,10 +123,8 @@ public class PastCompareOp extends LinearOpMode {
         boolean lastDown = false;
         boolean lastY = false;
         double lastRepeat = 0;
-
         while (opModeIsActive()) {
             long nowMs = System.currentTimeMillis();
-
             if (gamepad1.a) {
                 targetVelocity = (int) aVelocity;
             }
@@ -145,7 +138,6 @@ public class PastCompareOp extends LinearOpMode {
                 switchGen();
             }
             lastY = gamepad1.y;
-
             // 十字键：按住连调
             boolean up = gamepad1.dpad_up;
             boolean down = gamepad1.dpad_down;
@@ -160,15 +152,12 @@ public class PastCompareOp extends LinearOpMode {
             }
             lastUp = up;
             lastDown = down;
-
             double velocity = driver.getVelocity();
             double vbus = driver.getBusVoltage();
             double dt = driver.nextDt();
-
             double d1 = gen1.calculate(targetVelocity, velocity, vbus, dt);
             double d3 = gen3.calculate(targetVelocity, velocity, vbus, dt);
             double d4 = gen4.calculate(targetVelocity, velocity, vbus, dt);
-
             // 只有当前代真正驱动电机（其余两代只演算）
             switch (activeGen) {
                 case GEN1_PIDSVA:
@@ -181,7 +170,6 @@ public class PastCompareOp extends LinearOpMode {
                     driver.motor.setPower(d4);
                     break;
             }
-
             frames++;
             logRow(getRuntime(), activeGen.id, targetVelocity, velocity, vbus, d1, d3, d4);
             showOnlineTelemetry(velocity, vbus, d1, d3, d4);
@@ -236,7 +224,6 @@ public class PastCompareOp extends LinearOpMode {
             sleep(4000);
             return;
         }
-
         List<String> lines = readAllLines(file);
         if (lines.isEmpty()) {
             telemetry.addLine("回放文件是空的：" + file.getAbsolutePath());
@@ -244,7 +231,6 @@ public class PastCompareOp extends LinearOpMode {
             sleep(4000);
             return;
         }
-
         int idxT = -1;
         int idxTarget = -1;
         int idxVelocity = -1;
@@ -271,14 +257,12 @@ public class PastCompareOp extends LinearOpMode {
             headerIdx = i;
             break;
         }
-
         if (idxVelocity < 0) {
             telemetry.addLine("回放文件缺少 velocity 列：" + file.getAbsolutePath());
             telemetry.update();
             sleep(4000);
             return;
         }
-
         double lastT = 0;
         int rows = 0;
         for (int i = headerIdx + 1; i < lines.size(); i++) {
@@ -296,14 +280,12 @@ public class PastCompareOp extends LinearOpMode {
             double velocity = parse(cols[idxVelocity], 0);
             double target = idxTarget >= 0 && idxTarget < cols.length ? parse(cols[idxTarget], 0) : 0;
             double vbus = idxVbus >= 0 && idxVbus < cols.length ? parse(cols[idxVbus], Double.NaN) : Double.NaN;
-
             double d1 = gen1.calculate(target, velocity, vbus, dt);
             double d3 = gen3.calculate(target, velocity, vbus, dt);
             double d4 = gen4.calculate(target, velocity, vbus, dt);
             frames++;
             rows++;
             logRow(t, 0, target, velocity, vbus, d1, d3, d4);
-
             if (rows % 20 == 0) {
                 telemetry.addData("回放进度", "%d/%d", rows, lines.size() - headerIdx - 1);
                 telemetry.addData("t", "%.2f s", t);
@@ -312,7 +294,6 @@ public class PastCompareOp extends LinearOpMode {
                 telemetry.update();
             }
         }
-
         telemetry.addData("回放完成", "%d 行", rows);
         telemetry.addData("dash log", dashboardLog ? "ON（Dashboard Logging）" : "OFF");
         telemetry.update();
@@ -358,12 +339,10 @@ public class PastCompareOp extends LinearOpMode {
             return;
         }
         lastLogSec = t;
-
         telemetry.addData("gen", genId);
         telemetry.addData("target", target);
         telemetry.addData("velocity", velocity);
         telemetry.addData("vbus", num(vbus));
-
         publish("duty", 1, d1);
         publish("ff", 1, gen1.getFfTerm());
         publish("p", 1, gen1.getPTerm());
@@ -372,7 +351,6 @@ public class PastCompareOp extends LinearOpMode {
         telemetry.addData("drop_g1", b2d(gen1.isInDrop()));
         telemetry.addData("iact_g1", b2d(gen1.isIntegralActive()));
         telemetry.addData("stl_g1", b2d(gen1.isSettled()));
-
         publish("duty", 3, d3);
         publish("ff", 3, gen3.getFfTerm());
         publish("p", 3, gen3.getPTerm());
@@ -381,12 +359,10 @@ public class PastCompareOp extends LinearOpMode {
         telemetry.addData("drop_g3", b2d(gen3.isInDrop()));
         telemetry.addData("iact_g3", b2d(gen3.isIntegralActive()));
         telemetry.addData("stl_g3", b2d(gen3.isSettled()));
-
         publish("duty", 4, d4);
         publish("ff", 4, gen4.getFfTerm());
         publish("p", 4, gen4.getPTerm());
         publish("i", 4, gen4.getITerm());
-        telemetry.addData("drop_g4", b2d(gen4.isInDrop()));
         telemetry.addData("iact_g4", b2d(gen4.isIntegralActive()));
         telemetry.addData("stl_g4", b2d(gen4.isSettled()));
         telemetry.addData("vscale_g4", gen4 instanceof PastCalculator.Gen4

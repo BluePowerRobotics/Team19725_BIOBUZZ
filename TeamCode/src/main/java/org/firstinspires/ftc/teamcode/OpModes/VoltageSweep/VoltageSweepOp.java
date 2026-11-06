@@ -18,7 +18,7 @@ import java.util.Locale;
 import java.util.Map;
 
 /**
- * 母线电压适配性扫描（第 4 代控制系统专用）：用<b>第二个电机当电气负载</b>把母线电压拉到指定值，
+ * 母线电压适配性扫描（SimpleShooter 专用）：用<b>第二个电机当电气负载</b>把母线电压拉到指定值，
  * 在若干个电压点上重复同一套动作（1600 稳态 / 1900 稳态 / 一次模拟掉速），
  * 用来回答「同一个目标转速，在不同电量下占空比是否等价」——即
  * {@code doc/现在的控制系统.md} §2.12 判据⑥。
@@ -44,7 +44,7 @@ import java.util.Map;
  *
  * <h2>CSV</h2>
  * {@code <外部目录>/tuning/VoltageSweep_<时间戳>.csv}，表头
- * {@code t,segment_id,vbus_target,vbus_meas,load_power,target,velocity,duty,error,current,inDrop,iActive,settled}
+ * {@code t,segment_id,vbus_target,vbus_meas,load_power,target,velocity,duty,error,current,iactive,settled}
  * （`segment_id` = 计划里第几段，段名写在 CSV 注释行）。
  * 出图：{@code python tools/tuning/plot_csv.py <csv> --segment segment_id}。
  *
@@ -60,7 +60,6 @@ import java.util.Map;
 @Config
 @TeleOp(name = "VoltageSweep", group = "Tests")
 public class VoltageSweepOp extends LinearOpMode {
-
     // ---------------------------------------------------------------- 计划参数
 
     /** 稳态段 A 的目标转速 (tick/s) */
@@ -128,7 +127,7 @@ public class VoltageSweepOp extends LinearOpMode {
      * 是否发布扁平数值遥测（由 FTC Dashboard 自带 Logging 记录）。
      *
      * <p>键名（Dashboard CSV 的列名）：{@code segment_id, vbus_target, vbus_meas, load_power,
-     * target, velocity, duty, error, current, indrop, iactive, settled}，时间列由 Dashboard 自己加。
+     * target, velocity, duty, error, current, iactive, settled}，时间列由 Dashboard 自己加。
      */
     public static boolean dashboardLog = true;
 
@@ -143,7 +142,6 @@ public class VoltageSweepOp extends LinearOpMode {
         final int wheelTarget;
         final double durSec;
         final boolean dip;
-
         Segment(int id, String name, double vbusTarget, int wheelTarget,
                 double durSec, boolean dip) {
             this.id = id;
@@ -177,10 +175,8 @@ public class VoltageSweepOp extends LinearOpMode {
     @Override
     public void runOpMode() throws InterruptedException {
         telemetry = new MultipleTelemetry(telemetry, FtcDashboard.getInstance().getTelemetry());
-
         shooter = new PrototypeShooter(hardwareMap, telemetry);
         shooter.stop();
-
         loadMotor = hardwareMap.tryGet(DcMotorEx.class, loadMotorName);
         if (loadMotor == null) {
             telemetry.addLine("!! 找不到负载电机 \"" + loadMotorName + "\"");
@@ -194,9 +190,7 @@ public class VoltageSweepOp extends LinearOpMode {
                     ? DcMotor.Direction.REVERSE : DcMotor.Direction.FORWARD);
             loadMotor.setPower(0);
         }
-
         buildPlan();
-
         telemetry.addLine("VoltageSweep: 电压点 " + fmtArray(vbusTargets) + " V");
         telemetry.addLine("计划 " + plan.size() + " 段，预计 " + String.format(Locale.US, "%.1f", totalSec()) + " s");
         telemetry.addLine("Start = 开始扫描    Init 期间 Y = 手动负载(接线自检)    X = 中止");
@@ -204,7 +198,6 @@ public class VoltageSweepOp extends LinearOpMode {
             telemetry.addLine("  #" + s.id + " " + s.name);
         }
         telemetry.update();
-
         while (!opModeIsActive() && !isStopRequested()) {
             if (gamepad1.yWasPressed() && loadMotor != null) {
                 manualMode = !manualMode;
@@ -226,7 +219,6 @@ public class VoltageSweepOp extends LinearOpMode {
         if (!opModeIsActive()) {
             return;
         }
-
         boolean aborted = false;
         boolean userStop = false;
         Segment prev = null;
@@ -234,19 +226,17 @@ public class VoltageSweepOp extends LinearOpMode {
             if (!opModeIsActive()) {
                 break;
             }
-            // 掉速段 → 恢复段：重新播种滤波器，避免带着「开环期间停更」的状态继续
+            // 掉速段 → 恢复段：重置闭环瞬态状态
             if (prev != null && prev.dip && !seg.dip) {
                 shooter.resetController();
             }
             prev = seg;
-
             double t0 = getRuntime();
             while (opModeIsActive() && getRuntime() - t0 < seg.durSec) {
                 double now = getRuntime();
                 double dt = lastLoopT < 0 ? 0.01 : clamp(now - lastLoopT, 0.001, 0.1);
                 lastLoopT = now;
                 double vbus = readBusVoltage();
-
                 if (vbus < minSafeVbus) {
                     aborted = true;
                     break;
@@ -256,10 +246,8 @@ public class VoltageSweepOp extends LinearOpMode {
                     userStop = true;
                     break;
                 }
-
                 // 电压环：母线高于目标 → 加负载（多抽电流把电压压下来）
                 updateLoad(seg.vbusTarget, vbus, dt);
-
                 if (seg.dip) {
                     // 开环掉速：不走闭环（update() 会覆盖输出）
                     shooter.setOpenLoopPower(dipDuty);
@@ -267,9 +255,7 @@ public class VoltageSweepOp extends LinearOpMode {
                     shooter.setTargetVelocity(seg.wheelTarget);
                     shooter.update();
                 }
-
                 showTelemetry(seg, t0, vbus);
-
                 if (dashboardLog && now - lastLogT >= logPeriodMs / 1000.0) {
                     lastLogT = now;
                     logRow(seg, vbus);
@@ -279,7 +265,6 @@ public class VoltageSweepOp extends LinearOpMode {
                 break;
             }
         }
-
         // ---- 收尾：卸负载、停飞轮 ----
         setLoadPower(0);
         shooter.stop();
@@ -294,7 +279,6 @@ public class VoltageSweepOp extends LinearOpMode {
             names.put(s.id, s.name);
         }
         String summary = summarize(names);
-
         // 停机后把汇总留在屏幕上（直到按 X 或 Stop）
         while (opModeIsActive() && !isStopRequested()) {
             for (String line : summary.split("\n")) {
@@ -340,7 +324,7 @@ public class VoltageSweepOp extends LinearOpMode {
     // ---------------------------------------------------------------- 电压环
 
     private double readBusVoltage() {
-        // 与第 4 代控制律读同一个量：所有 voltageSensor 里最小的正读数（无读数时为 NaN）
+        // 与现行控制律读同一个量：所有 voltageSensor 里最小的正读数（无读数时为 NaN）
         return shooter.getBusVoltage();
     }
 
@@ -377,8 +361,8 @@ public class VoltageSweepOp extends LinearOpMode {
                 seg.wheelTarget, shooter.getVelocity(), dutyOf(seg));
         telemetry.addData("电流 / 误差", "%.2f A / %.1f", shooter.getCurrent(), shooter.getError());
         FlywheelCalculator c = shooter.getCalculator();
-        telemetry.addData("inDrop / iActive / settled", "%s / %s / %s",
-                c.isInDrop(), c.isIntegralActive(), c.isSettled());
+        telemetry.addData("iActive / settled", "%s / %s",
+                c.isIntegralActive(), c.isSettled());
         telemetry.update();
     }
 
@@ -394,7 +378,6 @@ public class VoltageSweepOp extends LinearOpMode {
         telemetry.addData("duty", duty);
         telemetry.addData("error", seg.wheelTarget - shooter.getVelocity());
         telemetry.addData("current", shooter.getCurrent());
-        telemetry.addData("indrop", c.isInDrop() ? 1 : 0);
         telemetry.addData("iactive", c.isIntegralActive() ? 1 : 0);
         telemetry.addData("settled", c.isSettled() ? 1 : 0);
         samples.add(new double[]{
@@ -452,7 +435,6 @@ public class VoltageSweepOp extends LinearOpMode {
                     names.getOrDefault(e.getKey(), "#" + e.getKey()), n,
                     vbusMean, vbusSd, vMean, vSd, dSum / n, dvSum / n, iSum / n, 100.0 * stSum / n));
         }
-
         // 判据：同目标转速下 duty·V_bus 应跨电压点一致（§2.12⑥，≤3%）
         sb.append("-- 跨电压一致性（同目标转速下 duty·V_bus，判据 ≤3%）--\n");
         for (int target : new int[]{aVelocity, bVelocity}) {

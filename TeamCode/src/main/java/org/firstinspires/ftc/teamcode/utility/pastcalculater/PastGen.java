@@ -10,15 +10,14 @@ package org.firstinspires.ftc.teamcode.utility.pastcalculater;
  * 供「同一段 ω 序列喂给各代、只比 duty」的对比实验使用，**不接入正式机器人控制**。
  */
 public enum PastGen {
-
     GEN1_PIDSVA(1, "Gen1/2 PIDSVA",
             "kP·e + kI·∫e + kD·de + kS·sgn(ω*) + kV·ω* + kA·dω*/dt，|e|<iZone 才积，无掉速补偿、无电压归一化"),
 
     GEN3_BOOST(3, "Gen3 Boost",
             "kS·sgn(ω*) + kff·ω* + kp·e + ki·∫e(|e|<iZone=500) + 掉速 boost(kBoost·e, ≤boostMax)，无电压归一化"),
 
-    GEN4_CURRENT(4, "Gen4 现行",
-            "速度滤波 τV 调度 + 掉速冻结积分 + 母线电压归一化，无 boost、无 kD");
+    GEN4_CURRENT(4, "SimpleShooter 现行",
+            "原始速度/原始母线电压 + |e|<iZone 才积分的 PI + 前馈，无 boost、无 kD、无滤波");
 
     /** 在 Dashboard 里用来选择的编号（1 / 3 / 4） */
     public final int id;

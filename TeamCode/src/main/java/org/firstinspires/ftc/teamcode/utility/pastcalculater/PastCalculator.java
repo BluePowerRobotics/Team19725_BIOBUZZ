@@ -14,7 +14,6 @@ import org.firstinspires.ftc.teamcode.utility.Shooter.FlywheelParams;
  * {@code |ω*−ω| ≤ max(settleFrac·|ω*|, 2·quantStep)} 连续 {@code settleFrames} 帧。
  */
 public abstract class PastCalculator {
-
     protected static final double DEFAULT_DT = 0.02;
 
     // ---- 每帧写出的分量快照（getter 见下） ----
@@ -64,11 +63,8 @@ public abstract class PastCalculator {
         error = targetVel - currentVel;
         errorFiltered = error;
         velocityFiltered = currentVel;
-
         compute(targetVel, currentVel, vBus, dt);
-
         duty = clamp(duty, -1.0, 1.0); // 各代自己的 dutyMin/dutyMax 已在 compute 内限过
-
         // ---- 统一稳态判据 ----
         if (targetVel == 0) {
             settleCount = 0;
@@ -201,12 +197,10 @@ public abstract class PastCalculator {
         private double lastError;
         private double lastTarget;
         private boolean first = true;
-
         @Override
         public String name() {
             return "Gen1";
         }
-
         @Override
         public void reset(double currentVelocity) {
             clearCommonState();
@@ -214,7 +208,6 @@ public abstract class PastCalculator {
             lastTarget = 0;
             first = true;
         }
-
         @Override
         protected void compute(double targetVel, double currentVel, double vBus, double dt) {
             double dTarget = first ? 0 : (targetVel - lastTarget) / dt;
@@ -222,7 +215,6 @@ public abstract class PastCalculator {
             lastTarget = targetVel;
             lastError = error;
             first = false;
-
             // ---- 积分：仅 |e| < iZone 且 target != 0 ----
             iActive = targetVel != 0 && Math.abs(error) < Gen1Params.iZone;
             if (iActive) {
@@ -234,30 +226,24 @@ public abstract class PastCalculator {
             if (Gen1Params.kI != 0) {
                 integral = iTerm / Gen1Params.kI; // 回算，防饱和
             }
-
             // ---- 前馈 ----
             double sgn = targetVel > 0 ? 1 : (targetVel < 0 ? -1 : 0);
             kSTerm = Gen1Params.kS * sgn;
             ffTerm = Gen1Params.kV * targetVel + Gen1Params.kA * dTarget;
-
             pTerm = Gen1Params.kP * error;
             boostTerm = 0;
             inDrop = false;
-
             duty = kSTerm + ffTerm + pTerm + iTerm + Gen1Params.kD * dError;
             duty = clamp(duty, Gen1Params.dutyMin, Gen1Params.dutyMax);
         }
-
         @Override
         protected double quantStep() {
             return Gen1Params.quantStep;
         }
-
         @Override
         protected double errorBand() {
             return Math.max(Gen1Params.settleFrac * Math.abs(target), 2.0 * Gen1Params.quantStep);
         }
-
         @Override
         protected int settleFrames() {
             return Gen1Params.settleFrames;
@@ -281,12 +267,10 @@ public abstract class PastCalculator {
         private boolean dropArmed;
         private boolean boostActive;
         private double boostTimer;
-
         @Override
         public String name() {
             return "Gen3";
         }
-
         @Override
         public void reset(double currentVelocity) {
             clearCommonState();
@@ -296,12 +280,10 @@ public abstract class PastCalculator {
             boostActive = false;
             boostTimer = 0;
         }
-
         @Override
         protected void compute(double targetVel, double currentVel, double vBus, double dt) {
             double dVelocity = (currentVel - previousVelocity) / dt;
             previousVelocity = currentVel;
-
             // ---- 武装：只有进入稳态后才允许触发 ----
             if (targetVel != lastTargetVel) {
                 dropArmed = false;
@@ -310,7 +292,6 @@ public abstract class PastCalculator {
             if (Math.abs(error) < Gen3Params.dropThreshold) {
                 dropArmed = true;
             }
-
             // ---- 掉速检测与 boost ----
             inDrop = dropArmed && targetVel != 0
                     && (error > Gen3Params.dropThreshold
@@ -326,7 +307,6 @@ public abstract class PastCalculator {
                     boostActive = false;
                 }
             }
-
             // ---- 积分：iZone 内才积，带外清零 ----
             iActive = targetVel != 0 && Math.abs(error) < Gen3Params.iZone;
             if (iActive) {
@@ -347,31 +327,25 @@ public abstract class PastCalculator {
                 }
             }
             iTerm = i;
-
             double boost = boostActive
                     ? Math.max(0.0, Math.min(Gen3Params.kBoost * error, Gen3Params.boostMax))
                     : 0.0;
             boostTerm = boost;
-
             double sgn = targetVel > 0 ? 1 : (targetVel < 0 ? -1 : 0);
             kSTerm = Gen3Params.kS * sgn;
             ffTerm = Gen3Params.kff * targetVel;
             pTerm = Gen3Params.kp * error;
-
             duty = kSTerm + ffTerm + pTerm + iTerm + boostTerm;
             duty = clamp(duty, Gen3Params.dutyMin, Gen3Params.dutyMax);
         }
-
         @Override
         protected double quantStep() {
             return Gen3Params.quantStep;
         }
-
         @Override
         protected double errorBand() {
             return Math.max(Gen3Params.settleFrac * Math.abs(target), 2.0 * Gen3Params.quantStep);
         }
-
         @Override
         protected int settleFrames() {
             return Gen3Params.settleFrames;
@@ -381,43 +355,37 @@ public abstract class PastCalculator {
     // ================================================================ 第 4 代
 
     /**
-     * 第 4 代（现行）：直接包一层 {@link FlywheelCalculator}，
+     * SimpleShooter 现行：直接包一层 {@link FlywheelCalculator}，
      * 参数来自 {@link Gen4Params}（Dashboard 可改），每帧灌一次。
      */
     public static final class Gen4 extends PastCalculator {
         private final FlywheelCalculator calc = new FlywheelCalculator();
         private final FlywheelParams params = FlywheelParams.copyOf(FlywheelParams.BIG);
-
         public Gen4() {
             Gen4Params.applyTo(params);
             params.applyTo(calc);
-            calc.reset(0);
+            calc.reset();
         }
-
         @Override
         public String name() {
             return "Gen4";
         }
-
-        /** 电压缩放系数 {@code s = clamp(V_nom/V_busFilt, vScaleMin, vScaleMax)}（第 4 代独有）。 */
+        /** 电压缩放系数 {@code s = clamp(V_nom/V_bus_raw, vScaleMin, vScaleMax)}。 */
         public double getVScale() {
             return calc.getVScale();
         }
-
         @Override
         public void reset(double currentVelocity) {
             clearCommonState();
             Gen4Params.applyTo(params);
             params.applyTo(calc);
-            calc.reset(currentVelocity);
+            calc.reset();
         }
-
         @Override
         protected void compute(double targetVel, double currentVel, double vBus, double dt) {
             Gen4Params.applyTo(params); // Dashboard 改动即时生效
             params.applyTo(calc);
             duty = calc.calculate(targetVel, currentVel, vBus, dt);
-
             kSTerm = calc.getKSTerm();
             ffTerm = calc.getFfTerm();
             pTerm = calc.getPTerm();
@@ -425,18 +393,16 @@ public abstract class PastCalculator {
             boostTerm = 0; // 第 4 代已删除 boost
             integral = calc.getIntegral();
             error = calc.getErrorRaw();
-            errorFiltered = calc.getErrorFiltered();
-            velocityFiltered = calc.getVelocityFiltered();
-            inDrop = calc.isInDrop();
+            errorFiltered = calc.getErrorRaw();
+            velocityFiltered = currentVel;
+            inDrop = false;
             iActive = calc.isIntegralActive();
         }
-
         @Override
         protected double errorBand() {
             double band = calc.getErrorBand();
             return band > 0 ? band : super.errorBand();
         }
-
         @Override
         protected int settleFrames() {
             return Gen4Params.settleFrames;

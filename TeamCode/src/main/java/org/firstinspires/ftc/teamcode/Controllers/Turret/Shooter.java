@@ -19,11 +19,11 @@ import org.firstinspires.ftc.teamcode.utility.Shooter.FlywheelParams;
  * 二者惯量、齿比、静摩擦都不同。所以飞轮参数不是静态裸字段，而是
  * {@link Params#flywheel}（类型 {@link FlywheelParams}）——大球持
  * {@code FlywheelParams.BIG}、小球持 {@code FlywheelParams.SMALL}，
- * 两套参数在 Dashboard 上独立可见、独立整定。
+ * 两套增益、限幅与积分门限 iZone 都随各自参数独立整定。
  *
- * <p><b>控制律与 {@code Controllers.Shooter.PrototypeShooter} 完全一致</b>（第 4 代，2026-10-22）：
+ * <p><b>控制律与 {@code Controllers.Shooter.PrototypeShooter} 完全一致</b>（SimpleShooter）：
  * <pre>
- *   duty = s·(kS·sgn(ω*) + kff·ω*) + kp·(ω*-ωf) + ki·∫(ω*-ωf)
+ *   duty = s·(kS·sgn(ω*) + kff·ω*) + kp·(ω*-ω) + ki·∫(ω*-ω)
  * </pre>
  * 计算逻辑全部在 {@link FlywheelCalculator}（{@code utility/Shooter}）里，本类每帧
  * {@code params.flywheel.applyTo(calculator)} 后调用一次 {@code calculate(...)}，
@@ -42,7 +42,6 @@ import org.firstinspires.ftc.teamcode.utility.Shooter.FlywheelParams;
  */
 @Config
 public class Shooter {
-
     // ==================== 超参数 ====================
 
     /**
@@ -50,32 +49,27 @@ public class Shooter {
      */
     public static class Params {
         /**
-         * 飞轮速度环的完整参数集（前馈 / PI / 两个滤波器 / 电压归一化 / 量化判据）。
+         * 飞轮速度环的完整参数集（前馈 / PI / 原始电压归一化 / 量化判据）。
          * 大球传 {@link FlywheelParams#BIG}，小球传 {@link FlywheelParams#SMALL}；
          * <b>所有飞轮控制数值只在 {@link FlywheelParams} 里维护，本类不重复定义</b>。
          */
         public FlywheelParams flywheel = FlywheelParams.copyOf(FlywheelParams.BIG);
-
         // ---- 机械范围 ----
         /** 俯仰舵机最小位置 */
         public double pitchMin = 0.0;
         /** 俯仰舵机最大位置 */
         public double pitchMax = 1.0;
-
         // ---- 扳机 ----
         /** 扳机释放（发射）时的舵机位置 */
         public double triggerOnPos = 1.0;
         /** 扳机关闭时的舵机位置 */
         public double triggerOffPos = 0.0;
-
         // ---- 就绪判据 ----
         /** 俯仰舵机动作时间 (秒)：目标变更后经过该时间即视为到位（转速判据在 {@link FlywheelCalculator#isSettled()}） */
         public double pitchSettleTime = 0.25;
-
         /** 供 Forge / Dashboard 反射使用的空构造 */
         public Params() {
         }
-
         /**
          * @param flywheel 该发射器的飞轮参数集
          */
@@ -149,7 +143,6 @@ public class Shooter {
         this.pitchServo = hardwareMap.get(Servo.class, pitchServoName);
         this.triggerServo = hardwareMap.get(Servo.class, triggerServoName);
         this.voltageSensors = hardwareMap.voltageSensor;
-
         FlywheelParams fw = this.params.flywheel;
         motor.setDirection((fw != null && fw.motorReversed)
                 ? DcMotor.Direction.REVERSE : DcMotor.Direction.FORWARD);
@@ -157,12 +150,10 @@ public class Shooter {
         motor.setMode(DcMotor.RunMode.RUN_WITHOUT_ENCODER);
         // 飞轮惯性大，停转后让其自然滑行
         motor.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.FLOAT);
-
         if (fw != null) {
             fw.applyTo(calculator);
         }
         calculator.reset();
-
         pitchCommandTime = now();
     }
 
@@ -181,22 +172,18 @@ public class Shooter {
     public boolean update(int speed, double pitch, boolean release) {
         FlywheelParams fw = (params.flywheel != null) ? params.flywheel : FlywheelParams.BIG;
         double currentTime = now();
-
         // 钳制到可用范围
         targetSpeed = Math.max(0, Math.min(fw.speedMax, speed));
         targetPitch = Math.max(params.pitchMin, Math.min(params.pitchMax, pitch));
         triggerReleased = release;
-
         // 舵机下发
         pitchServo.setPosition(targetPitch);
         triggerServo.setPosition(release ? params.triggerOnPos : params.triggerOffPos);
-
         // 俯仰目标变更时重新计时，用于近似判断舵机是否到位
         if (Double.isNaN(lastPitchCommand) || Math.abs(targetPitch - lastPitchCommand) > 1e-6) {
             lastPitchCommand = targetPitch;
             pitchCommandTime = currentTime;
         }
-
         // 飞轮速度闭环：参数每帧同步，Dashboard 改动即时生效
         fw.applyTo(calculator);
         // 本帧唯一的硬件采样点：转速 / 电流 / 母线电压全部缓存，getter 与遥测只读缓存
@@ -205,7 +192,6 @@ public class Shooter {
         cachedBusVoltage = scanBusVoltage();
         power = calculator.calculate(targetSpeed, cachedVelocity, cachedBusVoltage);
         motor.setPower(power);
-
         return isReady();
     }
 
@@ -219,7 +205,7 @@ public class Shooter {
         triggerServo.setPosition(params.triggerOffPos);
         motor.setPower(0);
         power = 0;
-        calculator.reset(cachedVelocity);
+        calculator.reset();
     }
 
     // ==================== 读取 ====================
@@ -313,17 +299,13 @@ public class Shooter {
         telemetry.addData(name + " pitch", "%.3f", targetPitch);
         telemetry.addData(name + " trigger released", triggerReleased);
         telemetry.addData(name + " ready", isReady());
-
         if (telemetryDetailed) {
             telemetry.addLine("-- " + name + " research --");
-            telemetry.addData(name + " error raw (tick/s)", "%.0f", calculator.getErrorRaw());
-            telemetry.addData(name + " error filt (tick/s)", "%.0f", calculator.getErrorFiltered());
-            telemetry.addData(name + " tauV (ms)", "%.1f", calculator.getTauV() * 1000.0);
+            telemetry.addData(name + " error (tick/s)", "%.0f", calculator.getErrorRaw());
             telemetry.addData(name + " eBand (tick/s)", "%.0f", calculator.getErrorBand());
-            telemetry.addData(name + " inDrop", calculator.isInDrop());
+            telemetry.addData(name + " iZone (tick/s)", "%.0f", calculator.getIZone());
             telemetry.addData(name + " settled", calculator.isSettled());
             telemetry.addData(name + " vScale", "%.3f", calculator.getVScale());
-            telemetry.addData(name + " vBus filt (V)", "%.2f", calculator.getBusVoltageFiltered());
             telemetry.addData(name + " kS term", "%.4f", calculator.getKSTerm());
             telemetry.addData(name + " FF term", "%.4f", calculator.getFfTerm());
             telemetry.addData(name + " P term", "%.4f", calculator.getPTerm());

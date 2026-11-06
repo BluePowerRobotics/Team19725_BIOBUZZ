@@ -15,23 +15,22 @@ import com.acmerobotics.dashboard.config.Config;
  * <p>两个实例由 {@code Controllers.Turret.Shooter} 在构造两个发射器时分别传入
  * （{@code Shooter.BIG_PARAMS} / {@code Shooter.SMALL_PARAMS}），并由
  * {@link #applyTo(FlywheelCalculator)} 每帧灌进计算器，
- * 因此在 FTC Dashboard 上改值也是下一帧即生效（两个飞轮互不影响）。
+ * 两套实例参数在 Dashboard 上分别可见、分别整定。
  *
  * <p><b>为什么参数不放 {@link FlywheelCalculator} 里</b>：计算器是「一套算法」，参数是「一台机器」。
  * 分开后计算器可以换一套参数就复算另一台飞轮的历史日志，两个飞轮也不必各写一份控制代码。
  *
- * <p><b>当前控制律</b>（第 4 代，2026-10-22 起，无 boost）：
+ * <p><b>当前控制律</b>（SimpleShooter，无滤波、无 boost）：
  * <pre>
- *   e_raw  = ω* - ω
- *   s      = clamp(V_nom / V_busFilt, sMin, sMax)        // 母线电压归一化，只作用于前馈
+ *   e      = ω* - ω
+ *   s      = clamp(V_nom / V_bus_raw, sMin, sMax)       // 原始电压，只作用于前馈
  *   ff     = s·(kS·sgn(ω*) + kff·ω*)
- *   ωf     = EMA(ω, τ(|e_raw|))                          // 误差越大 τ 越小
- *   duty   = sat( ff + kp·(ω*-ωf) + ki·∫(ω*-ωf) , 0, 1 )
+ *   P/I    = 直接使用 e（不做速度滤波）
+ *   duty   = sat( ff + kp·e + ki·∫e , 0, 1 )
  * </pre>
  */
 @Config
 public class FlywheelParams {
-
     // ==================================================================================
     //  字段声明（只有含义，数值一律写在文件末尾的两套参数块里）
     // ==================================================================================
@@ -58,6 +57,12 @@ public class FlywheelParams {
     /** 积分增益 (占空比)/(tick/s·s) */
     public double ki;
 
+    /**
+     * 积分门限 (tick/s)：只有 {@code |error| < iZone} 才累加积分。
+     * Dashboard 可调；在 BIG / SMALL 两个参数块中分别赋值。
+     */
+    public double iZone;
+
     /** I 项上限 (占空比)：对 {@code ki·∫e} 限幅，同时回算积分量（抗饱和） */
     public double maxI;
 
@@ -71,7 +76,7 @@ public class FlywheelParams {
 
     // ---------------- 量化与稳态判据 ----------------
 
-    /** 速度量化台阶 (tick/s)：编码器测速最小分辨率（用于误差带下限、kp 告警、滤波拐点） */
+    /** 速度量化台阶 (tick/s)：编码器测速最小分辨率（用于误差带下限与 kp 告警） */
     public double quantStep;
 
     /** 稳态误差带比例：{@code eBand = max(settleFrac·|ω*|, 2·quantStep)} */
@@ -80,31 +85,9 @@ public class FlywheelParams {
     /** 连续落在误差带内多少帧算「到位」（10 帧 ≈ 0.1 s） */
     public int settleFrames;
 
-    // ---------------- 速度滤波（误差调度 EMA） ----------------
-
-    /** 稳态时间常数 (s)：越小噪声越小、相位滞后越大 */
-    public double tauVMax;
-
-    /** 大误差时间常数 (s)：约 1 个控制周期，几乎不滤波，保证加速/退饱和不滞后 */
-    public double tauVMin;
-
-    /** 调度下拐点（倍 eBand）：{@code |e| ≤ eLoFrac·eBand} 用 tauVMax */
-    public double eLoFrac;
-
-    /** 调度上拐点（倍 eBand）：{@code |e| ≥ eHiFrac·eBand} 用 tauVMin */
-    public double eHiFrac;
-
-    // ---------------- 掉速判定与积分冻结 ----------------
-
-    /** 进掉速态的阈值（倍 eBand）：{@code |e| > dropEnterFrac·eBand}；退出用 eBand（滞回） */
-    public double dropEnterFrac;
-
-    /** 掉速态下积分最多冻结多久 (s)，超时强制清零（防误差长期带外导致积分永久失效） */
-    public double iFreezeTimeoutSec;
-
     // ---------------- 母线电压归一化 ----------------
 
-    /** 是否启用母线电压归一化（只乘前馈）。默认关：先按 T1~T4 协议验证再打开 */
+    /** 是否启用母线电压归一化（只乘前馈，直接使用原始电压） */
     public boolean useVoltageNorm;
 
     /** 额定母线电压 (V)：前馈按该电压标定 */
@@ -116,18 +99,6 @@ public class FlywheelParams {
     /** 归一化系数上限（过压时前馈最多缩小到 1/sMax 倍） */
     public double vScaleMax;
 
-    /**
-     * 母线电压低通时间常数 (s)。必须远大于单发发射造成的电压跌落时长（≈0.4 s），
-     * 否则会把「单发掉压」当成「电池没电」，在恢复期末把前馈放大到 &gt;1，人造一次饱和。
-     */
-    public double tauBus;
-
-    /** 掉速结束后的电压采样 hold-off (s)：跳过电池 RC 回弹段，避免采样到回弹中段 */
-    public double busHoldOffSec;
-
-    /** 电压采样最长冻结时长 (s)：超时强制重新采样（防长期冻结导致 s 永久失真） */
-    public double busFreezeTimeoutSec;
-
     // ---------------- 装配与范围 ----------------
 
     /** 电机方向：由飞轮接线极性决定（构造时下发一次），与整定参数无关 */
@@ -138,7 +109,7 @@ public class FlywheelParams {
 
     // ==================================================================================
     //  大球飞轮参数（BIG）—— 2026-09-04 实机整定，8 工作点回归 R²=0.9949
-    //  2026-10 按实测日志复核 kp 与速度滤波（kS/kff/ki 未动），见 §2.15
+    //  SimpleShooter：无速度/电压滤波；BIG / SMALL 各自维护 iZone
     // ==================================================================================
 
     /**
@@ -150,7 +121,6 @@ public class FlywheelParams {
         // ---- 前馈（Tune6.5 Feedforward：多点稳态回归 d_ss = kS + kff·ω）----
         BIG.kS = 0.02945;
         BIG.kff = 3.8307e-4;
-
         // ---- PI（Tune6.1 StepResponse；kp 另需满足 kp×20 ≤ 0.05）----
         // 2026-10 按 09-02 实测日志重定：单步增益 kp·Kd（Kd≈2740 tick/s 每单位 duty）
         // 从 6.0 降到 2.7 → 稳态极限环由 ±2 个量化台阶收到 ±1 个，见 doc/现在的控制系统.md §2.15。
@@ -159,40 +129,21 @@ public class FlywheelParams {
         BIG.kp = 1.9095e-3;
         BIG.ki = 2.59224e-3;
         BIG.maxI = 0.3;
-
         // ---- 输出限幅 ----
         BIG.dutyMin = 0.0;
         BIG.dutyMax = 1.0;
-
         // ---- 量化与稳态判据 ----
         BIG.quantStep = 20.0;      // 实测编码器测速台阶
         BIG.settleFrac = 0.02;     // ±2%
         BIG.settleFrames = 10;     // 10 帧 ≈ 0.1 s
-
-        // ---- 速度滤波（Tune6.6 VelocityFilter 反解 tauVMax）----
-        // 2026-10 重定：实测 |e| 有 14% 的时间越过 0.90·eBand（36 tick/s），而此时
-        // τ 被调度到 tauVMin=8 ms——比 tauVMax 更"不滤波"，正是稳态梳齿的来源。
-        // 把两个拐点抬到 1 / 3 个量化台阶之上（20 / 60 tick/s），τ 才停在慢档。
-        BIG.tauVMax = 0.055;
-        BIG.tauVMin = 0.012;
-        BIG.eLoFrac = 0.50;        // 0.50·eBand = 20 tick/s = 1 个台阶
-        BIG.eHiFrac = 1.50;        // 1.50·eBand = 60 tick/s = 3 个台阶
-
-        // ---- 掉速判定与积分冻结 ----
-        BIG.dropEnterFrac = 3.0;
-        BIG.iFreezeTimeoutSec = 1.5;
-
-        // ---- 母线电压归一化（Tune6.7 BusVoltageFilter 定 tauBus）----
+        BIG.iZone = 120.0;         // 积分门限 (tick/s)
+        // ---- 母线电压归一化（直接使用原始采样）----
         // 2026-10-27 起默认开启：09-02 两份实测（大轮 20:12 vscale≡1、小轮 20:16 vscale≈0.96）
-        // 对比显示开启后前馈随母线跌落自动补偿，掉速期间被冻结（设计如此），判据⑥待 VoltageSweep 收尾。
+        // SimpleShooter 直接使用原始母线电压做归一化，不再做低通或冻结。
         BIG.useVoltageNorm = true;
         BIG.vBusNominal = 12.0;
         BIG.vScaleMin = 0.85;
         BIG.vScaleMax = 1.25;
-        BIG.tauBus = 1.0;
-        BIG.busHoldOffSec = 0.6;
-        BIG.busFreezeTimeoutSec = 2.0;
-
         // ---- 装配与范围 ----
         BIG.motorReversed = true;
         BIG.speedMax = 3000;
@@ -216,40 +167,23 @@ public class FlywheelParams {
         // ---- 前馈（Tune6.5：多点稳态回归 d_ss = kS + kff·ω，实测 kff=3.8346e-4）----
         SMALL.kS = 0.02945;
         SMALL.kff = 3.8346e-4;
-
         // ---- PI（Tune6.1；kp×20 = 0.0348 ≤ 0.05）----
         SMALL.kp = 1.739e-3;
         SMALL.ki = 2.50771e-3;
         SMALL.maxI = 0.3;
-
         // ---- 输出限幅（一般与大球相同）----
         SMALL.dutyMin = 0.0;
         SMALL.dutyMax = 1.0;
-
         // ---- 量化与稳态判据：台阶由编码器/齿比决定，换了机构要重测 ----
         SMALL.quantStep = 20.0;
         SMALL.settleFrac = 0.02;
         SMALL.settleFrames = 10;
-
-        // ---- 速度滤波：沿用大球重定值（小球实测稳态纹波与大球同量级，暂不单独整定）----
-        SMALL.tauVMax = 0.055;
-        SMALL.tauVMin = 0.012;
-        SMALL.eLoFrac = 0.50;
-        SMALL.eHiFrac = 1.50;
-
-        // ---- 掉速判定与积分冻结 ----
-        SMALL.dropEnterFrac = 3.0;
-        SMALL.iFreezeTimeoutSec = 1.5;
-
+        SMALL.iZone = 120.0;       // 积分门限 (tick/s)
         // ---- 母线电压归一化（2026-10-27 实测已开：vscale≈0.96，前馈补齐母线跌落）----
         SMALL.useVoltageNorm = true;
         SMALL.vBusNominal = 12.0;
         SMALL.vScaleMin = 0.85;
         SMALL.vScaleMax = 1.25;
-        SMALL.tauBus = 1.0;
-        SMALL.busHoldOffSec = 0.6;
-        SMALL.busFreezeTimeoutSec = 2.0;
-
         // ---- 装配与范围：方向与最大转速按小球机构填 ----
         SMALL.motorReversed = true;
         SMALL.speedMax = 3000;
@@ -292,19 +226,11 @@ public class FlywheelParams {
         calc.quantStep = quantStep;
         calc.settleFrac = settleFrac;
         calc.settleFrames = settleFrames;
-        calc.tauVMax = tauVMax;
-        calc.tauVMin = tauVMin;
-        calc.eLoFrac = eLoFrac;
-        calc.eHiFrac = eHiFrac;
-        calc.dropEnterFrac = dropEnterFrac;
-        calc.iFreezeTimeoutSec = iFreezeTimeoutSec;
+        calc.iZone = iZone;
         calc.useVoltageNorm = useVoltageNorm;
         calc.vBusNominal = vBusNominal;
         calc.vScaleMin = vScaleMin;
         calc.vScaleMax = vScaleMax;
-        calc.tauBus = tauBus;
-        calc.busHoldOffSec = busHoldOffSec;
-        calc.busFreezeTimeoutSec = busFreezeTimeoutSec;
     }
 
     /**
@@ -326,19 +252,11 @@ public class FlywheelParams {
         quantStep = other.quantStep;
         settleFrac = other.settleFrac;
         settleFrames = other.settleFrames;
-        tauVMax = other.tauVMax;
-        tauVMin = other.tauVMin;
-        eLoFrac = other.eLoFrac;
-        eHiFrac = other.eHiFrac;
-        dropEnterFrac = other.dropEnterFrac;
-        iFreezeTimeoutSec = other.iFreezeTimeoutSec;
+        iZone = other.iZone;
         useVoltageNorm = other.useVoltageNorm;
         vBusNominal = other.vBusNominal;
         vScaleMin = other.vScaleMin;
         vScaleMax = other.vScaleMax;
-        tauBus = other.tauBus;
-        busHoldOffSec = other.busHoldOffSec;
-        busFreezeTimeoutSec = other.busFreezeTimeoutSec;
         motorReversed = other.motorReversed;
         speedMax = other.speedMax;
     }
