@@ -8,6 +8,7 @@ import com.qualcomm.robotcore.eventloop.opmode.LinearOpMode;
 
 import org.firstinspires.ftc.teamcode.Controllers.Chassis.Chassis;
 import org.firstinspires.ftc.teamcode.Processors.RobotPosition.RobotPosition;
+import org.firstinspires.ftc.teamcode.Processors.Sensors.BallCounter;
 import org.firstinspires.ftc.teamcode.Controllers.Sweeper.Sweeper;
 import org.firstinspires.ftc.teamcode.RoadRunner.Drawing;
 import org.firstinspires.ftc.teamcode.utility.ActionRunner;
@@ -63,13 +64,17 @@ public class TeleOpBlue extends LinearOpMode {
         telemetry.addData("Left Bumper", "Sweeper Eat");
         telemetry.addData("Right Bumper", "Sweeper Output");
         telemetry.addData("--- P2 Controls ---", "");
+        telemetry.addData("P2 A", "Clear Ball Count");
         telemetry.update();
         telemetry.setMsTransmissionInterval(250);
 
         waitForStart();
 
         while (opModeIsActive()) {
-            RobotPosition.getInstance().update();
+            // 球道计数方向：出球（右保险杠）按 -1 计数，其余按进球 +1 计数
+            int ballMode = gamepad1.right_bumper
+                    ? BallCounter.MODE_OUTPUT : BallCounter.MODE_INTAKE;
+            RobotPosition.getInstance().update(ballMode);
 
             // ======== P1 Controls ========
 
@@ -107,6 +112,11 @@ public class TeleOpBlue extends LinearOpMode {
                 sweeper.setOutput();
             }
 
+            // 操作手手动清空球道计数（达到 BallMax 后吸球被锁，清空后恢复）
+            if (gamepad2.aWasReleased()) {
+                RobotPosition.getInstance().resetBallCount();
+            }
+
 
             // ======== 更新 & 遥测 ========
 
@@ -118,6 +128,8 @@ public class TeleOpBlue extends LinearOpMode {
 
             telemetry.addData("Team", teamColor == TeamColor.BLUE ? "BLUE" : "RED");
             telemetry.addData("useNoHeadMode", chassis.getUseNoHeadMode());
+            telemetry.addData("Ball Count", "%d / %d",
+                    RobotPosition.getInstance().getBallCount(), Sweeper.BallMax);
 
             // 位姿信息
             telemetry.addData("Pose X", "%.2f in", RobotPosition.getInstance().getX());

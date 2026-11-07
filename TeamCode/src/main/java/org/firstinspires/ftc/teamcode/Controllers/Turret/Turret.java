@@ -4,6 +4,7 @@ import com.acmerobotics.dashboard.config.Config;
 import com.qualcomm.robotcore.hardware.HardwareMap;
 
 import org.firstinspires.ftc.robotcore.external.Telemetry;
+import org.firstinspires.ftc.teamcode.Processors.RobotPosition.RobotPosition;
 import org.firstinspires.ftc.teamcode.utility.Vector2D;
 
 /**
@@ -61,6 +62,10 @@ public class Turret {
     public final Shooter shooterBig;
     public final Shooter shooterSmall;
 
+    /** 上一帧的扳机释放状态，用于检测「发射完成」（释放 → 收回）的下降沿 */
+    private boolean lastTriggerBig = false;
+    private boolean lastTriggerSmall = false;
+
     private final Telemetry telemetry;
 
     public Turret(HardwareMap hardwareMap, Telemetry telemetry) {
@@ -109,6 +114,18 @@ public class Turret {
         boolean yawReady = yawController.update(yaw);
         boolean bigReady = shooterBig.update(speedBig, pitchBig, triggerBig);
         boolean smallReady = shooterSmall.update(speedSmall, pitchSmall, triggerSmall);
+
+        // 发射完成：任一扳机从释放状态收回（true → false）的下降沿，
+        // 说明一次发射动作已结束，球道内小球已全部打出 → 清空球道计数。
+        // 只读取 RobotPosition 的状态，不推进其 update（避免跨层/重复更新）。
+        if ((lastTriggerBig && !triggerBig) || (lastTriggerSmall && !triggerSmall)) {
+            RobotPosition robotPosition = RobotPosition.getInstanceOrNull();
+            if (robotPosition != null) {
+                robotPosition.resetBallCount();
+            }
+        }
+        lastTriggerBig = triggerBig;
+        lastTriggerSmall = triggerSmall;
 
         return new FireReady(yawReady && bigReady, yawReady && smallReady);
     }

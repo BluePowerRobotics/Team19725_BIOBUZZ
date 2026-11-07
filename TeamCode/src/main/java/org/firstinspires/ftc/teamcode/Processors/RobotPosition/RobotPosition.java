@@ -16,6 +16,7 @@ import org.firstinspires.ftc.robotcore.external.navigation.YawPitchRollAngles;
 
 import org.firstinspires.ftc.teamcode.Parameter.TeamColor;
 import org.firstinspires.ftc.teamcode.Processors.FusionLocalizer.AdaptiveEKFLocalizer;
+import org.firstinspires.ftc.teamcode.Processors.Sensors.BallCounter;
 import org.firstinspires.ftc.teamcode.Processors.VisionLocalizer.MT1Localizer;
 import org.firstinspires.ftc.teamcode.RoadRunner.MecanumDrive;
 import org.firstinspires.ftc.teamcode.utility.Geometry.ConvexPolygon;
@@ -29,6 +30,16 @@ public class RobotPosition {
 
     /** 融合定位器：Pinpoint 速度 + Limelight 视觉 + 自适应 EKF（权威位姿来源） */
     private AdaptiveEKFLocalizer fusionLocalizer;
+
+    /** 球道光电门在 Robot Configuration 中的设备名 */
+    private static final String BALL_BEAM_DEVICE = "breakBeam";
+
+    /**
+     * 球道计数器（状态估计，每帧由 {@link #update(int)} 主动触发一次）。
+     * 光电门由其内部持有并在计数完成后触发采样，更新链路为
+     * {@code RobotPosition → BallCounter → BreakBeam}。
+     */
+    private BallCounter ballCounter;
 
     /**
      * HIVE 状态跟踪值：MT1 有观测时更新为观测值，无观测 / 解算被拒时保持上一状态。
@@ -82,6 +93,10 @@ public class RobotPosition {
 
         instance.currentPose = initpose != null ? initpose : new Pose2d(0,0,0);
 
+        // ---- 先创建下属对象（Init 规范：先创建下属对象，再初始化自身参数）----
+        // 球道计数链路：BallCounter 内部创建并持有光电门（RobotPosition → BallCounter → BreakBeam）
+        instance.ballCounter = new BallCounter(hardwareMap, BALL_BEAM_DEVICE);
+
         // ---- 先构造融合定位器：Pinpoint 速度预测 + Limelight 视觉更新 + 自适应 Q/R ----
         // 队伍颜色决定 Limelight pipeline（红 0 / 蓝 1），由 MT1Localizer 按颜色切换。
         Limelight3A limelight = hardwareMap.get(Limelight3A.class, "limelight");
@@ -111,8 +126,21 @@ public class RobotPosition {
         currentPose = pose;
     }
 
-    // 每帧调用：推进融合定位器并返回当前位姿
+    // 每帧调用：推进融合定位器并返回当前位姿（球道计数按进入模式）
     public Pose2d update() {
+        return update(BallCounter.MODE_INTAKE);
+    }
+
+    /**
+     * 每帧调用：推进融合定位器与下属球道计数器，并返回当前位姿。
+     *
+     * <p>按层层嵌套的 update 规范，本函数只调用一次下属 {@link BallCounter#update(int)}，
+     * 上层（OpMode / Action）不要另行调用计数器。
+     *
+     * @param ballMode 球道计数方向（外部信息）：{@link BallCounter#MODE_INTAKE} 进球 +1，
+     *                 {@link BallCounter#MODE_OUTPUT} 出球 -1
+     */
+    public Pose2d update(int ballMode) {
         // 唯一推进点：每帧只调用一次，避免同一帧的视觉观测被重复计入 EKF
         // （MecanumDrive 的轨迹 / 转向 Action 内部已改为复用本帧结果）
         currentVelocity2d = drive.updatePoseEstimate();
@@ -124,6 +152,11 @@ public class RobotPosition {
         }
 
         currentPose = drive.localizer.getPose();
+
+        // 自身状态更新完成后，主动触发下属计数器；
+        // 计数器完成本帧计数后，再由它触发下属光电门采样（单向串行，无重复更新）
+        ballCounter.update(ballMode);
+
         return currentPose;
     }
 
@@ -158,6 +191,28 @@ public class RobotPosition {
      */
     public MT1Localizer.HiveState getHiveState(){return hiveState;}
     public double getOmega(){return currentVelocity2d.angVel;}
+
+    // ---- 球道计数功能 ----
+
+    /**
+     * @return 当前球道内累计的小球个数（由上一帧 {@link #update(int)} 采样的光电门上升沿得到，始终 ≥ 0）。
+     *         供 Sweeper 限制吸球数量、主程序遥测读取；读取内部变量，不访问硬件。
+     *         若初始化中途失败留下了未完整构建的实例，返回 0（Sweeper 通过 getInstanceOrNull 读取时不会 NPE）。
+     */
+    public int getBallCount() {
+        return ballCounter != null ? ballCounter.getCount() : 0;
+    }
+
+    /**
+     * 清空球道计数（炮台发射完毕 / 操作手手动清空时调用）。
+     * 只重置计数器与滤波状态，不读取硬件，可在同一帧内多次调用。
+     */
+    public void resetBallCount() {
+        // 计数器内部同时复位光电门滤波器，保证清零后不产生虚假上升沿
+        if (ballCounter != null) {
+            ballCounter.reset();
+        }
+    }
 
     // ---- IMU 功能（原 IMUSensor.java 合并于此） ----
 
