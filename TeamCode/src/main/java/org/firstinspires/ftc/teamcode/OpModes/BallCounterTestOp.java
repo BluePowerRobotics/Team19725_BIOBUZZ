@@ -6,121 +6,145 @@ import com.acmerobotics.dashboard.telemetry.MultipleTelemetry;
 import com.qualcomm.robotcore.eventloop.opmode.LinearOpMode;
 import com.qualcomm.robotcore.eventloop.opmode.TeleOp;
 
+import org.firstinspires.ftc.teamcode.Controllers.Sweeper.Sweeper;
+import org.firstinspires.ftc.teamcode.Controllers.Turret.Shooter;
+import org.firstinspires.ftc.teamcode.Controllers.Turret.Turret;
+import org.firstinspires.ftc.teamcode.Parameter.HypParams;
+import org.firstinspires.ftc.teamcode.Processors.RobotPosition.RobotPosition;
 import org.firstinspires.ftc.teamcode.Processors.Sensors.BallCounter;
-import org.firstinspires.ftc.teamcode.Processors.Sensors.BreakBeamSensor;
+
 /**
- * BallCounter 小球计数器测试程序（基于对射光电门，模拟信号接口）。
+ * BallCounter 球道计数联调程序（整车测试：需要 Limelight / Pinpoint / 光电门 / 炮台全部已配置）。
  *
- * 每帧调用 counter.update(externalState) 采样并做上升沿检测计数，实时显示：
- *   External State   本帧传入的外部信息（0 = 进入(intake)，1 = 出球(output)）
- *   Mode             当前生效的计数方向（INTAKE (0) / OUTPUT (1)）
- *   Ball Count       累计计数的小球个数
- *   New Ball         本帧是否检测到新小球（上升沿，1 = 是）
- *   Blocked          光电门遮挡判定结果（1 = 遮挡，0 = 未遮挡）
- *   Raw Voltage      归一化原始电压（未滤波，= 伏特 / 3.3）
- *   Filtered Voltage 归一化滤波电压（EMA 输出）
- *   Threshold        当前归一化阈值
- *   Alpha            当前 EMA 平滑系数
+ * <p><b>对象层级</b>（与架构图一致，每帧自上而下更新，禁止越级）：
+ * <pre>
+ * OpMode
+ *   ├─ RobotPosition（总状态估计器）
+ *   │    └─ BallCounter
+ *   │         └─ BreakBeam（光电门）
+ *   ├─ Sweeper（Intake 电机控制器）
+ *   └─ Turret（炮台）
+ * </pre>
  *
- * 调参方式：FTC Dashboard → Config → BallCounterTestOp
- *   threshold       归一化遮挡阈值 [0, 1]，滤波电压低于该值即判定为遮挡
- *   alpha           EMA 平滑系数 (0, 1]，越接近 1 响应越快、抗噪越差
- *   output          计数方向：false = 进入模式（intake，+1），true = 出球模式（output，-1）
- *   resetCounter    置 true 会清零一次计数并重置滤波器（仅上升沿生效）
+ * <p><b>实现的功能</b>：
+ * <ul>
+ *   <li>吸球 / 出球时自动计数（由 {@link BallCounter} 的上升沿检测完成）；</li>
+ *   <li>计数达到 {@link Sweeper#BallCapacity}（默认 4）时自动停止吸球，送球 / 出球不受影响；</li>
+ *   <li>炮台发射完毕（二操松开 A 键，扳机由释放回到关闭）后自动清空计数；</li>
+ *   <li>一操 Y 键允许操作手手动清空计数。</li>
+ * </ul>
  *
- * 验证步骤：
- *   1. 让小球逐个挡过光电门，每个球应只使 Ball Count +1；
- *   2. 让小球停在光电门中不动，Ball Count 应只 +1 且之后不再增加，
- *      Blocked 保持为 1，New Ball 仅在挡光的那一帧为 1；
- *   3. 球离开（Blocked 回到 0）后再挡下一个球，应再次 +1；
- *   4. 置 output = true 切到出球模式后，每挡一个球 Ball Count 应 -1，
- *      减到 0 后继续挡球不会变成负数。
+ * <p><b>手柄映射</b>：
+ * <ul>
+ *   <li>一操 左 bumper（按住）：吸球；右 bumper（按住）：出球</li>
+ *   <li>一操 Y：手动清空球道计数</li>
+ *   <li>二操 按住 A：发射（固定 yaw / 俯仰，飞轮目标转速见 Dashboard）；松开即视为发射完毕</li>
+ * </ul>
  *
- * 注意：BallCounter.update() 内部已调用 BreakBeamSensor.update()，
- *      本程序中不要再单独调用 beam.update()，否则滤波器每帧会被推进两次。
+ * <p><b>验证步骤</b>：
+ * <ul>
+ *   <li>逐个吸球：Ball Count 每个球只 +1，达到 4 后 Intake 自动停转（Sweeper Target = 0）；</li>
+ *   <li>按右 bumper 出球：每挡一个球 Ball Count -1，减到 0 后不再变负；</li>
+ *   <li>按住二操 A 再松开：Reset 触发一次，Ball Count 归零；</li>
+ *   <li>按一操 Y：Ball Count 手动归零。</li>
+ * </ul>
  *
- * 校准建议：先在"有遮挡 / 无遮挡"两种情况下观察 Raw Voltage，
- *   确认未遮挡为高电压、遮挡为低电压；再按抖动情况调整 alpha
- *   （0.5 附近抗抖更强，0.9 附近响应更快）。
+ * <p><b>注意</b>：
+ * <ul>
+ *   <li>本程序不得再直接调用 {@code ballCounter.update()} 或 {@code beam.update()}，
+ *       否则会与 {@link RobotPosition#update(int)} 内部的逐级更新重复推进滤波器。</li>
+ *   <li>光电门的原始电压 / 阈值 / alpha 标定请用 BreakBeamTestOp
+ *       （BallCounter 现在归 RobotPosition 管理，本程序不再单独持有光电门）。</li>
+ * </ul>
+ *
+ * <p>调参：FTC Dashboard → Config → BallCounterTestOp / Sweeper / Turret。
  */
 @Config
 @TeleOp(name = "BallCounterTestOp", group = "Tests")
 public class BallCounterTestOp extends LinearOpMode {
 
-    /** 模拟口在机器人配置中的设备名（硬件参数，改动需重新 init） */
-    private static final String DEVICE_NAME = "breakBeam";
-
-
     // ================= FTC Dashboard 可调参数 =================
 
-    /** 归一化遮挡阈值 [0, 1]，滤波电压低于它即判定为遮挡 */
-    public static double threshold = 0.5;
+    /** 联调时炮台目标平转角（弧度） */
+    public static double testYaw = 0.0;
 
-    /** EMA 平滑系数 (0, 1] */
-    public static double alpha = 0.8;
+    /** 联调时大球飞轮目标转速 (tick/s) */
+    public static int testSpeedBig = Shooter.BIG_PARAMS.flywheel.speedMax;
 
-    /** 计数方向：false = 进入模式（intake，+1），true = 出球模式（output，-1） */
-    public static boolean output = false;
+    /** 联调时小球飞轮目标转速 (tick/s) */
+    public static int testSpeedSmall = Shooter.SMALL_PARAMS.flywheel.speedMax;
 
-    /** 置 true 时清零一次计数并重置滤波器 */
-    public static boolean resetCounter = false;
-
-
-    /** 上一次的 resetCounter 值，用于检测上升沿 */
-    private boolean lastResetCounter = false;
+    private Sweeper sweeper;
+    private Turret turret;
 
     @Override
     public void runOpMode() throws InterruptedException {
         telemetry = new MultipleTelemetry(telemetry, FtcDashboard.getInstance().getTelemetry());
 
-        BreakBeamSensor beam = new BreakBeamSensor(hardwareMap, DEVICE_NAME);
-        BallCounter counter = new BallCounter(beam);
+        // RobotPosition 初始化时自下而上创建 BallCounter 与其下属 BreakBeam（设备名 "breakBeam"）
+        RobotPosition.RobotPositioninit(hardwareMap, HypParams.StopPoseRed);
+        sweeper = new Sweeper(hardwareMap, telemetry);
+        turret = new Turret(hardwareMap, telemetry);
+        turret.stop();
 
-        telemetry.addData("Device", DEVICE_NAME);
-        telemetry.addData("Status", "Initialized");
-        telemetry.addLine("Tune threshold/alpha/output/resetCounter in FTC Dashboard > Config");
+        telemetry.addLine("GP1 LB: Eat | RB: Output | Y: Clear ball count");
+        telemetry.addLine("GP2 hold A: Fire (release = fire complete -> auto clear count)");
+        telemetry.addLine("Ball lane auto-stops intake at BallCapacity = " + Sweeper.BallCapacity);
         telemetry.update();
 
         waitForStart();
 
         while (opModeIsActive()) {
-            // 采样 + EMA 滤波 + 上升沿检测计数（必须每帧调用）
-            // 外部信息：0 = 进入模式（intake，+1），1 = 出球模式（output，-1）
-            int externalState = output ? BallCounter.MODE_OUTPUT : BallCounter.MODE_INTAKE;
-            boolean newBall = counter.update(externalState);
+            RobotPosition robotPosition = RobotPosition.getInstance();
 
-            // 上升沿清零计数（同时重置底层滤波器）
-            if (resetCounter && !lastResetCounter) {
-                counter.reset();
+            // ---- 信号处理：球道方向由本帧吸球 / 出球指令决定（出球 -1，其余 +1）----
+            int ballDirection = gamepad1.right_bumper
+                    ? BallCounter.MODE_OUTPUT : BallCounter.MODE_INTAKE;
+
+            // ---- 状态估计：RobotPosition 内部更新 BallCounter → BreakBeam（本帧唯一推进点）----
+            robotPosition.update(ballDirection);
+
+            // ---- 操作手手动清空 ----
+            if (gamepad1.yWasReleased()) {
+                robotPosition.resetBallCount();
             }
-            lastResetCounter = resetCounter;
 
-            // 每帧应用 Dashboard 参数（带范围保护，避免非法值抛异常）
-            beam.setThreshold(clamp01(threshold));                  // threshold ∈ [0, 1]
-            beam.setAlpha(Math.max(0.01, Math.min(1.0, alpha)));     // alpha ∈ (0, 1]
+            // ---- 控制：吸球 / 出球（满额自动停吸由 Sweeper 内部判定）----
+            if (gamepad1.left_bumper) {
+                sweeper.setEat();
+            }
+            if (gamepad1.right_bumper) {
+                sweeper.setOutput();
+            }
+            sweeper.update(robotPosition.getBallCount());
+
+            // ---- 控制：炮台（固定 yaw / 俯仰，二操按住 A 发射）----
+            double pitchBig = (Shooter.BIG_PARAMS.pitchMin + Shooter.BIG_PARAMS.pitchMax) / 2.0;
+            double pitchSmall = (Shooter.SMALL_PARAMS.pitchMin + Shooter.SMALL_PARAMS.pitchMax) / 2.0;
+            boolean fire = gamepad2.a;
+            Turret.FireReady ready = turret.update(testYaw, pitchBig, pitchSmall,
+                    testSpeedBig, testSpeedSmall, fire, fire);
+
+            // ---- 炮台发射完毕 → 清空球道计数（OpMode 负责跨层转发）----
+            if (turret.consumeResetBallCountRequest()) {
+                robotPosition.resetBallCount();
+            }
 
             // ---- 遥测 ----
-            telemetry.addData("External State", externalState);
-            telemetry.addData("Ball Count", counter.getCount());
-            telemetry.addData("Mode", output ? "OUTPUT (1)" : "INTAKE (0)");
-            telemetry.addData("New Ball", newBall ? 1 : 0);
-            telemetry.addData("Blocked", beam.isBlocked() ? 1 : 0);
-            telemetry.addData("Raw Voltage", "%.3f", beam.getRawVoltage());
-            telemetry.addData("Filtered Voltage", "%.3f", beam.getVoltage());
-            telemetry.addData("Threshold", "%.3f", beam.getThreshold());
-            telemetry.addData("Alpha", "%.3f", beam.getAlpha());
+            telemetry.addData("Ball Direction", ballDirection == BallCounter.MODE_INTAKE
+                    ? "INTAKE (+1)" : "OUTPUT (-1)");
+            telemetry.addData("Ball Count", robotPosition.getBallCount());
+            telemetry.addData("Ball Capacity", Sweeper.BallCapacity);
+            telemetry.addData("Ball Lane Full", sweeper.isBallLaneFull());
+            telemetry.addData("Sweeper Target (tick/s)", sweeper.getTargetVelocity());
+            telemetry.addData("Fire Ready big/small", ready.big + " / " + ready.small);
+            telemetry.addData("Reset pending", turret.hasResetBallCountRequest());
+            turret.setTelemetry();
             telemetry.update();
         }
-    }
 
-    /** 把数值限制到 [0, 1] */
-    private static double clamp01(double value) {
-        if (value < 0) {
-            return 0;
-        }
-        if (value > 1) {
-            return 1;
-        }
-        return value;
+        turret.stop();
+        sweeper.setStop();
+        sweeper.update();
     }
 }

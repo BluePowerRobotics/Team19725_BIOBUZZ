@@ -16,6 +16,8 @@ import org.firstinspires.ftc.robotcore.external.navigation.YawPitchRollAngles;
 
 import org.firstinspires.ftc.teamcode.Parameter.TeamColor;
 import org.firstinspires.ftc.teamcode.Processors.FusionLocalizer.AdaptiveEKFLocalizer;
+import org.firstinspires.ftc.teamcode.Processors.Sensors.BallCounter;
+import org.firstinspires.ftc.teamcode.Processors.Sensors.BreakBeamSensor;
 import org.firstinspires.ftc.teamcode.Processors.VisionLocalizer.MT1Localizer;
 import org.firstinspires.ftc.teamcode.RoadRunner.MecanumDrive;
 import org.firstinspires.ftc.teamcode.utility.Geometry.ConvexPolygon;
@@ -29,6 +31,12 @@ public class RobotPosition {
 
     /** 融合定位器：Pinpoint 速度 + Limelight 视觉 + 自适应 EKF（权威位姿来源） */
     private AdaptiveEKFLocalizer fusionLocalizer;
+
+    /** 光电门设备名（模拟输入口，与 BallCounterTestOp 保持一致） */
+    private static final String BREAK_BEAM_NAME = "breakBeam";
+
+    /** 球道计数器：统计吸球 / 出球时经过光电门的小球个数（内部持有下属 BreakBeamSensor） */
+    private BallCounter ballCounter;
 
     /**
      * HIVE 状态跟踪值：MT1 有观测时更新为观测值，无观测 / 解算被拒时保持上一状态。
@@ -82,6 +90,12 @@ public class RobotPosition {
 
         instance.currentPose = initpose != null ? initpose : new Pose2d(0,0,0);
 
+        // ---- 先创建下属对象：对射光电门 → 球道计数器（init 自下而上）----
+        // 本项目光电门约定 0 = 遮挡、1 = 未遮挡，与 BreakBeamSensor 默认的
+        // "低电压 = 遮挡" 判定一致（见 BallCounterTestOp 的实机验证）。
+        BreakBeamSensor breakBeam = new BreakBeamSensor(hardwareMap, BREAK_BEAM_NAME);
+        instance.ballCounter = new BallCounter(breakBeam);
+
         // ---- 先构造融合定位器：Pinpoint 速度预测 + Limelight 视觉更新 + 自适应 Q/R ----
         // 队伍颜色决定 Limelight pipeline（红 0 / 蓝 1），由 MT1Localizer 按颜色切换。
         Limelight3A limelight = hardwareMap.get(Limelight3A.class, "limelight");
@@ -113,6 +127,22 @@ public class RobotPosition {
 
     // 每帧调用：推进融合定位器并返回当前位姿
     public Pose2d update() {
+        // 未显式给出球道方向的调用方（如自动阶段未接入球道计数的程序）
+        // 按"吸球"方向计数，保证球道仍能累计球数
+        return update(BallCounter.MODE_INTAKE);
+    }
+
+    /**
+     * 每帧调用：更新下属球道计数器与融合定位器，返回当前位姿。
+     *
+     * @param ballDirection 球道方向外部信息：{@link BallCounter#MODE_INTAKE}（0，吸球 +1）
+     *                      或 {@link BallCounter#MODE_OUTPUT}（1，出球 -1）；
+     *                      由 OpMode 按当前 Sweeper 指令给出（本类不依赖 Controllers）
+     */
+    public Pose2d update(int ballDirection) {
+        // 先更新下属：BallCounter 内部再更新其下属 BreakBeam（每帧各一次，禁止跨层更新）
+        ballCounter.update(ballDirection);
+
         // 唯一推进点：每帧只调用一次，避免同一帧的视觉观测被重复计入 EKF
         // （MecanumDrive 的轨迹 / 转向 Action 内部已改为复用本帧结果）
         currentVelocity2d = drive.updatePoseEstimate();
@@ -125,6 +155,21 @@ public class RobotPosition {
 
         currentPose = drive.localizer.getPose();
         return currentPose;
+    }
+
+    // ==================== 球道计数（BallCounter → BreakBeam）====================
+
+    /** @return 球道内当前的小球个数（由下属 BallCounter 最近一帧的结果缓存） */
+    public int getBallCount() {
+        return ballCounter.getCount();
+    }
+
+    /**
+     * 清空球道计数。由上层（OpMode）在"炮台发射完毕"或"操作手手动清空"时调用；
+     * 同时把边缘检测基准重置为最近一帧的遮挡状态，因此不会产生虚假上升沿。
+     */
+    public void resetBallCount() {
+        ballCounter.reset();
     }
 
 

@@ -8,6 +8,7 @@ import com.qualcomm.robotcore.eventloop.opmode.LinearOpMode;
 
 import org.firstinspires.ftc.teamcode.Controllers.Chassis.Chassis;
 import org.firstinspires.ftc.teamcode.Processors.RobotPosition.RobotPosition;
+import org.firstinspires.ftc.teamcode.Processors.Sensors.BallCounter;
 import org.firstinspires.ftc.teamcode.Controllers.Sweeper.Sweeper;
 import org.firstinspires.ftc.teamcode.RoadRunner.Drawing;
 import org.firstinspires.ftc.teamcode.utility.ActionRunner;
@@ -62,6 +63,7 @@ public class TeleOpBlue extends LinearOpMode {
         telemetry.addData("A", "Reset Pose to " + (teamColor == TeamColor.BLUE ? "Blue" : "Red") + " ResetPose");
         telemetry.addData("Left Bumper", "Sweeper Eat");
         telemetry.addData("Right Bumper", "Sweeper Output");
+        telemetry.addData("Y", "Clear Ball Count");
         telemetry.addData("--- P2 Controls ---", "");
         telemetry.update();
         telemetry.setMsTransmissionInterval(250);
@@ -69,7 +71,18 @@ public class TeleOpBlue extends LinearOpMode {
         waitForStart();
 
         while (opModeIsActive()) {
-            RobotPosition.getInstance().update();
+            // 球道方向：出球（右 bumper）时计数 -1，其余（吸球 / 停止）时 +1
+            int ballDirection = gamepad1.right_bumper
+                    ? BallCounter.MODE_OUTPUT : BallCounter.MODE_INTAKE;
+
+            // RobotPosition.update 内部层层更新 BallCounter → BreakBeam（本帧唯一推进点）
+            RobotPosition.getInstance().update(ballDirection);
+
+            // 操作手手动清空球道计数
+            if (gamepad1.yWasReleased()) {
+                RobotPosition.getInstance().resetBallCount();
+            }
+            int ballCount = RobotPosition.getInstance().getBallCount();
 
             // ======== P1 Controls ========
 
@@ -114,10 +127,12 @@ public class TeleOpBlue extends LinearOpMode {
             // 因此这里必须在循环内调用，否则队列非空时底盘会一直被屏蔽。
             actionRunner.update();
 
-            sweeper.update();
+            sweeper.update(ballCount);
 
             telemetry.addData("Team", teamColor == TeamColor.BLUE ? "BLUE" : "RED");
             telemetry.addData("useNoHeadMode", chassis.getUseNoHeadMode());
+            telemetry.addData("Ball Count", ballCount);
+            telemetry.addData("Ball Lane Full", sweeper.isBallLaneFull());
 
             // 位姿信息
             telemetry.addData("Pose X", "%.2f in", RobotPosition.getInstance().getX());
