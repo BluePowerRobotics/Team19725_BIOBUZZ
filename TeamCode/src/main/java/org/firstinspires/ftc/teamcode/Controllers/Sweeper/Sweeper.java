@@ -41,6 +41,9 @@ public class Sweeper {
     public static int GiveTheArtifactVel = 2000;
     public static int OutputVel = -500;
 
+    /** 球道最大容量：球道计数达到该值即自动停止吸球（送球 / 出球不受影响，Dashboard 可调） */
+    public static int BallCapacity = 4;
+
     /** 固件速度闭环 PIDF 系数（REV Hub 内置速度 PID，可在 FTC Dashboard 实时调参） */
     public static double VelocityP = 1.17;
     public static double VelocityI = 0.117;
@@ -49,6 +52,12 @@ public class Sweeper {
 
     private int targetVelocity = 0;
     private int lastTargetVelocity = 0;
+
+    /** 本帧是否处于"吸球"指令（只有 setEat 置位，用于球道满额自动停吸） */
+    private boolean eating = false;
+
+    /** 最近一帧由上层传入的球道计数（供满额判定与遥测） */
+    private int ballCount = 0;
 
     /** 最近一次 update() 采到的功率，供读取与遥测复用 */
     private double cachedPower = 0;
@@ -94,22 +103,27 @@ public class Sweeper {
 
     public void setEat() {
         targetVelocity = EatVel;
+        eating = true;
     }
 
     public void setGiveArtifact() {
         targetVelocity = GiveTheArtifactVel;
+        eating = false;
     }
 
     public void setOutput() {
         targetVelocity = OutputVel;
+        eating = false;
     }
 
     public void setStop() {
         targetVelocity = 0;
+        eating = false;
     }
 
     public void setTargetVelocity(int velocity) {
         targetVelocity = velocity;
+        eating = false;
     }
 
     /** 铲子抬起（切换到抬起角度） */
@@ -123,6 +137,24 @@ public class Sweeper {
     }
 
     public void update() {
+        update(ballCount);
+    }
+
+    /**
+     * 每帧调用一次：把目标速度下发，并按球道计数决定是否停吸。
+     *
+     * @param ballCount 球道内当前小球个数（由上层 RobotPosition 的 BallCounter 给出）；
+     *                  计数达到 {@link #BallCapacity} 时，若本帧是吸球指令则强制停转。
+     *                  只拦截吸球方向，送球（GiveArtifact）与出球（Output）不受影响。
+     */
+    public void update(int ballCount) {
+        this.ballCount = ballCount;
+
+        // 球道已满：停止继续吸球（避免球在球道内挤压 / 溢出）
+        if (eating && ballCount >= BallCapacity) {
+            targetVelocity = 0;
+        }
+
         // 固件闭环：把目标速度下发给 Hub 内置速度 PID
         motor.setVelocity(targetVelocity);
         lastTargetVelocity = targetVelocity;
@@ -133,6 +165,19 @@ public class Sweeper {
         cachedPower = motor.getPower();
         cachedVelocity = motor.getVelocity();
         cachedCurrent = motor.getCurrent(CurrentUnit.AMPS);
+
+        // 吸球指令同样每帧自动归零，避免上一帧的 eating 标记影响下一帧
+        eating = false;
+    }
+
+    /** @return 球道内当前小球个数（上层最近一帧传入的值） */
+    public int getBallCount() {
+        return ballCount;
+    }
+
+    /** @return 球道是否已满（计数达到 {@link #BallCapacity}） */
+    public boolean isBallLaneFull() {
+        return ballCount >= BallCapacity;
     }
 
     public double getPower() {
