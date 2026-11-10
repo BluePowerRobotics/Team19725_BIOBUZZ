@@ -162,7 +162,7 @@ public class AutoRed extends LinearOpMode {
 
         // 确保底盘与集球器停稳
         sweeper.setStop();
-        sweeper.update(RobotPosition.getInstance().getBallCount());
+        sweeper.update();
         chassis.stop();
     }
 }

@@ -20,11 +20,6 @@ import org.firstinspires.ftc.teamcode.utility.Vector2D;
  *   <li>本类 —— 把上层下达的目标分发给上述两个部件，并汇总到位状态</li>
  * </ul>
  *
- * <p><b>球道计数联动</b>：一次有效发射结束（扳机释放 → 关闭，且期间曾达到可发射条件）时，
- * 本类只置位一次性的"清空计数"请求，由上层 OpMode 调用
- * {@link #consumeResetBallCountRequest()} 取出后转发给 {@code RobotPosition.resetBallCount()}。
- * 本类不直接访问 RobotPosition，保证层级间只做单级调用。
- *
  * <p>按 {@code FTC_Format.md} 的约定，{@link #update} 会各调用一次其直接依赖的
  * 部件的 update 函数；上层每帧只需调用本类的 update。
  *
@@ -77,7 +72,12 @@ public class Turret {
      */
     private boolean fireArmed = false;
 
-    /** 一次性"发射完毕 → 清空球道计数"请求，由上层 OpMode consume 后转发给 RobotPosition */
+    /**
+     * 一次性"发射完毕 → 清空球道计数"请求。
+     * 由 {@link #update} 在扳机由释放回到关闭（发射动作结束）的那一帧置位，
+     * 由上层 OpMode 调用 {@link #consumeResetBallCountRequest()} 取出后再转发给
+     * {@code RobotPosition.resetBallCount()}（OpMode 负责跨层转发，本类不依赖 Processors）。
+     */
     private boolean resetBallCountRequest = false;
 
     public Turret(HardwareMap hardwareMap, Telemetry telemetry) {
@@ -140,7 +140,6 @@ public class Turret {
         boolean anyTriggerReleased = triggerBig || triggerSmall;
         if (lastTriggerReleased && !anyTriggerReleased) {
             if (fireArmed) {
-                // 发射完毕：置位一次性请求，由上层 OpMode 转发给 RobotPosition.resetBallCount()
                 resetBallCountRequest = true;
             }
             fireArmed = false;
@@ -153,8 +152,8 @@ public class Turret {
     /**
      * 取出"发射完毕 → 清空球道计数"请求（一次性）。
      *
-     * @return 本帧是否检测到有效发射结束；返回 true 时内部请求随之清除，
-     *         上层每帧调用一次并转发给 {@code RobotPosition.resetBallCount()} 即可
+     * @return 本帧是否检测到发射完毕；返回 true 时内部请求随之清除，
+     *         因此上层每帧调用一次即可，不会重复清空
      */
     public boolean consumeResetBallCountRequest() {
         boolean requested = resetBallCountRequest;
@@ -167,10 +166,9 @@ public class Turret {
         yawController.stop();
         shooterBig.stop();
         shooterSmall.stop();
-        // 扳机回到关闭状态，同步清掉边沿检测基准、武装标记与待处理请求
+        // 扳机回到关闭状态，同步清掉边沿检测基准与武装标记，避免下一次 update 误判"发射完毕"
         lastTriggerReleased = false;
         fireArmed = false;
-        resetBallCountRequest = false;
     }
 
     /** 输出遥测（调用方需自行 telemetry.update()） */
