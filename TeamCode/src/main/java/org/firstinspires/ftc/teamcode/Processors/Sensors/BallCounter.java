@@ -1,5 +1,7 @@
 package org.firstinspires.ftc.teamcode.Processors.Sensors;
 
+import com.qualcomm.robotcore.hardware.HardwareMap;
+
 /**
  * 小球计数器：基于对射光电门（BreakBeamSensor）的上升沿检测（边缘检测）
  * 统计经过的小球个数，计数方向由外部每帧传入的 0/1 信息决定。
@@ -32,11 +34,10 @@ package org.firstinspires.ftc.teamcode.Processors.Sensors;
  *   （threshold / alpha / 极性可在 FTC Dashboard 调参），因此本类不再重复
  *   做去抖，只负责"上升沿检测 + 方向计数"。
  *
- * 用法（OpMode 主循环中，每帧调用 update(externalState)）：
- *   注意：本项目光电门 0 = 遮挡，创建 BreakBeamSensor 时需令 blockedOnState = false。
- *   BreakBeamSensor beam = new BreakBeamSensor(hardwareMap, "breakBeam");
- *   beam.setBlockedOnState(false);                 // 0 = 遮挡
- *   BallCounter counter = new BallCounter(beam);
+ * 用法（由上层 RobotPosition 创建，主循环中由 RobotPosition 每帧调用 update(externalState)）：
+ *   层级：RobotPosition → BallCounter → BreakBeamSensor，
+ *   光电门在 BallCounter 内部创建，外部不再单独 new / update 光电门。
+ *   BallCounter counter = new BallCounter(hardwareMap, "breakBeam");
  *   while (opModeIsActive()) {
  *       int externalState = ...;                   // 0 = 进入(intake), 1 = 出球(output)
  *       counter.update(externalState);             // 采样 + 边缘检测计数
@@ -59,9 +60,21 @@ public class BallCounter {
     private int count;
 
     /**
-     * @param breakBeam 已创建好的对射光电门（本类内部负责调用其 update()）
+     * 创建球道计数器，并在内部创建其下属对射光电门（严格层级：
+     * RobotPosition → BallCounter → BreakBeamSensor，光电门不对外暴露）。
+     *
+     * @param hardwareMap 硬件映射表
+     * @param deviceName  对射光电门（AnalogInput）在机器人配置中的设备名
      */
-    public BallCounter(BreakBeamSensor breakBeam) {
+    public BallCounter(HardwareMap hardwareMap, String deviceName) {
+        this(new BreakBeamSensor(hardwareMap, deviceName));
+    }
+
+    /**
+     * 内部构造：光电门实例由本类独占持有，仅允许本类自身创建，
+     * 避免上层绕过 BallCounter 直接操作 BreakBeam。
+     */
+    private BallCounter(BreakBeamSensor breakBeam) {
         this.breakBeam = breakBeam;
         this.lastBlocked = false;
         this.count = 0;

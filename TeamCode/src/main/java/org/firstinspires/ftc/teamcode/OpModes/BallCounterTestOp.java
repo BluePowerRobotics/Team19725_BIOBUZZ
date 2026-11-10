@@ -116,7 +116,7 @@ public class BallCounterTestOp extends LinearOpMode {
             if (gamepad1.right_bumper) {
                 sweeper.setOutput();
             }
-            sweeper.update(robotPosition.getBallCount());
+            sweeper.update();
 
             // ---- 控制：炮台（固定 yaw / 俯仰，二操按住 A 发射）----
             double pitchBig = (Shooter.BIG_PARAMS.pitchMin + Shooter.BIG_PARAMS.pitchMax) / 2.0;

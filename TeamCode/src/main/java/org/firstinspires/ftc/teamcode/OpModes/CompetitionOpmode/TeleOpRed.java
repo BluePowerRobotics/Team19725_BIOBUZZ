@@ -126,7 +126,7 @@ public class TeleOpRed extends LinearOpMode {
             // 因此这里必须在循环内调用，否则队列非空时底盘会一直被屏蔽。
             actionRunner.update();
 
-            sweeper.update(ballCount);
+            sweeper.update();
 
             telemetry.addData("Team", teamColor == TeamColor.BLUE ? "BLUE" : "RED");
             telemetry.addData("useNoHeadMode", chassis.getUseNoHeadMode());

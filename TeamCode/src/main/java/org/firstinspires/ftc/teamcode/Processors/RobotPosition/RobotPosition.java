@@ -17,7 +17,6 @@ import org.firstinspires.ftc.robotcore.external.navigation.YawPitchRollAngles;
 import org.firstinspires.ftc.teamcode.Parameter.TeamColor;
 import org.firstinspires.ftc.teamcode.Processors.FusionLocalizer.AdaptiveEKFLocalizer;
 import org.firstinspires.ftc.teamcode.Processors.Sensors.BallCounter;
-import org.firstinspires.ftc.teamcode.Processors.Sensors.BreakBeamSensor;
 import org.firstinspires.ftc.teamcode.Processors.VisionLocalizer.MT1Localizer;
 import org.firstinspires.ftc.teamcode.RoadRunner.MecanumDrive;
 import org.firstinspires.ftc.teamcode.utility.Geometry.ConvexPolygon;
@@ -90,11 +89,11 @@ public class RobotPosition {
 
         instance.currentPose = initpose != null ? initpose : new Pose2d(0,0,0);
 
-        // ---- 先创建下属对象：对射光电门 → 球道计数器（init 自下而上）----
+        // ---- 先创建下属对象：BallCounter（其内部再创建下属 BreakBeam，严格层级）----
+        // 层级：RobotPosition → BallCounter → BreakBeamSensor。
         // 本项目光电门约定 0 = 遮挡、1 = 未遮挡，与 BreakBeamSensor 默认的
-        // "低电压 = 遮挡" 判定一致（见 BallCounterTestOp 的实机验证）。
-        BreakBeamSensor breakBeam = new BreakBeamSensor(hardwareMap, BREAK_BEAM_NAME);
-        instance.ballCounter = new BallCounter(breakBeam);
+        // "低电压 = 遮挡" 判定一致（见 BreakBeamTestOp 的实机验证）。
+        instance.ballCounter = new BallCounter(hardwareMap, BREAK_BEAM_NAME);
 
         // ---- 先构造融合定位器：Pinpoint 速度预测 + Limelight 视觉更新 + 自适应 Q/R ----
         // 队伍颜色决定 Limelight pipeline（红 0 / 蓝 1），由 MT1Localizer 按颜色切换。
