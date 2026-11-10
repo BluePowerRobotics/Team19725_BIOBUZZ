@@ -38,6 +38,13 @@ public class RobotPosition {
     private BallCounter ballCounter;
 
     /**
+     * 球道计数方向，由 OpMode 每帧在 {@link #update()} 之前通过
+     * {@link #setBallCounterMode(int)} 设置：吸球 +1（MODE_INTAKE）/ 送球、吐球 -1（MODE_OUTPUT）。
+     * 默认吸球方向，保证未显式设置的程序也能正常累计球数。
+     */
+    private int ballCounterMode = BallCounter.MODE_INTAKE;
+
+    /**
      * HIVE 状态跟踪值：MT1 有观测时更新为观测值，无观测 / 解算被拒时保持上一状态。
      * 初值取 MIDDLE（HIVE 水平），跟踪值不会为 {@link MT1Localizer.HiveState#UNKNOWN}。
      */
@@ -93,7 +100,13 @@ public class RobotPosition {
         // 层级：RobotPosition → BallCounter → BreakBeamSensor。
         // 本项目光电门约定 0 = 遮挡、1 = 未遮挡，与 BreakBeamSensor 默认的
         // "低电压 = 遮挡" 判定一致（见 BreakBeamTestOp 的实机验证）。
-        instance.ballCounter = new BallCounter(hardwareMap, BREAK_BEAM_NAME);
+        // 光电门未接 / 设备名配置错误时降级为 ballCounter == null，不影响定位与行驶，
+        // 只是球道计数不工作（getBallCount() 返回 0），便于分模块调试。
+        try {
+            instance.ballCounter = new BallCounter(hardwareMap, BREAK_BEAM_NAME);
+        } catch (RuntimeException e) {
+            instance.ballCounter = null;
+        }
 
         // ---- 先构造融合定位器：Pinpoint 速度预测 + Limelight 视觉更新 + 自适应 Q/R ----
         // 队伍颜色决定 Limelight pipeline（红 0 / 蓝 1），由 MT1Localizer 按颜色切换。
@@ -124,23 +137,17 @@ public class RobotPosition {
         currentPose = pose;
     }
 
-    // 每帧调用：推进融合定位器并返回当前位姿
-    public Pose2d update() {
-        // 未显式给出球道方向的调用方（如自动阶段未接入球道计数的程序）
-        // 按"吸球"方向计数，保证球道仍能累计球数
-        return update(BallCounter.MODE_INTAKE);
-    }
-
     /**
-     * 每帧调用：更新下属球道计数器与融合定位器，返回当前位姿。
+     * 每帧调用：先把计数方向交给下属 BallCounter，再推进融合定位器，返回当前位姿。
      *
-     * @param ballDirection 球道方向外部信息：{@link BallCounter#MODE_INTAKE}（0，吸球 +1）
-     *                      或 {@link BallCounter#MODE_OUTPUT}（1，出球 -1）；
-     *                      由 OpMode 按当前 Sweeper 指令给出（本类不依赖 Controllers）
+     * <p>层级：本方法内只更新直接下属 BallCounter（其内部再更新下属 BreakBeam），
+     * 每帧每个对象只更新一次。计数方向由 OpMode 通过 {@link #setBallCounterMode(int)} 事先设置。
      */
-    public Pose2d update(int ballDirection) {
+    public Pose2d update() {
         // 先更新下属：BallCounter 内部再更新其下属 BreakBeam（每帧各一次，禁止跨层更新）
-        ballCounter.update(ballDirection);
+        if (ballCounter != null) {
+            ballCounter.update(ballCounterMode);
+        }
 
         // 唯一推进点：每帧只调用一次，避免同一帧的视觉观测被重复计入 EKF
         // （MecanumDrive 的轨迹 / 转向 Action 内部已改为复用本帧结果）
@@ -158,17 +165,42 @@ public class RobotPosition {
 
     // ==================== 球道计数（BallCounter → BreakBeam）====================
 
+    /**
+     * 设置球道计数方向（由 OpMode 每帧在 {@link #update()} 之前调用）。
+     *
+     * <p>OpMode 是上级，负责把"当前球流方向"下发给下级；
+     * RobotPosition 只把该方向转发给直接下属 BallCounter，不依赖 Controllers。
+     *
+     * @param mode {@link BallCounter#MODE_INTAKE}（吸球，+1）
+     *             或 {@link BallCounter#MODE_OUTPUT}（送球入炮台 / 吐球，-1）
+     */
+    public void setBallCounterMode(int mode) {
+        this.ballCounterMode = mode;
+    }
+
+    /** @return 当前球道计数方向（{@link BallCounter#MODE_INTAKE} / {@link BallCounter#MODE_OUTPUT}） */
+    public int getBallCounterMode() {
+        return ballCounterMode;
+    }
+
+    /** @return 下属球道计数器（未成功创建时为 null） */
+    public BallCounter getBallCounter() {
+        return ballCounter;
+    }
+
     /** @return 球道内当前的小球个数（由下属 BallCounter 最近一帧的结果缓存） */
     public int getBallCount() {
-        return ballCounter.getCount();
+        return ballCounter != null ? ballCounter.getCount() : 0;
     }
 
     /**
-     * 清空球道计数。由上层（OpMode）在"炮台发射完毕"或"操作手手动清空"时调用；
+     * 清空球道计数。由 OpMode（手动）或 Turret（发射完毕）调用；
      * 同时把边缘检测基准重置为最近一帧的遮挡状态，因此不会产生虚假上升沿。
      */
     public void resetBallCount() {
-        ballCounter.reset();
+        if (ballCounter != null) {
+            ballCounter.reset();
+        }
     }
 
 

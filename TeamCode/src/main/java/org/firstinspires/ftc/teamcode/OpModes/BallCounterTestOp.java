@@ -45,14 +45,14 @@ import org.firstinspires.ftc.teamcode.Processors.Sensors.BallCounter;
  * <ul>
  *   <li>逐个吸球：Ball Count 每个球只 +1，达到 4 后 Intake 自动停转（Sweeper Target = 0）；</li>
  *   <li>按右 bumper 出球：每挡一个球 Ball Count -1，减到 0 后不再变负；</li>
- *   <li>按住二操 A 再松开：Reset 触发一次，Ball Count 归零；</li>
+ *   <li>按住二操 A 再松开：Ball Count 归零（Turret 检测扳机下降沿后自动清空）；</li>
  *   <li>按一操 Y：Ball Count 手动归零。</li>
  * </ul>
  *
  * <p><b>注意</b>：
  * <ul>
  *   <li>本程序不得再直接调用 {@code ballCounter.update()} 或 {@code beam.update()}，
- *       否则会与 {@link RobotPosition#update(int)} 内部的逐级更新重复推进滤波器。</li>
+ *       否则会与 {@link RobotPosition#update()} 内部的逐级更新重复推进滤波器。</li>
  *   <li>光电门的原始电压 / 阈值 / alpha 标定请用 BreakBeamTestOp
  *       （BallCounter 现在归 RobotPosition 管理，本程序不再单独持有光电门）。</li>
  * </ul>
@@ -108,9 +108,10 @@ public class BallCounterTestOp extends LinearOpMode {
             // ---- 信号处理：球道方向与 Sweeper 指令同源（送球 / 吐球 -1，吸球 / 停止 +1）----
             int ballDirection = sweeper.isOutputDirection()
                     ? BallCounter.MODE_OUTPUT : BallCounter.MODE_INTAKE;
+            robotPosition.setBallCounterMode(ballDirection);
 
             // ---- 状态估计：RobotPosition 内部更新 BallCounter → BreakBeam（本帧唯一推进点）----
-            robotPosition.update(ballDirection);
+            robotPosition.update();
 
             // ---- 操作手手动清空 ----
             if (gamepad1.yWasReleased()) {
@@ -127,12 +128,9 @@ public class BallCounterTestOp extends LinearOpMode {
             Turret.FireReady ready = turret.update(testYaw, pitchBig, pitchSmall,
                     testSpeedBig, testSpeedSmall, fire, fire);
 
-            // ---- 炮台发射完毕 → 清空球道计数（OpMode 负责跨层转发）----
-            // 先保存 consume 结果再清零，否则遥测里读到的永远是清除后的 false
-            boolean fireCompleted = turret.consumeResetBallCountRequest();
-            if (fireCompleted) {
-                robotPosition.resetBallCount();
-            }
+            // ---- 炮台发射完毕 → 清空球道计数 ----
+            // 由 Turret.update 检测扳机下降沿后直接调用 RobotPosition.resetBallCount()，
+            // OpMode 无需转发。
 
             // ---- 遥测 ----
             telemetry.addData("Ball Direction", ballDirection == BallCounter.MODE_INTAKE
@@ -142,7 +140,9 @@ public class BallCounterTestOp extends LinearOpMode {
             telemetry.addData("Ball Lane Full", sweeper.isBallLaneFull());
             telemetry.addData("Sweeper Target (tick/s)", sweeper.getTargetVelocity());
             telemetry.addData("Fire Ready big/small", ready.big + " / " + ready.small);
-            telemetry.addData("Fire Completed", fireCompleted ? 1 : 0);
+            BallCounter ballCounter = robotPosition.getBallCounter();
+            telemetry.addData("Break Beam",
+                    ballCounter != null && ballCounter.isBlocked() ? 1 : 0);
             turret.setTelemetry();
             telemetry.update();
         }

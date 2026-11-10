@@ -71,6 +71,20 @@ public class BallCounter {
     }
 
     /**
+     * 创建球道计数器，并指定下属光电门的 EMA 平滑系数与遮挡阈值。
+     * 与 {@code BallCounterTestOp} 中标定出的参数保持一致时使用。
+     *
+     * @param hardwareMap 硬件映射表
+     * @param deviceName  对射光电门（AnalogInput）在机器人配置中的设备名
+     * @param alpha       EMA 平滑系数，范围 (0, 1]
+     * @param threshold   归一化遮挡阈值，范围 [0, 1]
+     */
+    public BallCounter(HardwareMap hardwareMap, String deviceName,
+                       double alpha, double threshold) {
+        this(new BreakBeamSensor(hardwareMap, deviceName, alpha, threshold));
+    }
+
+    /**
      * 内部构造：光电门实例由本类独占持有，仅允许本类自身创建，
      * 避免上层绕过 BallCounter 直接操作 BreakBeam。
      */
@@ -128,5 +142,49 @@ public class BallCounter {
         count = 0;
         breakBeam.reset();
         lastBlocked = breakBeam.isBlocked();
+    }
+
+    // ==================== 光电门状态透传（只读 / 调参，不推进 update）====================
+    // 光电门由本类独占持有，上层需要查看原始电压、滤波电压或调阈值时通过本类访问，
+    // 既保证层级（RobotPosition → BallCounter → BreakBeam），又便于标定调试。
+
+    /** @return 本帧光电门是否遮挡（BreakBeamSensor 最近一次 update 的结果，不重复采样） */
+    public boolean isBlocked() {
+        return breakBeam.isBlocked();
+    }
+
+    /** @return 归一化原始电压（未滤波） */
+    public double getRawVoltage() {
+        return breakBeam.getRawVoltage();
+    }
+
+    /** @return 归一化滤波电压（EMA 输出） */
+    public double getFilteredVoltage() {
+        return breakBeam.getVoltage();
+    }
+
+    /** @return 当前归一化遮挡阈值 */
+    public double getThreshold() {
+        return breakBeam.getThreshold();
+    }
+
+    /** 设置归一化遮挡阈值，范围 [0, 1] */
+    public void setThreshold(double threshold) {
+        breakBeam.setThreshold(threshold);
+    }
+
+    /** @return 当前 EMA 平滑系数 */
+    public double getAlpha() {
+        return breakBeam.getAlpha();
+    }
+
+    /** 设置 EMA 平滑系数，范围 (0, 1] */
+    public void setAlpha(double alpha) {
+        breakBeam.setAlpha(alpha);
+    }
+
+    /** @return 下属光电门（只读访问，禁止在上层调用其 update()） */
+    public BreakBeamSensor getBreakBeamSensor() {
+        return breakBeam;
     }
 }

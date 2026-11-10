@@ -80,11 +80,13 @@ public class TeleOpBlue extends LinearOpMode {
             }
 
             // 球道方向与 Sweeper 指令同源：送球 / 吐球时 -1，吸球 / 停止时 +1
+            // 上级下发方向 → RobotPosition → BallCounter → BreakBeam
             int ballDirection = sweeper.isOutputDirection()
                     ? BallCounter.MODE_OUTPUT : BallCounter.MODE_INTAKE;
+            RobotPosition.getInstance().setBallCounterMode(ballDirection);
 
             // RobotPosition.update 内部层层更新 BallCounter → BreakBeam（本帧唯一推进点）
-            RobotPosition.getInstance().update(ballDirection);
+            RobotPosition.getInstance().update();
 
             // 操作手手动清空球道计数
             if (gamepad1.yWasReleased()) {

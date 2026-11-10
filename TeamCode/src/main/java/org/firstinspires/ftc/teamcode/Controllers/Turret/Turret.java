@@ -4,6 +4,7 @@ import com.acmerobotics.dashboard.config.Config;
 import com.qualcomm.robotcore.hardware.HardwareMap;
 
 import org.firstinspires.ftc.robotcore.external.Telemetry;
+import org.firstinspires.ftc.teamcode.Processors.RobotPosition.RobotPosition;
 import org.firstinspires.ftc.teamcode.utility.Vector2D;
 
 /**
@@ -63,22 +64,9 @@ public class Turret {
 
     private final Telemetry telemetry;
 
-    /** 上一帧是否有任一发射器的扳机处于释放（用于检测"发射完毕"的下降沿） */
-    private boolean lastTriggerReleased = false;
-
-    /**
-     * 本次扳机按压期间是否真正达到过可发射条件（飞轮 + 俯仰 + 平转到位）。
-     * 只有真正发射过，松开扳机才允许清空球道计数，避免飞轮未达速时的空按误清零。
-     */
-    private boolean fireArmed = false;
-
-    /**
-     * 一次性"发射完毕 → 清空球道计数"请求。
-     * 由 {@link #update} 在扳机由释放回到关闭（发射动作结束）的那一帧置位，
-     * 由上层 OpMode 调用 {@link #consumeResetBallCountRequest()} 取出后再转发给
-     * {@code RobotPosition.resetBallCount()}（OpMode 负责跨层转发，本类不依赖 Processors）。
-     */
-    private boolean resetBallCountRequest = false;
+    /** 上一帧两个发射器扳机的释放状态，用于检测"发射完毕"的下降沿（true → false） */
+    private boolean lastTriggerBig = false;
+    private boolean lastTriggerSmall = false;
 
     public Turret(HardwareMap hardwareMap, Telemetry telemetry) {
         this.telemetry = telemetry;
@@ -127,38 +115,23 @@ public class Turret {
         boolean bigReady = shooterBig.update(speedBig, pitchBig, triggerBig);
         boolean smallReady = shooterSmall.update(speedSmall, pitchSmall, triggerSmall);
 
-        // "发射完毕"判定：本次按压期间确实达到过可发射条件（fireArmed），
-        // 且任一扳机由释放（true）回到关闭（false），才算一次有效发射结束。
-        // 飞轮未达速就松开的空按不会清空计数，避免球未射出却把计数清零。
-        if (triggerBig && yawReady && bigReady) {
-            fireArmed = true;
-        }
-        if (triggerSmall && yawReady && smallReady) {
-            fireArmed = true;
-        }
-
-        boolean anyTriggerReleased = triggerBig || triggerSmall;
-        if (lastTriggerReleased && !anyTriggerReleased) {
-            if (fireArmed) {
-                resetBallCountRequest = true;
+        // ==================== 发射完成检测：清空球道计数 ====================
+        // 扳机 true → false 的下降沿 = 一次发射动作结束；
+        // 此时直接把下层累计的球数清零（Turret → RobotPosition.resetBallCount），
+        // 否则球已经打出去了，球道计数仍然保留，下一次吸球会误判"已满"而停吸。
+        boolean bigFired = lastTriggerBig && !triggerBig;
+        boolean smallFired = lastTriggerSmall && !triggerSmall;
+        if (bigFired || smallFired) {
+            RobotPosition robotPosition = RobotPosition.getInstanceOrNull();
+            if (robotPosition != null) {
+                robotPosition.resetBallCount();
             }
-            fireArmed = false;
         }
-        lastTriggerReleased = anyTriggerReleased;
+        // 记录本帧扳机状态，供下一帧做下降沿检测
+        lastTriggerBig = triggerBig;
+        lastTriggerSmall = triggerSmall;
 
         return new FireReady(yawReady && bigReady, yawReady && smallReady);
-    }
-
-    /**
-     * 取出"发射完毕 → 清空球道计数"请求（一次性）。
-     *
-     * @return 本帧是否检测到发射完毕；返回 true 时内部请求随之清除，
-     *         因此上层每帧调用一次即可，不会重复清空
-     */
-    public boolean consumeResetBallCountRequest() {
-        boolean requested = resetBallCountRequest;
-        resetBallCountRequest = false;
-        return requested;
     }
 
     /** 停止炮台：平转停止输出，两个发射器停转并关闭扳机 */
@@ -166,9 +139,10 @@ public class Turret {
         yawController.stop();
         shooterBig.stop();
         shooterSmall.stop();
-        // 扳机回到关闭状态，同步清掉边沿检测基准与武装标记，避免下一次 update 误判"发射完毕"
-        lastTriggerReleased = false;
-        fireArmed = false;
+        // 扳机被强制关闭，同步清掉边沿检测基准；否则下次 update 会把"停止时关闭"
+        // 误判为一次发射完成下降沿，从而错误清空球道计数
+        lastTriggerBig = false;
+        lastTriggerSmall = false;
     }
 
     /** 输出遥测（调用方需自行 telemetry.update()） */
