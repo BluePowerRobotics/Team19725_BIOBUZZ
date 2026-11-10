@@ -47,11 +47,12 @@
 | `GoToOtherShootAreaViaHiveAction` | 经 Hive 正下方前往另一发射区域并预瞄球门 | `(TeamColor, Pose2d goal)` |
 | `GoToUnvisitedEatPointAvoidHiveAction` | 绕开 Hive（外侧）前往此前未访问的取球点 | `(TeamColor)` |
 | `GoToOtherShootAreaAvoidHiveAction` | 绕开 Hive（外侧）前往另一发射区域并预瞄球门 | `(TeamColor, Pose2d goal)` |
-| `AutoAimAction` | 原地 PD 转向，自动锁定当前 HIVE 侧球门 | `(TeamColor)` |
+| `AutoAimAction` | 底盘不动，炮台自动瞄准并发射（Turret 自动扣扳机） | `(MecanumDrive, Turret)` |
+| `AutoTurretAimShootWithChassisAction` | 底盘主动转向球门辅助瞄准，炮台自动瞄准并发射 | `(MecanumDrive, Turret)` |
 | `EatAction` | 集球器以吃球速度运转指定时长后停转 | `(Sweeper)` 或 `(Sweeper, long durationMs)` |
 | `AdaptiveParkAction` | T-3s 检测整机是否接触场地边框，接触则开到安全位置停靠，否则原地停止 | `(MecanumDrive, ElapsedTime matchTime, long durationMs, long leadTimeMs)` |
-| `AutoCycleAction` | **保守版**：把「去取球点 → 吃球 → 去另一发射区 →（可选）瞄准」合成一个 Action（取球点仍停车） | `(TeamColor, Sweeper, Pose2d goal)` |
-| `ContinuousRouteAction` | **激进版**：去取球点 + 路过式吃球 + 去另一发射区，全程**单条轨迹不停车** | `(TeamColor, Sweeper, Pose2d goal)` |
+| `AutoCycleAction` | **保守版**：把「去取球点 → 吃球 → 去另一发射区 →（可选）瞄准」合成一个 Action（取球点仍停车） | `(TeamColor, Sweeper, Turret, Pose2d goal)` |
+| `ContinuousRouteAction` | **激进版**：去取球点 + 路过式吃球 + 去另一发射区，全程**单条轨迹不停车** | `(TeamColor, Sweeper, Turret, Pose2d goal)` |
 
 ---
 
@@ -176,41 +177,63 @@ new GoToShootAreaNearestVerticesAction(TeamColor.RED, HypParams.RedAudienceUp);
 `GoToOtherShootAreaViaHiveAction`，仅路径模式不同。
 **构造**：`new GoToOtherShootAreaAvoidHiveAction(TeamColor.RED, HypParams.RedAudienceUp)`。
 
-## 10. AutoAimAction
+## 10. AutoAimAction（底盘不动 · 炮台自动瞄准与发射）
 
-**作用**：每帧读融合位姿，依据 `RobotPosition.getHiveState()` 选择球门
-（`AUDIENCE_UP→Up`、`AUDIENCE_DOWN→Down`、`MIDDLE→保持上次锁定，无历史默认 Up`），
-原地转向使车头对准球门，仅下发角速度、平移为 0。
+**作用**：底盘全程保持静止（`setDrivePowers(0,0,0)`），由 {@link Turret} 独立完成
+**平转 + 俯仰 + 飞轮加速 + 自动扣扳机**的完整瞄准与发射流程。
 
-> ℹ️ **与 `RobotPosition` / TeleOp 的关系**：本 Action 的 `MIDDLE` 规则与 `RobotPosition`
-> 现在的「抬升侧=同侧、`MIDDLE`/无读数保持上次选择」一致，不再出现相反球门的冲突。
-> 但本 Action 仍是独立实现：直接读融合位姿 / `getHiveState()`，不读 `RobotPosition.getGoalPose()`，
-> 也不响应 TeleOp 中 GP2.LT/RT 的手动球门设置。自动阶段若要与手动阶段球门完全一致，
-> 待办：改为读 `RobotPosition.getGoalPose()`。详见 `Controllers/Turret/TurretGuide.md` §13。
+**瞄准与发射主体**：`Turret.update(allowFire, preload, false, false)`
+- 内部从 `RobotPosition.getGoalPose()` 读取球门（已由 HIVE 抬升侧自动选择 Up/Down）；
+- 平转到位 + 飞轮到位 + 俯仰到位时，由 `TriggerGate` 自动扣扳机并保持 `fireHoldTime`；
+- 返回 `FireReady(big, small)` 表示两个发射器是否就绪。
 
-**控制律**：期望航向 `des = atan2(goalY-y, goalX-x)`，误差归一化到 `[-π,π]`
-后做 PD：`omega = Kp·e + Kd·de/dt`，死区内输出 0，输出限幅。
+**完成条件**（任一满足即返回 `false`）：
+- 大球或小球扳机从「释放」回到「关闭」（`isBigFiring` / `isSmallFiring` 的**下降沿**）—— 一次发射完成；
+- 超过 `timeoutMs` 毫秒。
 
-**完成条件**：航向误差与实际角速度同时小于容差并持续 `settleMs` 毫秒；
-超过 `timeoutMs` 强制结束。
+结束时自动 `turret.stop()`（停飞轮、关扳机），底盘保持 0 速度。
 
-> ⚠️ **超时与成功都返回 `false`**（都走 `finish()`），`SequentialAction` / `ActionRunner`
-> 无法区分两者，只有遥测 `AutoAim = Timeout / Aligned` 能区分。若要用它做"对齐成功才允许
-> 发射"的门控，必须自己加判据（例如对齐后读遥测或检查 `|error|`）。
+> ⚠️ 本 Action **不再判断底盘航向是否对准**——发射权完全交给 Turret 的就绪判据，
+> 只要炮台到位且机构就绪就会发射。超时与成功都返回 `false`，遥测 `AutoAim = Timeout / Fired` 可区分。
 
 **Dashboard 可调参数**：
 
 | 参数 | 默认值 | 含义 |
 |------|--------|------|
-| `aimKp` | 3.0 | 航向环 P |
-| `aimKd` | 0.15 | 航向环 D |
-| `aimMaxOmega` | π | 角速度上限 (rad/s) |
-| `headingTol` | 2° | 航向收敛容差 |
-| `omegaTol` | 0.15 | 角速度收敛容差 (rad/s) |
-| `settleMs` | 200 | 收敛持续时间 |
-| `timeoutMs` | 3000 | 超时强制结束 |
+| `allowFire` | `true` | 是否允许 Turret 扣扳机（`false` 时只预载不发射，便于单独调试瞄准） |
+| `preload` | `true` | 是否启用预载（飞轮按预载转速待命，缩短响应） |
+| `timeoutMs` | 5000 | 超时强制结束 (ms) |
 
-**构造**：`new AutoAimAction(TeamColor.RED)`。
+**构造**：`new AutoAimAction(drive, turret)`。
+
+## 10.5 AutoTurretAimShootWithChassisAction（底盘旋转辅助瞄准与发射）
+
+**作用**：与 {@link AutoAimAction} 的区别在于**底盘主动转向球门**，使炮台需要旋转的角度最小，
+缩短炮台到达目标位置的总时间。
+
+**控制分工**：
+- **底盘**：PD 控制角速度，使车头朝向球门
+  `desiredHeading = atan2(goalY-y, goalX-x)`，误差归一化到 `[-π, π]`，死区内输出 0；
+- **炮台**：`Turret.update(...)` 自动瞄准并发射（同 {@link AutoAimAction}）。
+
+底盘转向把目标拉到炮台行程中心附近，炮台只需补偿剩余小角度，总响应最快。
+本 Action 不判断底盘是否已对准——发射权同样交给 Turret。
+
+**完成条件**：同 {@link AutoAimAction}（发射完成下降沿或超时）。
+
+**Dashboard 可调参数**：
+
+| 参数 | 默认值 | 含义 |
+|------|--------|------|
+| `allowFire` | `true` | 是否允许扣扳机 |
+| `preload` | `true` | 是否启用预载 |
+| `yawKp` | 3.0 | 底盘转向环 P (rad/s per rad) |
+| `yawKd` | 0.15 | 底盘转向环 D |
+| `maxOmega` | π | 底盘角速度上限 (rad/s) |
+| `headingTol` | 1.5° | 底盘转向死区 (rad) |
+| `timeoutMs` | 6000 | 超时强制结束 (ms) |
+
+**构造**：`new AutoTurretAimShootWithChassisAction(drive, turret)`。
 
 ## 11. EatAction
 
@@ -325,7 +348,7 @@ List<Action> steps = new ArrayList<>();
 steps.add(new DeferredAction(() -> new GoToUnvisitedEatPointAvoidHiveAction(teamColor)));
 steps.add(new EatAction(sweeper));
 steps.add(new DeferredAction(() -> new GoToOtherShootAreaViaHiveAction(teamColor, goal)));
-if (includeAim) steps.add(new AutoAimAction(teamColor));
+if (includeAim) steps.add(new AutoAimAction(drive, turret));
 return new SequentialAction(steps);
 ```
 
@@ -338,7 +361,7 @@ return new SequentialAction(steps);
 **构造 / 接入**：
 
 ```java
-actionRunner.add(new AutoCycleAction(teamColor, sweeper, HypParams.BlueAudienceUp));
+actionRunner.add(new AutoCycleAction(teamColor, sweeper, turret, HypParams.BlueAudienceUp));
 ```
 
 **注意**：本 Action 只能消除调度空档，**不能**消除轨迹之间的减速到零（吃球段与移动段仍是独立轨迹）。
@@ -353,10 +376,16 @@ actionRunner.add(new AutoCycleAction(teamColor, sweeper, HypParams.BlueAudienceU
 
 **为什么必须是一条 builder 链**：
 
-`MecanumDrive.actionBuilder` 传入 `beginEndVel = 0.0`，而 Road Runner 的 `profile()` 用同一个值
+`MecanumDrive.actionBuilder(Pose2d)` 传入 `beginEndVel = 0.0`，而 Road Runner 的 `profile()` 用同一个值
 同时作为**起点与终点速度**——因此每一份 `build()` 出来的轨迹必然以 `v = 0` 结束。
 `SequentialAction` / `ParallelAction` 都改变不了这一点；只有把全部途经点串进同一条链，
 才会共用一条时间最优 profile。
+
+> ℹ️ `MecanumDrive.actionBuilder` 另有重载 `actionBuilder(Pose2d, double beginEndVel)`，
+> 可指定首尾速度。`HiveRouteAction` 即调用 `actionBuilder(start, PARAMS.maxWheelVel)`，
+> 使轨迹以**底盘最大移速结束**（末速度 = `maxWheelVel`），减少与后续动作衔接时的停车损失。
+> 注意 `beginEndVel` 同时是起点速度假设：机器人实际静止时控制器会以最大加速度追赶，
+> 前段跟踪误差略大但不会失控。
 
 **路线构成**：
 
@@ -402,7 +431,7 @@ ParallelAction(轨迹 Action, SequentialAction(SleepAction(触发时间), eatSeq
 **构造 / 接入**：
 
 ```java
-actionRunner.add(new ContinuousRouteAction(teamColor, sweeper, HypParams.BlueAudienceUp));
+actionRunner.add(new ContinuousRouteAction(teamColor, sweeper, turret, HypParams.BlueAudienceUp));
 ```
 
 **状态**：尚未接入 `AutoRed` / `AutoBlue`。
@@ -442,18 +471,126 @@ actionRunner.add(new ContinuousRouteAction(teamColor, sweeper, goal));  // 激�
 TO_EAT_POINT   → GoToUnvisitedEatPointAvoidHiveAction（绕开 Hive 去未访问取球点）
 EATING         → EatAction
 TO_SHOOT_AREA  → GoToOtherShootAreaViaHiveAction（经 Hive 正下方去另一发射区）
-TO_SHOOT_AREA 完成 → 回到 TO_EAT_POINT，持续循环
+AIM_SHOOT      → AutoAimAction（底盘不动，炮台自动瞄准并发射）
+AIM_SHOOT 完成 → 回到 TO_EAT_POINT，持续循环
 PARKING        → AdaptiveParkAction
 STOP
 ```
+
+> 状态机中的瞄准发射使用 {@link AutoAimAction}（底盘不动版）。
+> 若需要底盘旋转辅助的版本，改用下面的 {@link AutoRedChassisAim} / {@link AutoBlueChassisAim}。
 
 **停靠的硬保障**：主循环每帧计算 `remainingMs`；一旦
 `remainingMs <= PARK_TIME_THRESHOLD_MS` 且尚未投递过停靠动作，立即
 `actionRunner.clear()` 中断**正在执行**的任意 Action，再投递 `AdaptiveParkAction`，
 并用 `parkScheduled` 保证只投递一次。因此即使上一段长轨迹尚未跑完，T-3s 也一定会转入停靠。
 
+**盟友禁区守卫**：每帧查询 `AutoParams` 中当前时间窗生效的盟友活动区，整机轮廓一旦闯入，
+立即清空队列并改投「开到最近安全位姿」的脱困动作，脱离后自动恢复状态机。
+
 **结束收尾**：`RobotStateStore.savePose(...)` 记录结束位姿，`sweeper.setStop()` +
-`chassis.stop()` 确保底盘与集球器停稳。
+`turret.stop()` + `chassis.stop()` 确保底盘、集球器与炮台停稳。
+
+## 自动阶段主程序（底盘旋转辅助版：AutoRedChassisAim / AutoBlueChassisAim）
+
+这两个 OpMode 是 {@link AutoRed} / {@link AutoBlue} 的**唯一变体**：状态机、取球、移动、
+停靠、盟友禁区守卫完全一致，仅 `AIM_SHOOT` 状态把 {@link AutoAimAction} 替换为
+{@link AutoTurretAimShootWithChassisAction}——底盘主动转向球门，使炮台需旋转角度最小。
+
+| 项目 | AutoRedChassisAim | AutoBlueChassisAim |
+|------|-------------------|--------------------|
+| 队伍 | `TeamColor.RED` | `TeamColor.BLUE` |
+| 瞄准发射 Action | `AutoTurretAimShootWithChassisAction` | 同左 |
+| 其余状态 | 与 `AutoRed` 一致 | 与 `AutoBlue` 一致 |
+
+**适用场景**：当炮台平转速度成为瞄准瓶颈时（如目标偏离车头角度大、炮台惯量大），
+底盘转向能把目标拉进炮台行程中心，缩短总瞄准时间。代价是底盘会有旋转动作，
+对场地占用与队友协同的要求更高。
+
+## 自动阶段主程序（组合 Action 循环版）
+
+这 4 个 OpMode 把「取球 + 吃球 + 移动 + 瞄准发射」合成为**单一周期 Action** 并循环执行，
+状态机简化为 `CYCLE → CYCLE → … → PARKING → STOP`，其余逻辑（停靠、盟友禁区、收尾）
+与 {@link AutoRed} / {@link AutoBlue} 完全一致。
+
+### OpMode 一览
+
+| OpMode | 队伍 | 周期 Action | 特点 |
+|--------|------|-------------|------|
+| `AutoRedCycle` | 红 | {@link AutoCycleAction} | 保守版：取球点停车吃球，消除段间 1 帧调度空档 |
+| `AutoBlueCycle` | 蓝 | {@link AutoCycleAction} | 同上 |
+| `AutoRedContinuous` | 红 | {@link ContinuousRouteAction} | 激进版：全程单条轨迹，途经点不停车，路过式吃球 |
+| `AutoBlueContinuous` | 蓝 | {@link ContinuousRouteAction} | 同上 |
+
+### 状态机（4 个 OpMode 共用）
+
+```
+CYCLE   → AutoCycleAction / ContinuousRouteAction（队列空闲即投递下一周期）
+T-3s    → actionRunner.clear() + AdaptiveParkAction
+PARKING → AdaptiveParkAction
+STOP
+```
+
+- `CYCLE` 状态下：动作队列空闲且未在脱困时，立即 `actionRunner.add(new 周期Action(...))`；
+- T-3s：`actionRunner.clear()` 中断正在执行的周期，投递 `AdaptiveParkAction`，状态切到 `PARKING`；
+- `PARKING` 完成 → `STOP`。
+
+### 构造与关键参数
+
+**AutoCycleAction 构造**：`new AutoCycleAction(teamColor, sweeper, turret, goal)`
+
+| 参数 | 默认值 | 含义 |
+|------|--------|------|
+| `includeAim` | `true` | 是否在周期末尾追加 `AutoAimAction` |
+
+**ContinuousRouteAction 构造**：`new ContinuousRouteAction(teamColor, sweeper, turret, goal)`
+
+| 参数 | 默认值 | 单位 | 含义 |
+|------|--------|------|------|
+| `eatTriggerDistanceIn` | 12.0 | in | 到达取球点前多少英寸触发吃球（沿接近方向回退） |
+| `eatDurationMs` | 1200 | ms | 吃球时长，应≈触发点到轨迹结束的行驶时间 |
+| `secondLegThroughHive` | `true` | — | 第二段是否经 Hive 正下方（`false`=绕外侧） |
+| `includeAim` | `true` | — | 路线末尾是否追加 `AutoAimAction` |
+
+> ⚠️ `eatDurationMs` 必须与 `eatTriggerDistanceIn` 及车速匹配：若吃球时长明显长于
+> 剩余轨迹时间，轨迹跑完后 `ParallelAction` 仍会等吃球结束——车已停在发射区但整段
+> Action 未结束，会推迟下一周期。建议先测单周期耗时再回填此值。
+
+### 用法示例
+
+**在 Cycle 与 Continuous 之间切换**（以红队为例）：
+
+```java
+// 保守版（取球点停车吃球，最稳妥）
+actionRunner.add(new AutoCycleAction(teamColor, sweeper, turret, goal));
+
+// 激进版（单条轨迹不停车，最快）
+actionRunner.add(new ContinuousRouteAction(teamColor, sweeper, turret, goal));
+```
+
+**临时关闭瞄准发射，只跑取球+移动周期**（Dashboard Config 页）：
+
+```java
+AutoCycleAction.includeAim = false;        // 或 ContinuousRouteAction.includeAim = false
+```
+
+**调整吃球时机**（让车更早开始吃球，减少吃球段耗时）：
+
+```java
+ContinuousRouteAction.eatTriggerDistanceIn = 18.0;  // 取球点前 18 in 开始吃
+ContinuousRouteAction.eatDurationMs = 1500;
+```
+
+### 选型建议
+
+| 场景 | 推荐 OpMode |
+|------|-------------|
+| 集球器必须静止对准才能进球 | `AutoRedCycle` / `AutoBlueCycle` |
+| 集球器可行驶中吸球、追求最快周期 | `AutoRedContinuous` / `AutoBlueContinuous` |
+| 不确定 / 首次联调 | 先 `Cycle`，稳定后再试 `Continuous` |
+
+所有周期 Action 都在**首次 `run()` 时**以当时真实位姿规划轨迹，因此可直接入队，
+无需像逐段状态机那样处理段间位姿刷新。
 
 ## 参数配置：AutoParams（盟友活动区 / 我方禁止活动区）
 

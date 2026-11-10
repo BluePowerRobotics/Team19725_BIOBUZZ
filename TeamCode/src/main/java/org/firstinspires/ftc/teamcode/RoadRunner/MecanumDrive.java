@@ -866,6 +866,25 @@ public final class MecanumDrive {
      * @return 轨迹动作构建器
      */
     public TrajectoryActionBuilder actionBuilder(Pose2d beginPose) {
+        return actionBuilder(beginPose, 0.0);
+    }
+
+    /**
+     * 创建轨迹动作构建器，指定轨迹首尾速度。
+     *
+     * <p>{@code beginEndVel} 同时作为轨迹的<b>起点速度假设</b>与<b>终点速度</b>
+     * （Road Runner 的 {@code TrajectoryActionBuilder} 用同一个值控制首尾）。
+     * 用于「不停车衔接」或「末速度不为零」的场景，例如把末速度设为
+     * {@link PARAMS#maxWheelVel}，使轨迹以最大移速结束。
+     *
+     * <p>注意：若机器人实际静止而 {@code beginEndVel} 非零，profile 会假定起点已有该速度，
+     * 控制器会以最大加速度追赶，前段跟踪误差略大但不会失控；末速度则严格按此值生成。
+     *
+     * @param beginPose  起始位姿
+     * @param beginEndVel 轨迹首尾速度 (in/s)
+     * @return 轨迹动作构建器
+     */
+    public TrajectoryActionBuilder actionBuilder(Pose2d beginPose, double beginEndVel) {
         return new TrajectoryActionBuilder(
                 TurnAction::new,
                 FollowTrajectoryAction::new,
@@ -875,7 +894,7 @@ public final class MecanumDrive {
                                 0.25, 0.1, 1e-2
                         )
                 ),
-                beginPose, 0.0,
+                beginPose, beginEndVel,
                 defaultTurnConstraints,
                 defaultVelConstraint, defaultAccelConstraint
         );

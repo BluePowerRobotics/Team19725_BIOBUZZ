@@ -8,12 +8,14 @@ import com.qualcomm.robotcore.eventloop.opmode.LinearOpMode;
 import com.qualcomm.robotcore.util.ElapsedTime;
 
 import org.firstinspires.ftc.teamcode.Auto.AutoActions.AdaptiveParkAction;
+import org.firstinspires.ftc.teamcode.Auto.AutoActions.AutoAimAction;
 import org.firstinspires.ftc.teamcode.Auto.AutoActions.EatAction;
 import org.firstinspires.ftc.teamcode.Auto.AutoActions.GoToOtherShootAreaViaHiveAction;
 import org.firstinspires.ftc.teamcode.Auto.AutoActions.GoToStopPose;
 import org.firstinspires.ftc.teamcode.Auto.AutoActions.GoToUnvisitedEatPointAvoidHiveAction;
 import org.firstinspires.ftc.teamcode.Controllers.Chassis.Chassis;
 import org.firstinspires.ftc.teamcode.Controllers.Sweeper.Sweeper;
+import org.firstinspires.ftc.teamcode.Controllers.Turret.Turret;
 import org.firstinspires.ftc.teamcode.Parameter.AutoParams;
 import org.firstinspires.ftc.teamcode.Parameter.HypParams;
 import org.firstinspires.ftc.teamcode.Parameter.TeamColor;
@@ -29,7 +31,8 @@ import org.firstinspires.ftc.teamcode.utility.RobotStateStore;
  *
  * <p><b>动作循环</b>（动作队列空闲时自动投递下一段）：
  * <pre>
- *   绕开 Hive 前往未访问取球点 → 吃球 → 经 Hive 正下方前往另一发射区域 → 回到第一步 …
+ *   绕开 Hive 前往未访问取球点 → 吃球 → 经 Hive 正下方前往另一发射区域
+ *   → 炮台自动瞄准并发射（底盘不动）→ 回到第一步 …
  * </pre>
  * 蓝队的取球点、发射区域、Hive 矩形与禁线均为红队的中心对称版本，
  * 由各 Action 内部按 {@link TeamColor#BLUE} 自动换算。
@@ -43,7 +46,7 @@ import org.firstinspires.ftc.teamcode.utility.RobotStateStore;
  * （即我方禁止活动区），一旦整机轮廓闯入，立即清空动作队列并改投「开到最近安全位姿」
  * 的脱困动作；脱困期间暂停常规动作投递，脱离后自动恢复。
  *
- * <p>状态机：{@code TO_EAT_POINT → EATING → TO_SHOOT_AREA → TO_EAT_POINT … → PARKING → STOP}
+ * <p>状态机：{@code TO_EAT_POINT → EATING → TO_SHOOT_AREA → AIM_SHOOT → TO_EAT_POINT … → PARKING → STOP}
  */
 @Autonomous(name = "AutoBlue", group = "Auto")
 public class AutoBlue extends LinearOpMode {
@@ -56,6 +59,8 @@ public class AutoBlue extends LinearOpMode {
         EATING,
         /** 经 Hive 正下方前往另一发射区域 */
         TO_SHOOT_AREA,
+        /** 炮台自动瞄准并发射（底盘不动） */
+        AIM_SHOOT,
         /** 自适应停靠 */
         PARKING,
         /** 结束 */
@@ -66,6 +71,7 @@ public class AutoBlue extends LinearOpMode {
     private MecanumDrive drive;
     private Chassis chassis;
     private Sweeper sweeper;
+    private Turret turret;
 
     /** 队伍颜色（蓝方，Limelight pipeline 1） */
     private final TeamColor teamColor = TeamColor.BLUE;
@@ -95,6 +101,7 @@ public class AutoBlue extends LinearOpMode {
         chassis = new Chassis(hardwareMap, teamColor, actionRunner, telemetry, startPose);
         drive = RobotPosition.getInstance().getDrive();
         sweeper = new Sweeper(hardwareMap, telemetry);
+        turret = new Turret(hardwareMap, telemetry);
 
         telemetry.addData("Status", "Initialized");
         telemetry.addData("Team", teamColor);
@@ -161,6 +168,11 @@ public class AutoBlue extends LinearOpMode {
                         break;
 
                     case TO_SHOOT_AREA:
+                        actionRunner.add(new AutoAimAction(drive, turret));
+                        currentState = AutoState.AIM_SHOOT;
+                        break;
+
+                    case AIM_SHOOT:
                         actionRunner.add(new GoToUnvisitedEatPointAvoidHiveAction(teamColor));
                         currentState = AutoState.TO_EAT_POINT;
                         break;
@@ -191,9 +203,10 @@ public class AutoBlue extends LinearOpMode {
         // ===== 自动阶段结束：记录结束时刻的位姿，供手动阶段初始化时读回 =====
         RobotStateStore.savePose(RobotPosition.getInstance().getPose2d());
 
-        // 确保底盘与集球器停稳
+        // 确保底盘、集球器与炮台停稳
         sweeper.setStop();
         sweeper.update();
+        turret.stop();
         chassis.stop();
     }
 }

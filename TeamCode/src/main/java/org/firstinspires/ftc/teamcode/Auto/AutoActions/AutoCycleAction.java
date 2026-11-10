@@ -9,7 +9,10 @@ import com.acmerobotics.roadrunner.Pose2d;
 import com.acmerobotics.roadrunner.SequentialAction;
 
 import org.firstinspires.ftc.teamcode.Controllers.Sweeper.Sweeper;
+import org.firstinspires.ftc.teamcode.Controllers.Turret.Turret;
 import org.firstinspires.ftc.teamcode.Parameter.TeamColor;
+import org.firstinspires.ftc.teamcode.Processors.RobotPosition.RobotPosition;
+import org.firstinspires.ftc.teamcode.RoadRunner.MecanumDrive;
 import org.firstinspires.ftc.teamcode.utility.DeferredAction;
 
 import java.util.ArrayList;
@@ -42,7 +45,7 @@ import java.util.List;
  *
  * <p><b>接入方式</b>（不在本类中修改主程序，供 {@code AutoBlue} 后续替换状态机）：
  * <pre>
- * actionRunner.add(new AutoCycleAction(teamColor, sweeper, goal));
+ * actionRunner.add(new AutoCycleAction(teamColor, sweeper, turret, goal));
  * // 之后在循环里只需：if (!actionRunner.isBusy()) 追加下一周期
  * </pre>
  */
@@ -58,6 +61,9 @@ public class AutoCycleAction implements Action {
     /** 集球器 */
     private final Sweeper sweeper;
 
+    /** 炮台控制器（用于自动瞄准与发射） */
+    private final Turret turret;
+
     /** 预瞄准的球门目标点（用于发射区域终点航向，与 {@code Chassis} 自动瞄准一致） */
     private final Pose2d goal;
 
@@ -67,11 +73,13 @@ public class AutoCycleAction implements Action {
     /**
      * @param teamColor 队伍颜色
      * @param sweeper   集球器控制器
+     * @param turret    炮台控制器
      * @param goal      预瞄准的单个球门目标点
      */
-    public AutoCycleAction(TeamColor teamColor, Sweeper sweeper, Pose2d goal) {
+    public AutoCycleAction(TeamColor teamColor, Sweeper sweeper, Turret turret, Pose2d goal) {
         this.teamColor = teamColor;
         this.sweeper = sweeper;
+        this.turret = turret;
         this.goal = goal;
     }
 
@@ -95,7 +103,8 @@ public class AutoCycleAction implements Action {
         steps.add(new DeferredAction(() -> new GoToOtherShootAreaViaHiveAction(teamColor, goal)));
 
         if (includeAim) {
-            steps.add(new AutoAimAction(teamColor));
+            MecanumDrive drive = RobotPosition.getInstance().getDrive();
+            steps.add(new AutoAimAction(drive, turret));
         }
 
         return new SequentialAction(steps);

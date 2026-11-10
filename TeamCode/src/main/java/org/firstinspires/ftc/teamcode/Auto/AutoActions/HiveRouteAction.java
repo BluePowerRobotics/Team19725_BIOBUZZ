@@ -61,7 +61,9 @@ public abstract class HiveRouteAction implements Action {
         Pose2d start = RobotPosition.getInstance().getPose2d();
         List<Pose2d> waypoints = HiveRoutePlanner.waypoints(teamColor, start, finalPose, throughHive);
 
-        TrajectoryActionBuilder builder = drive.actionBuilder(start);
+        // 末速度 = 底盘最大移速（PARAMS.maxWheelVel），使轨迹以最快速度结束，
+        // 便于与后续动作（如 AutoAimAction）衔接时减少停车损失。
+        TrajectoryActionBuilder builder = drive.actionBuilder(start, MecanumDrive.PARAMS.maxWheelVel);
         for (Pose2d wp : waypoints) {
             builder = builder.strafeToLinearHeading(wp.position, wp.heading.toDouble());
         }
