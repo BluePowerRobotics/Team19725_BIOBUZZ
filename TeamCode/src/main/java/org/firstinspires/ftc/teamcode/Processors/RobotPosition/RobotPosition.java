@@ -164,7 +164,11 @@ public class RobotPosition {
     }
 
     /**
-     * 清空球道计数。由上层（OpMode）在"炮台发射完毕"或"操作手手动清空"时调用；
+     * 清空球道计数。调用方均为 OpMode（同层，单级调用）：
+     * <ul>
+     *   <li>操作手手动清空（一操 Y 键）</li>
+     *   <li>转发 Turret 的"发射完毕"请求</li>
+     * </ul>
      * 同时把边缘检测基准重置为最近一帧的遮挡状态，因此不会产生虚假上升沿。
      */
     public void resetBallCount() {

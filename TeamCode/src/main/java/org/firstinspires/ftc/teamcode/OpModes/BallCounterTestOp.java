@@ -117,8 +117,8 @@ public class BallCounterTestOp extends LinearOpMode {
                 robotPosition.resetBallCount();
             }
 
-            // ---- 控制：下发 Sweeper（满额自动停吸由 Sweeper 内部判定）----
-            sweeper.update();
+            // ---- 控制：下发 Sweeper（计数由本层传入，满额自动停吸由 Sweeper 内部判定）----
+            sweeper.update(robotPosition.getBallCount());
 
             // ---- 控制：炮台（固定 yaw / 俯仰，二操按住 A 发射）----
             double pitchBig = (Shooter.BIG_PARAMS.pitchMin + Shooter.BIG_PARAMS.pitchMax) / 2.0;
@@ -127,7 +127,8 @@ public class BallCounterTestOp extends LinearOpMode {
             Turret.FireReady ready = turret.update(testYaw, pitchBig, pitchSmall,
                     testSpeedBig, testSpeedSmall, fire, fire);
 
-            // ---- 炮台发射完毕 → 清空球道计数（OpMode 负责跨层转发）----
+            // ---- 炮台发射完毕 → 清空球道计数 ----
+            // Turret 只置位请求，由本层（OpMode）转发给 RobotPosition，保证单级调用；
             // 先保存 consume 结果再清零，否则遥测里读到的永远是清除后的 false
             boolean fireCompleted = turret.consumeResetBallCountRequest();
             if (fireCompleted) {
@@ -149,6 +150,6 @@ public class BallCounterTestOp extends LinearOpMode {
 
         turret.stop();
         sweeper.setStop();
-        sweeper.update();
+        sweeper.update(RobotPosition.getInstance().getBallCount());
     }
 }

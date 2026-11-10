@@ -8,7 +8,6 @@ import com.qualcomm.robotcore.hardware.Servo;
 
 import org.firstinspires.ftc.robotcore.external.Telemetry;
 import org.firstinspires.ftc.robotcore.external.navigation.CurrentUnit;
-import org.firstinspires.ftc.teamcode.Processors.RobotPosition.RobotPosition;
 
 @Config
 /**
@@ -63,7 +62,7 @@ public class Sweeper {
      */
     private boolean outputDirection = false;
 
-    /** 最近一帧从 RobotPosition 读取的球道计数（供满额判定与遥测） */
+    /** 最近一帧由上层传入的球道计数（供满额判定与遥测） */
     private int ballCount = 0;
 
     /** 最近一次 update() 采到的功率，供读取与遥测复用 */
@@ -149,23 +148,21 @@ public class Sweeper {
     }
 
     /**
-     * 每帧调用一次：从球道计数器取计数，把目标速度下发，并据此决定是否停吸。
+     * 每帧调用一次：接收上层给出的球道计数，把目标速度下发，并据此决定是否停吸。
      *
-     * <p>计数直接读取 {@link RobotPosition} 单例（其下属 BallCounter 已在
-     * {@code RobotPosition.update()} 中推进），不需要上层再传入。
-     * 若 RobotPosition 尚未初始化（如 SweeperTester 单独调电机），按 0 处理，
-     * 即不做满额拦截，避免测试程序抛异常。
+     * <p>严格单级调用：本类不直接访问 RobotPosition / BallCounter，
+     * 球道计数由 OpMode（持有 RobotPosition 的同一层）每帧传入。
      *
      * <p>计数达到 {@link #BallCapacity} 时，若本帧是吸球指令则强制停转；
      * 只拦截吸球方向，送球（GiveArtifact）与出球（Output）不受影响。
+     *
+     * @param ballCount 当前球道内的小球数（RobotPosition.getBallCount()），负数按 0 处理
      */
-    public void update() {
-        // 读取球道计数：RobotPosition → BallCounter（只读缓存值，不推进任何 update）
-        RobotPosition robotPosition = RobotPosition.getInstanceOrNull();
-        ballCount = robotPosition != null ? robotPosition.getBallCount() : 0;
+    public void update(int ballCount) {
+        this.ballCount = Math.max(0, ballCount);
 
         // 球道已满：停止继续吸球（避免球在球道内挤压 / 溢出）
-        if (eating && ballCount >= BallCapacity) {
+        if (eating && this.ballCount >= BallCapacity) {
             targetVelocity = 0;
         }
 
@@ -186,7 +183,7 @@ public class Sweeper {
         outputDirection = false;
     }
 
-    /** @return 球道内当前小球个数（最近一帧 update 从 RobotPosition 读取的值） */
+    /** @return 球道内当前小球个数（最近一帧由上层传入的计数） */
     public int getBallCount() {
         return ballCount;
     }
