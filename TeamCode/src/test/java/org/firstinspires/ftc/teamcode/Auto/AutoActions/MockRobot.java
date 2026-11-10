@@ -49,6 +49,8 @@ public class MockRobot implements AutoCloseable {
             when(robotPosition.getDrive()).thenReturn(drive);
             when(robotPosition.getPose2d()).thenReturn(startPose);
             when(drive.actionBuilder(any(Pose2d.class))).thenReturn(builder);
+            // HiveRouteAction 使用带首尾速度的重载，两个重载都要打桩，否则返回 null
+            when(drive.actionBuilder(any(Pose2d.class), anyDouble())).thenReturn(builder);
             when(builder.strafeToLinearHeading(any(), anyDouble())).thenReturn(builder);
             when(builder.build()).thenReturn(trajectoryAction);
         } catch (RuntimeException e) {

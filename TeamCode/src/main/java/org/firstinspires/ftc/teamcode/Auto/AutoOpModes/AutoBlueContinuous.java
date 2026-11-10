@@ -46,7 +46,15 @@ public class AutoBlueContinuous extends LinearOpMode {
 
     private final TeamColor teamColor = TeamColor.BLUE;
     private final Pose2d startPose = HypParams.startPoseBlue;
-    private final Pose2d goal = HypParams.BlueAudienceUp;
+
+    /**
+     * 当前预瞄准球门：实时读取 {@link RobotPosition#getGoalPose()}，
+     * 与炮台自动瞄准（{@code Turret.update}）使用同一来源，
+     * 由 HIVE 抬升侧自动切换 AudienceUp / AudienceDown。
+     */
+    private Pose2d currentGoal() {
+        return RobotPosition.getInstance().getGoalPose();
+    }
 
     private AutoState currentState = AutoState.CYCLE;
     private boolean parkScheduled = false;
@@ -73,7 +81,7 @@ public class AutoBlueContinuous extends LinearOpMode {
         EatPointTracker.clear();
         ElapsedTime matchTime = new ElapsedTime();
 
-        actionRunner.add(new ContinuousRouteAction(teamColor, sweeper, turret, goal));
+        actionRunner.add(new ContinuousRouteAction(teamColor, sweeper, turret, currentGoal()));
 
         while (opModeIsActive() && currentState != AutoState.STOP) {
             RobotPosition.getInstance().update();
@@ -107,7 +115,7 @@ public class AutoBlueContinuous extends LinearOpMode {
             if (!actionRunner.isBusy() && !zoneEscapeActive) {
                 switch (currentState) {
                     case CYCLE:
-                        actionRunner.add(new ContinuousRouteAction(teamColor, sweeper, turret, goal));
+                        actionRunner.add(new ContinuousRouteAction(teamColor, sweeper, turret, currentGoal()));
                         break;
                     case PARKING:
                         currentState = AutoState.STOP;

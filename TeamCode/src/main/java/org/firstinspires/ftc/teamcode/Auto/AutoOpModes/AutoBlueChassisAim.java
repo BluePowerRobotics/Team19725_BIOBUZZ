@@ -49,7 +49,15 @@ public class AutoBlueChassisAim extends LinearOpMode {
 
     private final TeamColor teamColor = TeamColor.BLUE;
     private final Pose2d startPose = HypParams.startPoseBlue;
-    private final Pose2d goal = HypParams.BlueAudienceUp;
+
+    /**
+     * 当前预瞄准球门：实时读取 {@link RobotPosition#getGoalPose()}，
+     * 与炮台自动瞄准（{@code Turret.update}）使用同一来源，
+     * 由 HIVE 抬升侧自动切换 AudienceUp / AudienceDown。
+     */
+    private Pose2d currentGoal() {
+        return RobotPosition.getInstance().getGoalPose();
+    }
 
     private AutoState currentState = AutoState.TO_EAT_POINT;
     private boolean parkScheduled = false;
@@ -113,7 +121,7 @@ public class AutoBlueChassisAim extends LinearOpMode {
                         currentState = AutoState.EATING;
                         break;
                     case EATING:
-                        actionRunner.add(new GoToOtherShootAreaViaHiveAction(teamColor, goal));
+                        actionRunner.add(new GoToOtherShootAreaViaHiveAction(teamColor, currentGoal()));
                         currentState = AutoState.TO_SHOOT_AREA;
                         break;
                     case TO_SHOOT_AREA:

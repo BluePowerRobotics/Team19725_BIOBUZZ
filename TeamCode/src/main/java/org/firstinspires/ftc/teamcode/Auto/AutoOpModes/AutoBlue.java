@@ -79,8 +79,14 @@ public class AutoBlue extends LinearOpMode {
     /** 蓝队起始位姿 */
     private final Pose2d startPose = HypParams.startPoseBlue;
 
-    /** 预瞄准球门：蓝队 AudienceUp（与 ActionTestBase 默认值一致） */
-    private final Pose2d goal = HypParams.BlueAudienceUp;
+    /**
+     * 当前预瞄准球门：实时读取 {@link RobotPosition#getGoalPose()}，
+     * 与炮台自动瞄准（{@code Turret.update}）使用同一来源，
+     * 由 HIVE 抬升侧自动切换 AudienceUp / AudienceDown。
+     */
+    private Pose2d currentGoal() {
+        return RobotPosition.getInstance().getGoalPose();
+    }
 
     /** 当前状态，初始为「前往取球点」 */
     private AutoState currentState = AutoState.TO_EAT_POINT;
@@ -163,7 +169,7 @@ public class AutoBlue extends LinearOpMode {
                         break;
 
                     case EATING:
-                        actionRunner.add(new GoToOtherShootAreaViaHiveAction(teamColor, goal));
+                        actionRunner.add(new GoToOtherShootAreaViaHiveAction(teamColor, currentGoal()));
                         currentState = AutoState.TO_SHOOT_AREA;
                         break;
 

@@ -51,7 +51,15 @@ public class AutoRedContinuous extends LinearOpMode {
 
     private final TeamColor teamColor = TeamColor.RED;
     private final Pose2d startPose = HypParams.startPoseRed;
-    private final Pose2d goal = HypParams.RedAudienceUp;
+
+    /**
+     * 当前预瞄准球门：实时读取 {@link RobotPosition#getGoalPose()}，
+     * 与炮台自动瞄准（{@code Turret.update}）使用同一来源，
+     * 由 HIVE 抬升侧自动切换 AudienceUp / AudienceDown。
+     */
+    private Pose2d currentGoal() {
+        return RobotPosition.getInstance().getGoalPose();
+    }
 
     private AutoState currentState = AutoState.CYCLE;
     private boolean parkScheduled = false;
@@ -79,7 +87,7 @@ public class AutoRedContinuous extends LinearOpMode {
         ElapsedTime matchTime = new ElapsedTime();
 
         // 首个周期：单条轨迹完成取球+吃球+移动+瞄准发射
-        actionRunner.add(new ContinuousRouteAction(teamColor, sweeper, turret, goal));
+        actionRunner.add(new ContinuousRouteAction(teamColor, sweeper, turret, currentGoal()));
 
         while (opModeIsActive() && currentState != AutoState.STOP) {
             RobotPosition.getInstance().update();
@@ -116,7 +124,7 @@ public class AutoRedContinuous extends LinearOpMode {
             if (!actionRunner.isBusy() && !zoneEscapeActive) {
                 switch (currentState) {
                     case CYCLE:
-                        actionRunner.add(new ContinuousRouteAction(teamColor, sweeper, turret, goal));
+                        actionRunner.add(new ContinuousRouteAction(teamColor, sweeper, turret, currentGoal()));
                         break;
                     case PARKING:
                         currentState = AutoState.STOP;

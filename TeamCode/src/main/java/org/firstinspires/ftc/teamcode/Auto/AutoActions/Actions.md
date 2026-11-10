@@ -463,7 +463,15 @@ actionRunner.add(new ContinuousRouteAction(teamColor, sweeper, goal));  // 激�
 |------|---------|----------|
 | 队伍 | `TeamColor.RED` | `TeamColor.BLUE` |
 | 起始位姿 | `HypParams.startPoseRed` | `HypParams.startPoseBlue` |
-| 预瞄准球门 | `HypParams.RedAudienceUp` | `HypParams.BlueAudienceUp` |
+| 预瞄准球门 | `currentGoal()` → `RobotPosition.getGoalPose()` | 同（同一来源，内部按队伍颜色取红/蓝球门） |
+
+> ⚠️ **预瞄准球门必须与炮台瞄准同源**。`AutoAimAction` /
+> `AutoTurretAimShootWithChassisAction` 内部通过 `Turret.update(...)` 读取
+> **`RobotPosition.getGoalPose()`**（由 HIVE 抬升侧自动在 AudienceUp / AudienceDown 之间切换）。
+> 因此移动类 Action 传入的 `goal` 也必须实时取 `RobotPosition.getInstance().getGoalPose()`，
+> 各 OpMode 统一封装为私有方法 `currentGoal()`；
+> 若写死 `HypParams.RedAudienceUp`，当 HIVE 判定为 `AUDIENCE_DOWN` 时
+> 车头会朝向上侧球门、炮台需额外转约 180° 才能发射，白白损失周期时间。
 
 **状态机与动作循环**（动作队列空闲时投递下一段）：
 
