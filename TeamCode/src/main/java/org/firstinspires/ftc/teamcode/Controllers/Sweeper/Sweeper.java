@@ -51,8 +51,15 @@ public class Sweeper {
     private int targetVelocity = 0;
     private int lastTargetVelocity = 0;
 
-    /** 球道最多容纳的小球数：计数达到该值后自动停止吸球（出球方向不受限制） */
+    /** 球道最多容纳的小球数：计数达到该值后自动停止吸球（送球 / 出球方向不受限制） */
     public static int BallMax = 4;
+
+    /**
+     * 本帧命令是否来自 {@link #setEat()}。
+     * 满球保护只拦截吸球流程；送球（{@link #setGiveArtifact()}）与出球必须放行，
+     * 否则满球时炮台无法把球道内的球送出去完成发射。
+     */
+    private boolean eatCommanded = false;
 
     /** 最近一次 update() 采到的功率，供读取与遥测复用 */
     private double cachedPower = 0;
@@ -96,24 +103,35 @@ public class Sweeper {
         }
     }
 
+    /** 吸球：满球时会被 {@link #BallMax} 上限拦截并停止 */
     public void setEat() {
         targetVelocity = EatVel;
+        eatCommanded = true;
     }
 
+    /** 送球给炮台：满球时仍允许执行，用于发射道具 */
     public void setGiveArtifact() {
         targetVelocity = GiveTheArtifactVel;
+        eatCommanded = false;
     }
 
     public void setOutput() {
         targetVelocity = OutputVel;
+        eatCommanded = false;
     }
 
     public void setStop() {
         targetVelocity = 0;
+        eatCommanded = false;
     }
 
+    /**
+     * 通用速度指令，不属于吸球流程，因此不受满球上限限制。
+     * 需要满球自动停吸请使用 {@link #setEat()}。
+     */
     public void setTargetVelocity(int velocity) {
         targetVelocity = velocity;
+        eatCommanded = false;
     }
 
     /** 铲子抬起（切换到抬起角度） */
@@ -127,11 +145,15 @@ public class Sweeper {
     }
 
     public void update() {
-        // 吸球上限：球道计数由 RobotPosition 每帧更新，本类只读取其状态（不重复推进计数）。
-        // 达到 BallMax 后停止吸球；出球（负目标速度）不受限制，便于把球送回或排出球道。
+        // 满球保护：球道计数由 RobotPosition 每帧更新，本类只读取其状态（不重复推进计数）。
+        // 按命令来源区分两种满球场景：
+        //   1. setEat（吸球）满球 → 停止吸球，避免超出容量；
+        //   2. setGiveArtifact（送球）满球 → 必须放行，否则炮台无法把球送出去完成发射。
+        // 出球（负速）与通用速度指令同样不受该上限拦截。
         RobotPosition robotPosition = RobotPosition.getInstanceOrNull();
-        if (robotPosition != null && targetVelocity > 0
-                && robotPosition.getBallCount() >= BallMax) {
+        boolean ballLaneFull = robotPosition != null
+                && robotPosition.getBallCount() >= BallMax;
+        if (ballLaneFull && eatCommanded) {
             targetVelocity = 0;
         }
 
@@ -139,6 +161,7 @@ public class Sweeper {
         motor.setVelocity(targetVelocity);
         lastTargetVelocity = targetVelocity;
         targetVelocity = 0; // 每帧必须重新调用set函数，否则自动归零
+        eatCommanded = false; // 命令来源同样每帧重新下发
         // 舵机保持位置：每帧刷新，保证 Dashboard 上改 ShovelUpPos/ShovelDownPos 后即时生效
         shovelServo.setPosition(targetShovelPos);
         // 本帧唯一的硬件采样点：功率 / 转速 / 电流全部缓存，getter 与遥测只读缓存
