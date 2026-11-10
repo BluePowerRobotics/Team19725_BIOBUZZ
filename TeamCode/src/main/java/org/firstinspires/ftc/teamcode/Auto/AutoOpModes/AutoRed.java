@@ -82,7 +82,9 @@ public class AutoRed extends LinearOpMode {
         // 初始化底盘与定位：Chassis 内部完成 RobotPosition 初始化（含 Limelight + 自适应 EKF）
         chassis = new Chassis(hardwareMap, teamColor, actionRunner, telemetry, startPose);
         drive = RobotPosition.getInstance().getDrive();
-        sweeper = new Sweeper(hardwareMap, telemetry);
+        // 球道计数：Auto 阶段同样启用满仓停吸（方向默认吸球 +1）
+        RobotPosition.getInstance().ensureBallChannel();
+        sweeper = new Sweeper(hardwareMap, telemetry, RobotPosition.getInstance());
 
         telemetry.addData("Status", "Initialized");
         telemetry.addData("Team", teamColor);

@@ -4,6 +4,7 @@ import com.acmerobotics.dashboard.config.Config;
 import com.qualcomm.robotcore.hardware.HardwareMap;
 
 import org.firstinspires.ftc.robotcore.external.Telemetry;
+import org.firstinspires.ftc.teamcode.Processors.RobotPosition.RobotPosition;
 import org.firstinspires.ftc.teamcode.utility.Vector2D;
 
 /**
@@ -63,8 +64,21 @@ public class Turret {
 
     private final Telemetry telemetry;
 
+    /** 只读球道状态：炮台发射完毕时清空计数；为 null 时不做清空 */
+    private final RobotPosition robotPosition;
+
+    /** 上一帧扳机状态，用于检测「发射完毕」（true → false 下降沿） */
+    private boolean lastTriggerBig = false;
+    private boolean lastTriggerSmall = false;
+
+    /** 不关心球道计数的调用方：发射完毕不清空计数 */
     public Turret(HardwareMap hardwareMap, Telemetry telemetry) {
+        this(hardwareMap, telemetry, null);
+    }
+
+    public Turret(HardwareMap hardwareMap, Telemetry telemetry, RobotPosition robotPosition) {
         this.telemetry = telemetry;
+        this.robotPosition = robotPosition;
         this.yawController = new YawController(hardwareMap, telemetry);
         this.shooterBig = new Shooter(hardwareMap, telemetry,
                 BIG_MOTOR, BIG_PITCH_SERVO, BIG_TRIGGER_SERVO, Shooter.BIG_PARAMS);
@@ -109,6 +123,15 @@ public class Turret {
         boolean yawReady = yawController.update(yaw);
         boolean bigReady = shooterBig.update(speedBig, pitchBig, triggerBig);
         boolean smallReady = shooterSmall.update(speedSmall, pitchSmall, triggerSmall);
+
+        // 发射完毕：扳机从「释放」回落（true → false）且该发射器当时确实可发射，才算一次有效发射
+        boolean firedBig = lastTriggerBig && !triggerBig && bigReady;
+        boolean firedSmall = lastTriggerSmall && !triggerSmall && smallReady;
+        if (robotPosition != null && (firedBig || firedSmall)) {
+            robotPosition.resetBallCount();
+        }
+        lastTriggerBig = triggerBig;
+        lastTriggerSmall = triggerSmall;
 
         return new FireReady(yawReady && bigReady, yawReady && smallReady);
     }

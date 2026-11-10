@@ -5,17 +5,20 @@ import android.graphics.Color;
 import com.acmerobotics.dashboard.config.Config;
 import com.acmerobotics.roadrunner.Pose2d;
 import com.acmerobotics.roadrunner.PoseVelocity2d;
+import com.acmerobotics.roadrunner.Vector2d;
 import com.qualcomm.hardware.limelightvision.Limelight3A;
 import com.qualcomm.robotcore.hardware.HardwareMap;
 import com.qualcomm.robotcore.hardware.IMU;
 import com.qualcomm.robotcore.hardware.NormalizedColorSensor;
 import com.qualcomm.robotcore.hardware.NormalizedRGBA;
 
+import org.firstinspires.ftc.robotcore.external.Telemetry;
 import org.firstinspires.ftc.robotcore.external.navigation.AngleUnit;
 import org.firstinspires.ftc.robotcore.external.navigation.YawPitchRollAngles;
 
 import org.firstinspires.ftc.teamcode.Parameter.TeamColor;
 import org.firstinspires.ftc.teamcode.Processors.FusionLocalizer.AdaptiveEKFLocalizer;
+import org.firstinspires.ftc.teamcode.Processors.Sensors.BallCounter;
 import org.firstinspires.ftc.teamcode.Processors.VisionLocalizer.MT1Localizer;
 import org.firstinspires.ftc.teamcode.RoadRunner.MecanumDrive;
 import org.firstinspires.ftc.teamcode.utility.Geometry.ConvexPolygon;
@@ -44,6 +47,84 @@ public class RobotPosition {
 
     private static RobotPosition instance;
 
+    // ==================== 球道计数（BallChannel，可选） ====================
+
+    /** 本帧的计数方向：{@link BallCounter#MODE_INTAKE}（+1）/ {@link BallCounter#MODE_OUTPUT}（-1） */
+    private int ballMode = BallCounter.MODE_INTAKE;
+
+    /** 球道计数器：首次用到球道功能时才创建（避免未配置光电门的机器人初始化失败） */
+    private BallCounter ballCounter;
+
+    /** 是否启用定位部分：球道专用实例为 false（不碰 Limelight / 里程计） */
+    private boolean localizationEnabled = false;
+
+    /**
+     * 只用于球道计数的轻量实例：不启动 Limelight / IMU / 里程计，仅提供球道相关接口。
+     * 供纯球道调试的 OpMode 使用；正式比赛请用 {@link #RobotPositioninit}。
+     *
+     * @param hardwareMap 硬件映射
+     * @return 未注册为单例的独立实例
+     */
+    public static RobotPosition initBallChannelOnly(HardwareMap hardwareMap) {
+        RobotPosition position = new RobotPosition();
+        position.hardwareMap = hardwareMap;
+        position.currentPose = new Pose2d(0, 0, 0);
+        // 速度置零而不是留 null：避免球道专用实例误调 getVx()/getVy()/getOmega() 时 NPE
+        position.currentVelocity2d = new PoseVelocity2d(new Vector2d(0, 0), 0);
+        return position;
+    }
+
+    /** 懒创建球道计数器（先创建下属 BallCounter，其内部再创建 BreakBeamSensor） */
+    private BallCounter ballCounter() {
+        if (ballCounter == null) {
+            ballCounter = new BallCounter(hardwareMap);
+        }
+        return ballCounter;
+    }
+
+    /**
+     * 提前创建球道计数器：在 OpMode 的 init 阶段调用，使「光电门未配置」在 init 就报错，
+     * 而不是等到主循环第一帧（比赛中才开始崩）。
+     */
+    public void ensureBallChannel() {
+        ballCounter();
+    }
+
+    /** 设置本帧计数方向（{@link BallCounter#MODE_INTAKE} / {@link BallCounter#MODE_OUTPUT}） */
+    public void setBallMode(int mode) {
+        ballMode = mode;
+    }
+
+    /** @return IsBlocked：光电门当前是否遮挡 */
+    public boolean isBlocked() {
+        return ballCounter != null && ballCounter.isBlocked();
+    }
+
+    /** @return BallCount：当前累计球数（未启用球道时为 0） */
+    public int getBallCount() {
+        return ballCounter == null ? 0 : ballCounter.getCount();
+    }
+
+    /** resetBallCount：只清计数，不动光电门滤波与边缘基准（炮台发射完毕 / 手动轻量清空） */
+    public void resetBallCount() {
+        if (ballCounter != null) {
+            ballCounter.clearCount();
+        }
+    }
+
+    /** 深复位：计数归零，同时重置光电门 EMA 滤波与边缘基准 */
+    public void resetBallChannel() {
+        if (ballCounter != null) {
+            ballCounter.reset();
+        }
+    }
+
+    /** 输出球道状态遥测（调用方需自行 telemetry.update()） */
+    public void setBallTelemetry(Telemetry telemetry) {
+        telemetry.addData("Ball count", getBallCount());
+        telemetry.addData("Ball blocked", isBlocked() ? 1 : 0);
+    }
+
     public static RobotPosition getInstance(){
         if(instance==null){
             throw new IllegalStateException("RobotPosition not initialized, call setInstance first");
@@ -61,7 +142,6 @@ public class RobotPosition {
     private RobotPosition(){
     }
 
-;
     /**
      * 按红方初始化（Limelight pipeline 0）。
      */
@@ -79,6 +159,7 @@ public class RobotPosition {
 
         instance=new RobotPosition();
         instance.hardwareMap = hardwareMap;
+        instance.localizationEnabled = true;
 
         instance.currentPose = initpose != null ? initpose : new Pose2d(0,0,0);
 
@@ -109,21 +190,31 @@ public class RobotPosition {
     public void ResetPoseTo(Pose2d pose) {
         drive.localizer.setPose(pose);
         currentPose = pose;
+        // reset 边由本类发起：位姿重定位时同步深复位球道计数（图中 RobotPosition → BallCounter）
+        resetBallChannel();
     }
 
-    // 每帧调用：推进融合定位器并返回当前位姿
+    // 每帧调用：推进融合定位器与球道计数，返回当前位姿
     public Pose2d update() {
         // 唯一推进点：每帧只调用一次，避免同一帧的视觉观测被重复计入 EKF
         // （MecanumDrive 的轨迹 / 转向 Action 内部已改为复用本帧结果）
-        currentVelocity2d = drive.updatePoseEstimate();
+        // 球道专用实例（initBallChannelOnly）没有 drive，跳过定位部分
+        if (localizationEnabled && drive != null) {
+            currentVelocity2d = drive.updatePoseEstimate();
 
-        // HIVE 状态跟踪：MT1 成功解出倾角观测时更新，否则保持上一状态
-        MT1Localizer mt1 = fusionLocalizer.getMT1();
-        if (mt1.isHiveEstimated()) {
-            hiveState = mt1.getHiveState();
+            // HIVE 状态跟踪：MT1 成功解出倾角观测时更新，否则保持上一状态
+            MT1Localizer mt1 = fusionLocalizer.getMT1();
+            if (mt1.isHiveEstimated()) {
+                hiveState = mt1.getHiveState();
+            }
+
+            currentPose = drive.localizer.getPose();
         }
 
-        currentPose = drive.localizer.getPose();
+        // 球道计数：与定位共用同一条「更新」边（OpMode → RobotPosition → BallCounter）
+        if (ballCounter != null) {
+            ballCounter.update(ballMode);
+        }
         return currentPose;
     }
 
