@@ -71,8 +71,16 @@ public class TeleOpBlue extends LinearOpMode {
         waitForStart();
 
         while (opModeIsActive()) {
-            // 球道方向：出球（右 bumper）时计数 -1，其余（吸球 / 停止）时 +1
-            int ballDirection = gamepad1.right_bumper
+            // 先下达本帧 Sweeper 指令，球道计数方向据此决定（与实际球流一致）
+            if (gamepad1.left_bumper) {
+                sweeper.setEat();
+            }
+            if (gamepad1.right_bumper) {
+                sweeper.setOutput();
+            }
+
+            // 球道方向与 Sweeper 指令同源：送球 / 吐球时 -1，吸球 / 停止时 +1
+            int ballDirection = sweeper.isOutputDirection()
                     ? BallCounter.MODE_OUTPUT : BallCounter.MODE_INTAKE;
 
             // RobotPosition.update 内部层层更新 BallCounter → BreakBeam（本帧唯一推进点）
@@ -111,15 +119,6 @@ public class TeleOpBlue extends LinearOpMode {
                 RobotPosition.getInstance().ResetPoseTo(resetPose);
                 telemetry.addData("ResetPose", "Reset to " + (teamColor == TeamColor.BLUE ? "Blue" : "Red"));
             }
-
-            if (gamepad1.left_bumper) {
-                sweeper.setEat();
-            }
-
-            if (gamepad1.right_bumper) {
-                sweeper.setOutput();
-            }
-
 
             // ======== 更新 & 遥测 ========
 

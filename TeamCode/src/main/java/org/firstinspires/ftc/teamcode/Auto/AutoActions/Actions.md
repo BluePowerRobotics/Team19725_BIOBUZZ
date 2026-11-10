@@ -197,6 +197,10 @@ new GoToShootAreaNearestVerticesAction(TeamColor.RED, HypParams.RedAudienceUp);
 **作用**：每帧 `sweeper.setEat()` + `sweeper.update()`（Sweeper 每帧自动归零目标，
 必须每帧重新置位），持续到时后 `setStop()` 并结束。
 
+**满额提前结束**：每帧检查 `sweeper.isBallLaneFull()`（球道计数达到 `Sweeper.BallCapacity`，
+默认 4），一旦已满立即 `setStop()` 并结束，不会在吸球已被满额保护拦下后空转到超时。
+由于计数来自 `RobotPosition`，主循环必须**先** `RobotPosition.update()` **再**执行 Action。
+
 **Dashboard 可调参数**：`eatDurationMs`（默认 2000 ms，待实机标定）；
 吃球速度 `Sweeper.EatVel`（默认 700 tick/s）在 `Sweeper` 类中调整。
 

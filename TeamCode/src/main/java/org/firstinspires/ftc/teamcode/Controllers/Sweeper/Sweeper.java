@@ -57,6 +57,12 @@ public class Sweeper {
     /** 本帧是否处于"吸球"指令（只有 setEat 置位，用于球道满额自动停吸） */
     private boolean eating = false;
 
+    /**
+     * 本帧指令是否让球"离开球道"（送球入炮台 / 反向吐球）。
+     * 球道计数方向与 Sweeper 指令同源，避免发射送球被误计为吸球 +1。
+     */
+    private boolean outputDirection = false;
+
     /** 最近一帧从 RobotPosition 读取的球道计数（供满额判定与遥测） */
     private int ballCount = 0;
 
@@ -105,26 +111,31 @@ public class Sweeper {
     public void setEat() {
         targetVelocity = EatVel;
         eating = true;
+        outputDirection = false;
     }
 
     public void setGiveArtifact() {
         targetVelocity = GiveTheArtifactVel;
         eating = false;
+        outputDirection = true;
     }
 
     public void setOutput() {
         targetVelocity = OutputVel;
         eating = false;
+        outputDirection = true;
     }
 
     public void setStop() {
         targetVelocity = 0;
         eating = false;
+        outputDirection = false;
     }
 
     public void setTargetVelocity(int velocity) {
         targetVelocity = velocity;
         eating = false;
+        outputDirection = velocity < 0;
     }
 
     /** 铲子抬起（切换到抬起角度） */
@@ -171,6 +182,8 @@ public class Sweeper {
 
         // 吸球指令同样每帧自动归零，避免上一帧的 eating 标记影响下一帧
         eating = false;
+        // 方向标记同样归零：未下达指令（停止）时下一帧默认按吸球方向 +1
+        outputDirection = false;
     }
 
     /** @return 球道内当前小球个数（最近一帧 update 从 RobotPosition 读取的值） */
@@ -181,6 +194,15 @@ public class Sweeper {
     /** @return 球道是否已满（计数达到 {@link #BallCapacity}） */
     public boolean isBallLaneFull() {
         return ballCount >= BallCapacity;
+    }
+
+    /**
+     * @return 本帧指令是否让球离开球道（送球入炮台 / 反向吐球）。
+     *         上层据此决定球道计数方向，保证计数方向与实际球流一致：
+     *         true → 计数 -1（BallCounter.MODE_OUTPUT），false → 计数 +1（MODE_INTAKE）
+     */
+    public boolean isOutputDirection() {
+        return outputDirection;
     }
 
     public double getPower() {

@@ -97,8 +97,16 @@ public class BallCounterTestOp extends LinearOpMode {
         while (opModeIsActive()) {
             RobotPosition robotPosition = RobotPosition.getInstance();
 
-            // ---- 信号处理：球道方向由本帧吸球 / 出球指令决定（出球 -1，其余 +1）----
-            int ballDirection = gamepad1.right_bumper
+            // ---- 控制：先下达吸球 / 出球指令，球道计数方向据此决定 ----
+            if (gamepad1.left_bumper) {
+                sweeper.setEat();
+            }
+            if (gamepad1.right_bumper) {
+                sweeper.setOutput();
+            }
+
+            // ---- 信号处理：球道方向与 Sweeper 指令同源（送球 / 吐球 -1，吸球 / 停止 +1）----
+            int ballDirection = sweeper.isOutputDirection()
                     ? BallCounter.MODE_OUTPUT : BallCounter.MODE_INTAKE;
 
             // ---- 状态估计：RobotPosition 内部更新 BallCounter → BreakBeam（本帧唯一推进点）----
@@ -109,13 +117,7 @@ public class BallCounterTestOp extends LinearOpMode {
                 robotPosition.resetBallCount();
             }
 
-            // ---- 控制：吸球 / 出球（满额自动停吸由 Sweeper 内部判定）----
-            if (gamepad1.left_bumper) {
-                sweeper.setEat();
-            }
-            if (gamepad1.right_bumper) {
-                sweeper.setOutput();
-            }
+            // ---- 控制：下发 Sweeper（满额自动停吸由 Sweeper 内部判定）----
             sweeper.update();
 
             // ---- 控制：炮台（固定 yaw / 俯仰，二操按住 A 发射）----
@@ -126,7 +128,9 @@ public class BallCounterTestOp extends LinearOpMode {
                     testSpeedBig, testSpeedSmall, fire, fire);
 
             // ---- 炮台发射完毕 → 清空球道计数（OpMode 负责跨层转发）----
-            if (turret.consumeResetBallCountRequest()) {
+            // 先保存 consume 结果再清零，否则遥测里读到的永远是清除后的 false
+            boolean fireCompleted = turret.consumeResetBallCountRequest();
+            if (fireCompleted) {
                 robotPosition.resetBallCount();
             }
 
@@ -138,7 +142,7 @@ public class BallCounterTestOp extends LinearOpMode {
             telemetry.addData("Ball Lane Full", sweeper.isBallLaneFull());
             telemetry.addData("Sweeper Target (tick/s)", sweeper.getTargetVelocity());
             telemetry.addData("Fire Ready big/small", ready.big + " / " + ready.small);
-            telemetry.addData("Reset pending", turret.hasResetBallCountRequest());
+            telemetry.addData("Fire Completed", fireCompleted ? 1 : 0);
             turret.setTelemetry();
             telemetry.update();
         }

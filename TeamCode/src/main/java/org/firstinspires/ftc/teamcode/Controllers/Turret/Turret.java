@@ -67,6 +67,12 @@ public class Turret {
     private boolean lastTriggerReleased = false;
 
     /**
+     * 本次扳机按压期间是否真正达到过可发射条件（飞轮 + 俯仰 + 平转到位）。
+     * 只有真正发射过，松开扳机才允许清空球道计数，避免飞轮未达速时的空按误清零。
+     */
+    private boolean fireArmed = false;
+
+    /**
      * 一次性"发射完毕 → 清空球道计数"请求。
      * 由 {@link #update} 在扳机由释放回到关闭（发射动作结束）的那一帧置位，
      * 由上层 OpMode 调用 {@link #consumeResetBallCountRequest()} 取出后再转发给
@@ -121,11 +127,22 @@ public class Turret {
         boolean bigReady = shooterBig.update(speedBig, pitchBig, triggerBig);
         boolean smallReady = shooterSmall.update(speedSmall, pitchSmall, triggerSmall);
 
-        // "发射完毕"判定：任一扳机由释放（true）回到关闭（false），即一次发射流程结束，
-        // 置位一次性清空请求，由 OpMode 转发给 RobotPosition.resetBallCount()。
+        // "发射完毕"判定：本次按压期间确实达到过可发射条件（fireArmed），
+        // 且任一扳机由释放（true）回到关闭（false），才算一次有效发射结束。
+        // 飞轮未达速就松开的空按不会清空计数，避免球未射出却把计数清零。
+        if (triggerBig && yawReady && bigReady) {
+            fireArmed = true;
+        }
+        if (triggerSmall && yawReady && smallReady) {
+            fireArmed = true;
+        }
+
         boolean anyTriggerReleased = triggerBig || triggerSmall;
         if (lastTriggerReleased && !anyTriggerReleased) {
-            resetBallCountRequest = true;
+            if (fireArmed) {
+                resetBallCountRequest = true;
+            }
+            fireArmed = false;
         }
         lastTriggerReleased = anyTriggerReleased;
 
@@ -144,18 +161,14 @@ public class Turret {
         return requested;
     }
 
-    /** @return 当前是否有待处理的清空请求（只读，不清除；供遥测 / 调试） */
-    public boolean hasResetBallCountRequest() {
-        return resetBallCountRequest;
-    }
-
     /** 停止炮台：平转停止输出，两个发射器停转并关闭扳机 */
     public void stop() {
         yawController.stop();
         shooterBig.stop();
         shooterSmall.stop();
-        // 扳机回到关闭状态，同步清掉边沿检测基准，避免下一次 update 误判"发射完毕"
+        // 扳机回到关闭状态，同步清掉边沿检测基准与武装标记，避免下一次 update 误判"发射完毕"
         lastTriggerReleased = false;
+        fireArmed = false;
     }
 
     /** 输出遥测（调用方需自行 telemetry.update()） */
