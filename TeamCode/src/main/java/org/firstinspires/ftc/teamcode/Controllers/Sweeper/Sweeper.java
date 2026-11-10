@@ -58,6 +58,20 @@ public class Sweeper {
     private int targetVelocity = 0;
     private int lastTargetVelocity = 0;
 
+    /**
+     * 本帧是否处于"吸球"意图（由 setEat() 设置，唯一判定来源）。
+     *
+     * 为什么不能用 targetVelocity > 0 代替？
+     *   EatVel = 700 和 GiveTheArtifactVel = 2000 都是正速度，但意图完全不同：
+     *     - Eat：从场地吸球入球道，满球时必须停转（防止溢出 / 挤压）；
+     *     - GiveArtifact：把球道内的球送入炮台发射，球道恰恰需要满球才能打连发，
+     *       若因满球阻止 GiveArtifact 会直接导致"无法发射"。
+     *   因此满球停转的条件必须走"意图标志"而不是"速度符号"。
+     *
+     *   setGiveArtifact() / setOutput() / setStop() / setTargetVelocity() 都会把 eating 置 false。
+     */
+    private boolean eating = false;
+
     /** 最近一次 update() 采到的功率，供读取与遥测复用 */
     private double cachedPower = 0;
     /** 最近一次 update() 采到的转速 (tick/s)，供读取与遥测复用 */
@@ -102,22 +116,28 @@ public class Sweeper {
 
     public void setEat() {
         targetVelocity = EatVel;
+        eating = true;
     }
 
     public void setGiveArtifact() {
         targetVelocity = GiveTheArtifactVel;
+        eating = false;
     }
 
     public void setOutput() {
         targetVelocity = OutputVel;
+        eating = false;
     }
 
     public void setStop() {
         targetVelocity = 0;
+        eating = false;
     }
 
     public void setTargetVelocity(int velocity) {
         targetVelocity = velocity;
+        // 任意直接速度指令都不算"吸球"意图，eating 置 false 交由调用方显式 setEat()
+        eating = false;
     }
 
     /** 铲子抬起（切换到抬起角度） */
@@ -131,12 +151,12 @@ public class Sweeper {
     }
 
     public void update() {
-        // ---- 球道满自动停止 intake ----
-        // 仅在"进入模式"（targetVelocity > 0，即 setEat 被调用）且球道计数 ≥ BallMax 时停转，
-        // 出球模式（targetVelocity < 0）不受限制，允许把球排空。
+        // ---- 球道满自动停止吸球（仅吸球意图生效） ----
+        // 意图判定走 eating 标志，不用 targetVelocity > 0——因为 GiveTheArtifactVel（2000）
+        // 也是正速度，但"送球入炮台"恰恰需要球道满球才能打连发，满球时绝不能停。
         // RobotPosition 未初始化（如 SweeperTester 单独调试）时跳过，不影响 Sweeper 本身功能。
         RobotPosition rp = RobotPosition.getInstanceOrNull();
-        if (targetVelocity > 0 && rp != null && rp.getBallCount() >= BallMax) {
+        if (eating && rp != null && rp.getBallCount() >= BallMax) {
             targetVelocity = 0;
         }
 
