@@ -196,6 +196,10 @@ public abstract class TeleOpMainBase extends LinearOpMode {
                 RobotPosition.getInstance().setManualGoalDown(teamColor == TeamColor.BLUE);
             }
 
+            // 本帧只决定“是否退回”；方向由下面的 Sweeper.setXxx() 写入 RobotPosition。
+            boolean reject = gamepad1.right_bumper;
+
+            // OpMode 不再传方向；RobotPosition.update() 保持无参数。
             RobotPosition.getInstance().update();
 
             // ======== P1：底盘 ========
@@ -220,14 +224,6 @@ public abstract class TeleOpMainBase extends LinearOpMode {
                 Pose2d resetPose = (teamColor == TeamColor.BLUE) ?
                         HypParams.ResetPoseBlue : HypParams.ResetPoseRed;
                 RobotPosition.getInstance().ResetPoseTo(resetPose);
-            }
-
-            // ======== P1：吃球 ========
-            if (gamepad1.left_bumper) {
-                sweeper.setEat();
-            }
-            if (gamepad1.right_bumper) {
-                sweeper.setOutput();
             }
 
             // ======== P2：炮台 ========
@@ -273,10 +269,15 @@ public abstract class TeleOpMainBase extends LinearOpMode {
             boolean feeding = autoAim
                     ? (turret.isBigFiring() || turret.isSmallFiring())
                     : fireKey;
-            if (feeding) {
+            // 最终命令优先级：退回 > 发射送球 > 手动吸球 > 停止。
+            // 电机方向和 BallCounter 的计数方向由同一个状态来源决定。
+            if (reject) {
+                sweeper.setOutput();
+            } else if (feeding) {
                 sweeper.setGiveArtifact();
-            } else if (!gamepad1.left_bumper && !gamepad1.right_bumper) {
-                // 未发射且主控没有手动吃球/吐出：停转
+            } else if (gamepad1.left_bumper) {
+                sweeper.setEat();
+            } else {
                 sweeper.setStop();
             }
 
@@ -307,6 +308,8 @@ public abstract class TeleOpMainBase extends LinearOpMode {
             telemetry.addData("Fire ready small", ready.small);
             telemetry.addData("Ball count", "%d / %d",
                     RobotPosition.getInstance().getBallCount(), Sweeper.BallMax);
+            telemetry.addData("Ball lane mode",
+                    reject ? "REJECT" : (feeding ? "FEED" : "INTAKE/STOP"));
 
             telemetry.addData("Pose X", "%.2f in", RobotPosition.getInstance().getX());
             telemetry.addData("Pose Y", "%.2f in", RobotPosition.getInstance().getY());
