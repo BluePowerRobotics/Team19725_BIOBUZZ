@@ -5,177 +5,120 @@ import androidx.annotation.NonNull;
 import com.acmerobotics.dashboard.config.Config;
 import com.acmerobotics.dashboard.telemetry.TelemetryPacket;
 import com.acmerobotics.roadrunner.Action;
-import com.acmerobotics.roadrunner.Pose2d;
 import com.acmerobotics.roadrunner.PoseVelocity2d;
 import com.acmerobotics.roadrunner.Vector2d;
 import com.qualcomm.robotcore.util.ElapsedTime;
 
-import org.firstinspires.ftc.teamcode.Parameter.HypParams;
-import org.firstinspires.ftc.teamcode.Parameter.TeamColor;
-import org.firstinspires.ftc.teamcode.Processors.FusionLocalizer.AdaptiveEKFLocalizer;
+import org.firstinspires.ftc.teamcode.Controllers.Turret.Turret;
 import org.firstinspires.ftc.teamcode.Processors.RobotPosition.RobotPosition;
-import org.firstinspires.ftc.teamcode.Processors.VisionLocalizer.MT1Localizer;
 import org.firstinspires.ftc.teamcode.RoadRunner.MecanumDrive;
 
 /**
- * 自动瞄准 Action：原地转向，使车头始终指向当前 HIVE 抬升侧对应的球门。
+ * 自动瞄准与发射 Action：<b>底盘完全不动</b>，由 {@link Turret} 独立完成瞄准与发射。
  *
- * <p><b>定位来源</b>：每帧直接读取 {@link AdaptiveEKFLocalizer#getPose()}
- * （Pinpoint 里程计 + Limelight MT1 视觉的 EKF 融合位姿，权威位姿来源），
- * 瞄准用的当前位置/航向均以该融合位姿为准。
- *
- * <p><b>球门选择</b>：依据 {@link RobotPosition#getHiveState()} 的跟踪状态
- * （MT1 有观测时更新，无观测时保持上一状态，永不为 UNKNOWN）：
+ * <p>与旧版 {@code AutoAimAction}（仅用 PD 控制底盘转向）的区别：
  * <ul>
- *   <li>{@code AUDIENCE_UP}   → 本颜色的 AudienceUp 球门</li>
- *   <li>{@code AUDIENCE_DOWN} → 本颜色的 AudienceDown 球门</li>
- *   <li>{@code MIDDLE}        → 保持上一次锁定的球门（无历史时默认 Up），
- *       继续对齐，由上层状态机决定是否发射</li>
+ *   <li>瞄准主体是<b>炮台</b>（平转 + 俯仰 + 飞轮），底盘全程
+ *       {@code setDrivePowers(0,0,0)} 保持静止；</li>
+ *   <li>发射由 {@link Turret#update(boolean, boolean, boolean, boolean)} 内部的
+ *       {@code TriggerGate} 自动管理：平转到位 + 飞轮到位 + 俯仰到位即扣扳机，
+ *       并保持 {@code fireHoldTime}；本 Action 只需判「发射完成」即可。</li>
  * </ul>
  *
- * <p><b>控制律</b>：期望航向 {@code des = atan2(goalY-y, goalX-x)}，
- * 航向误差归一化到 [-π, π] 后做 PD 控制，仅下发角速度，平移速度为 0（非阻塞，每帧执行）。
- * 当航向误差与实际角速度连续小于容差并保持 {@link #settleMs} 毫秒后完成；
- * 超过 {@link #timeoutMs} 毫秒也强制结束，避免状态机卡死。
+ * <p><b>球门来源</b>：{@link Turret} 内部从 {@link RobotPosition#getGoalPose()} 读取，
+ * 该值已由 HIVE 抬升侧自动选择（AudienceUp / AudienceDown），本 Action 不干预。
+ *
+ * <p><b>结束条件</b>（任一满足）：
+ * <ul>
+ *   <li>大球或小球扳机从「释放」回到「关闭」（下降沿）—— 视为一次发射完成；</li>
+ *   <li>超过 {@link #timeoutMs} 毫秒 —— 强制结束并由上层状态机处理。</li>
+ * </ul>
+ *
+ * <p><b>必须每帧调用 {@code turret.update()}</b>（由本 Action 的 run 负责），
+ * 飞轮速度环与平转位置环都依赖周期刷新。
  */
 @Config
 public class AutoAimAction implements Action {
 
-    /** 航向环 P 增益 (rad/s per rad) */
-    public static double aimKp = 3.0;
-    /** 航向环 D 增益 (rad/s per rad/s) */
-    public static double aimKd = 0.15;
-    /** 角速度指令上限 (rad/s) */
-    public static double aimMaxOmega = Math.PI;
-    /** 航向收敛容差 (rad) */
-    public static double headingTol = Math.toRadians(2.0);
-    /** 角速度收敛容差 (rad/s)，取自融合定位输出 */
-    public static double omegaTol = 0.15;
-    /** 误差与角速度同时满足容差的持续时长 (ms)，满足即判定瞄准完成 */
-    public static long settleMs = 200;
+    /** 是否允许 Turret 扣扳机（false 时只预载、不发射，用于单独调试瞄准） */
+    public static boolean allowFire = true;
+    /** 是否启用预载（飞轮按预载转速待命，缩短发射响应） */
+    public static boolean preload = true;
     /** 超时时间 (ms)，超时强制结束（交由状态机处理） */
-    public static long timeoutMs = 3000;
+    public static long timeoutMs = 5000;
 
-    private final TeamColor teamColor;
     private final MecanumDrive drive;
+    private final Turret turret;
 
     private ElapsedTime timer;
     private boolean initialized = false;
-    private double lastError = 0;
-    private double lastTime = 0;
-    private long alignedSinceMs = -1;
-    private Pose2d lockedGoal = null;
+    private boolean lastBigFiring = false;
+    private boolean lastSmallFiring = false;
+    private boolean finished = false;
 
-    public AutoAimAction(TeamColor teamColor) {
-        this.teamColor = teamColor;
-        this.drive = RobotPosition.getInstance().getDrive();
+    /**
+     * @param drive  底盘（用于每帧下发 0 速度保持静止）
+     * @param turret 炮台控制器
+     */
+    public AutoAimAction(MecanumDrive drive, Turret turret) {
+        this.drive = drive;
+        this.turret = turret;
     }
 
     @Override
     public boolean run(@NonNull TelemetryPacket packet) {
-        // 首帧初始化计时（Action 构造时刻早于实际执行，不能在构造函数计时）
+        if (finished) {
+            return false;
+        }
         if (!initialized) {
             timer = new ElapsedTime();
-            lastTime = timer.seconds();
             initialized = true;
         }
 
-        RobotPosition robotPosition = RobotPosition.getInstance();
-        // 瞄准位姿直接取自 AdaptiveEKFLocalizer 融合定位器
-        AdaptiveEKFLocalizer localizer = robotPosition.getFusionLocalizer();
-        Pose2d pose = localizer.getPose();
+        // 底盘全程保持静止：炮台独立瞄准与发射
+        drive.setDrivePowers(new PoseVelocity2d(new Vector2d(0, 0), 0));
 
-        // ---- 依据跟踪的 HIVE 状态选择球门 ----
-        Pose2d goal = selectGoal(robotPosition.getHiveState());
+        // 炮台自动瞄准 + 自动发射：到位后内部自动扣扳机
+        Turret.FireReady ready = turret.update(allowFire, preload, false, false);
 
-        // ---- 期望航向与误差（[-π, π]，始终走最短转向方向）----
-        double desiredHeading = Math.atan2(
-                goal.position.y - pose.position.y,
-                goal.position.x - pose.position.x);
-        double error = Math.atan2(
-                Math.sin(desiredHeading - pose.heading.toDouble()),
-                Math.cos(desiredHeading - pose.heading.toDouble()));
+        // 发射完成检测：任一扳机 true → false 的下降沿
+        boolean bigFiring = turret.isBigFiring();
+        boolean smallFiring = turret.isSmallFiring();
+        boolean bigReleased = lastBigFiring && !bigFiring;
+        boolean smallReleased = lastSmallFiring && !smallFiring;
+        lastBigFiring = bigFiring;
+        lastSmallFiring = smallFiring;
 
-        // ---- PD 控制律 ----
-        double now = timer.seconds();
-        double dt = now - lastTime;
-        lastTime = now;
-        if (dt <= 0 || dt > 1.0) {
-            dt = 0.02; // 首帧/异常间隔用标称周期兜底，避免微分项发散
-        }
-        double dError = (error - lastError) / dt;
-        lastError = error;
-
-        double omega;
-        if (Math.abs(error) <= headingTol) {
-            omega = 0.0; // 进入死区即停，避免抖振
-        } else {
-            omega = aimKp * error + aimKd * dError;
-            omega = Math.max(-aimMaxOmega, Math.min(aimMaxOmega, omega));
-        }
-        drive.setDrivePowers(new PoseVelocity2d(new Vector2d(0, 0), omega));
-
-        // ---- 收敛判定：航向误差与实际角速度同时持续小于容差 ----
         long elapsedMs = (long) timer.milliseconds();
-        boolean aligned = Math.abs(error) <= headingTol
-                && Math.abs(robotPosition.getOmega()) <= omegaTol;
-        if (aligned) {
-            if (alignedSinceMs < 0) {
-                alignedSinceMs = elapsedMs;
-            }
-            if (elapsedMs - alignedSinceMs >= settleMs) {
-                finish(packet, pose, goal, error, false);
-                return false;
-            }
-        } else {
-            alignedSinceMs = -1;
+        if (bigReleased || smallReleased) {
+            finish(packet, ready, elapsedMs, false);
+            return false;
         }
-
-        // ---- 超时保护 ----
         if (elapsedMs >= timeoutMs) {
-            finish(packet, pose, goal, error, true);
+            finish(packet, ready, elapsedMs, true);
             return false;
         }
 
-        packet.put("AutoAim", "Aiming");
-        packet.put("AutoAim goal x", goal.position.x);
-        packet.put("AutoAim goal y", goal.position.y);
-        packet.put("AutoAim error(deg)", Math.toDegrees(error));
-        packet.put("AutoAim hiveState", robotPosition.getHiveState().name());
+        packet.put("AutoAim", "Aiming/Firing");
+        packet.put("AutoAim allowFire", allowFire);
+        packet.put("AutoAim big ready", ready.big);
+        packet.put("AutoAim small ready", ready.small);
+        packet.put("AutoAim big firing", bigFiring);
+        packet.put("AutoAim small firing", smallFiring);
+        packet.put("AutoAim elapsed(ms)", elapsedMs);
         return true;
     }
 
-    /**
-     * 按队伍颜色与 HIVE 抬升状态选择目标球门。
-     * MIDDLE 时保持上一次锁定的球门；无历史时默认 AudienceUp。
-     */
-    //todo: 重新考虑middle的目标锁定逻辑
-    private Pose2d selectGoal(MT1Localizer.HiveState hiveState) {
-        Pose2d goal;
-        if (teamColor == TeamColor.RED) {
-            goal = (hiveState == MT1Localizer.HiveState.AUDIENCE_DOWN)
-                    ? HypParams.RedAudienceDown : HypParams.RedAudienceUp;
-        } else {
-            goal = (hiveState == MT1Localizer.HiveState.AUDIENCE_DOWN)
-                    ? HypParams.BlueAudienceDown : HypParams.BlueAudienceUp;
-        }
-        // AUDIENCE_UP 与 MIDDLE 均选 Up；MIDDLE 时若曾锁定 Down 则保持锁定，避免目标来回跳变
-        if (hiveState == MT1Localizer.HiveState.MIDDLE && lockedGoal != null) {
-            goal = lockedGoal;
-        }
-        lockedGoal = goal;
-        return goal;
-    }
-
-    /** 结束时主动刹停并输出最终遥测。 */
-    private void finish(TelemetryPacket packet, Pose2d pose, Pose2d goal,
-                        double error, boolean timeout) {
+    /** 结束：底盘停止，炮台停止（停飞轮、关扳机） */
+    private void finish(TelemetryPacket packet, Turret.FireReady ready,
+                        long elapsedMs, boolean timeout) {
         drive.setDrivePowers(new PoseVelocity2d(new Vector2d(0, 0), 0));
-        packet.put("AutoAim", timeout ? "Timeout" : "Aligned");
-        packet.put("AutoAim final error(deg)", Math.toDegrees(error));
-        packet.put("AutoAim goal x", goal.position.x);
-        packet.put("AutoAim goal y", goal.position.y);
-        packet.put("AutoAim pose x", pose.position.x);
-        packet.put("AutoAim pose y", pose.position.y);
+        turret.stop();
+        finished = true;
+
+        packet.put("AutoAim", timeout ? "Timeout" : "Fired");
+        packet.put("AutoAim elapsed(ms)", elapsedMs);
+        packet.put("AutoAim big ready", ready.big);
+        packet.put("AutoAim small ready", ready.small);
     }
 }

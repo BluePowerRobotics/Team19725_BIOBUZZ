@@ -11,6 +11,7 @@ import com.acmerobotics.roadrunner.SequentialAction;
 import com.acmerobotics.roadrunner.TrajectoryActionBuilder;
 
 import org.firstinspires.ftc.teamcode.Controllers.Sweeper.Sweeper;
+import org.firstinspires.ftc.teamcode.Controllers.Turret.Turret;
 import org.firstinspires.ftc.teamcode.Parameter.TeamColor;
 import org.firstinspires.ftc.teamcode.Processors.RobotPosition.RobotPosition;
 import org.firstinspires.ftc.teamcode.RoadRunner.MecanumDrive;
@@ -52,7 +53,7 @@ import java.util.List;
  *
  * <p><b>接入方式</b>（不在本类中修改主程序，供 {@code AutoBlue} 后续替换状态机）：
  * <pre>
- * actionRunner.add(new ContinuousRouteAction(teamColor, sweeper, goal));
+ * actionRunner.add(new ContinuousRouteAction(teamColor, sweeper, turret, goal));
  * </pre>
  * 注意本类同样在<b>首次 run()</b> 时以当时位姿规划，可直接放入队列。
  */
@@ -77,6 +78,9 @@ public class ContinuousRouteAction implements Action {
     /** 集球器 */
     private final Sweeper sweeper;
 
+    /** 炮台控制器（用于自动瞄准与发射） */
+    private final Turret turret;
+
     /** 预瞄准的球门目标点 */
     private final Pose2d goal;
 
@@ -86,11 +90,13 @@ public class ContinuousRouteAction implements Action {
     /**
      * @param teamColor 队伍颜色
      * @param sweeper   集球器控制器
+     * @param turret    炮台控制器
      * @param goal      预瞄准的单个球门目标点
      */
-    public ContinuousRouteAction(TeamColor teamColor, Sweeper sweeper, Pose2d goal) {
+    public ContinuousRouteAction(TeamColor teamColor, Sweeper sweeper, Turret turret, Pose2d goal) {
         this.teamColor = teamColor;
         this.sweeper = sweeper;
+        this.turret = turret;
         this.goal = goal;
     }
 
@@ -156,7 +162,7 @@ public class ContinuousRouteAction implements Action {
         // ---- 构建：以上全部途经点合成唯一一条轨迹（beginEndVel = 0，只在最末端停车）----
         Action route = builder.build();
         if (includeAim) {
-            route = new SequentialAction(route, new AutoAimAction(teamColor));
+            route = new SequentialAction(route, new AutoAimAction(drive, turret));
         }
         return route;
     }
