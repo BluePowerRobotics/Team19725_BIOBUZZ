@@ -166,6 +166,7 @@ public abstract class ActionTestBase extends LinearOpMode {
         }
 
         chassis.stop();
+        chassis.update(0, 0, 0);
     }
 
     /** 位姿格式化为简短字符串，用于 Init 遥测 */

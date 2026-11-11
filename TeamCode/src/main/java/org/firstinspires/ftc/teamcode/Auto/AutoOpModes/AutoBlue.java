@@ -167,5 +167,6 @@ public class AutoBlue extends LinearOpMode {
         sweeper.setStop();
         sweeper.update();
         chassis.stop();
+        chassis.update(0, 0, 0);
     }
 }

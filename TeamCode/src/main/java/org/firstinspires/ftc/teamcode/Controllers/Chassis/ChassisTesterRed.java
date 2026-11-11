@@ -166,6 +166,7 @@ public class ChassisTesterRed extends LinearOpMode {
         }
 
         chassis.stop();
+        chassis.update(0, 0, 0);
     }
 
     // ==================== 视觉校准 ====================
@@ -191,6 +192,7 @@ public class ChassisTesterRed extends LinearOpMode {
 
         while (opModeIsActive()) {
             chassis.stop();
+            chassis.update(0, 0, 0);
             RobotPosition.getInstance().update();
 
             Pose2d pose = mt1.getPose();

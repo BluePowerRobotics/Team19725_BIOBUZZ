@@ -124,9 +124,15 @@ public class Shooter {
         public FlywheelParams flywheel = FlywheelParams.copyOf(FlywheelParams.BIG);
 
         // ---- 机械范围 ----
-        /** 俯仰舵机最小位置 */
+        /**
+         * 俯仰舵机最小位置（机械行程下限）。
+         *
+         * <p>实机机械行程就是舵机全行程 <b>0~1</b>，故两项保持默认值，无需标定。
+         * 手动瞄准直接用这两个值做行程映射（摇杆可以推到底），自动瞄准的档位位置
+         * 由 {@link #solve} 钳进同一区间。
+         */
         public double pitchMin = 0.0;
-        /** 俯仰舵机最大位置 */
+        /** 俯仰舵机最大位置（机械行程上限，见 {@link #pitchMin}） */
         public double pitchMax = 1.0;
 
         // ---- 自动瞄准：预载与离散仰角档位 ----
@@ -153,9 +159,12 @@ public class Shooter {
         public double pitchSwitchMargin = 5.0;
 
         /**
-         * 离散仰角档位表，<b>必须按 {@link PitchModel#pitchPos} 升序排列</b>。
-         * 每档给出适用射程区间与「射程 → 转速」线性模型；空表时自动瞄准退化为
-         * {@code pitchMax} + 转速 0。todo: 实机标定后填入。
+         * 离散仰角档位表。每档给出适用射程区间与「射程 → 转速」线性模型；
+         * 空表时自动瞄准退化为 {@code pitchMax} + 转速 0。todo: 实机标定后填入。
+         *
+         * <p><b>不要求表中按 {@code pitchPos} 排序</b>：{@link #getMinPitch()} / {@link #getMaxPitch()}
+         * 取全表最小/最大值，且 {@link #solve} 会把档位位置钳进机械行程，表内顺序与越界填错都不再
+         * 影响安全姿态。
          */
         public PitchModel[] pitchModels = new PitchModel[0];
 
@@ -378,7 +387,9 @@ public class Shooter {
         // 否则就是把标定区间外的线性模型外推，转速可能偏大/偏小、甚至顶到 speedMax
         // 导致 isSettled() 永不成立（该档位附近发不出去）。俯仰仍取该档（滞回本意）。
         double modelRange = clampToModelInterval(model, range);
-        return new ShotSolution(yaw, range, model.pitchPos,
+        // 档位位置必须落在机械行程内：标定表填错（越界/NaN）时不能把越界值当目标下发，
+        // 否则 updateMechanisms 会静默钳到端点，名义档位与真实姿态不一致
+        return new ShotSolution(yaw, range, clampPitch(model.pitchPos),
                 clampSpeed(model.speedFor(modelRange)));
     }
 
@@ -432,9 +443,13 @@ public class Shooter {
             }
         }
 
-        // 2) 滞回：当前档位即使已被更优档取代，只要射程仍在它区间外的滞回裕量内就保持
+        // 2) 滞回：只在"射程已越出当前档区间、但还没超出裕量"时保持当前档。
+        //    旧实现把区间内也一并保持，使第 1 步的"取所需转速最小"在首次选档后基本失效，
+        //    射程落在两档重叠区时永远不再切换（可能在重叠区用错档 → 仰角与转速都偏）。
+        //    区间内允许换到更省转速的档；越出区间后由 pitchSwitchMargin 挡住边界抖动。
         double margin = params.pitchSwitchMargin;
         if (selectedModel != null && selectedModel != best
+                && !selectedModel.covers(range)
                 && range >= selectedModel.minRange - margin
                 && range <= selectedModel.maxRange + margin) {
             best = selectedModel;
@@ -466,25 +481,57 @@ public class Shooter {
     }
 
     /**
-     * @return 离散档位中的最低仰角（档位表为空时返回 {@link Params#pitchMin}）
+     * 把舵机位置钳制到机械行程 {@code [pitchMin, pitchMax]}。
+     *
+     * <p>实机机械行程为舵机全行程 0~1（{@link Params#pitchMin} / {@link Params#pitchMax} 的默认值），
+     * 档位表的 {@code pitchPos} 必须落在其内。本方法在标定表填错（越界 / NaN）时兜底：
+     * 越界值钳到端点，NaN 退化为最高档（安全姿态），保证下发给舵机的永远是行程内的有限值。
+     *
+     * @param pitch 目标舵机位置
+     * @return 钳制后的舵机位置
      */
-    public double getMinPitch() {
-        PitchModel[] models = params.pitchModels;
-        if (models != null && models.length > 0 && models[0] != null) {
-            return models[0].pitchPos;
+    private double clampPitch(double pitch) {
+        if (!Double.isFinite(pitch)) {
+            return params.pitchMax;
         }
-        return params.pitchMin;
+        return Math.max(params.pitchMin, Math.min(params.pitchMax, pitch));
     }
 
     /**
-     * @return 离散档位中的最高仰角（档位表为空时返回 {@link Params#pitchMax}）
+     * @return 离散档位中的最低仰角（档位表为空或全为非法值时返回 {@link Params#pitchMin}）。
+     *
+     * <p>取<b>全表最小值</b>而非首元素：档位表<b>不再要求</b>按 {@code pitchPos} 升序排列，
+     * 排序错误不会再把"安全姿态"算错（旧实现直接读 {@code models[0]}，见 TurretGuide §13#8）。
+     */
+    public double getMinPitch() {
+        double min = Double.POSITIVE_INFINITY;
+        PitchModel[] models = params.pitchModels;
+        if (models != null) {
+            for (PitchModel model : models) {
+                if (model != null && Double.isFinite(model.pitchPos) && model.pitchPos < min) {
+                    min = model.pitchPos;
+                }
+            }
+        }
+        return Double.isFinite(min) ? clampPitch(min) : params.pitchMin;
+    }
+
+    /**
+     * @return 离散档位中的最高仰角（档位表为空或全为非法值时返回 {@link Params#pitchMax}）。
+     *
+     * <p>同 {@link #getMinPitch()}：取全表最大值，不依赖表内顺序。
      */
     public double getMaxPitch() {
+        double max = Double.NEGATIVE_INFINITY;
         PitchModel[] models = params.pitchModels;
-        if (models != null && models.length > 0 && models[models.length - 1] != null) {
-            return models[models.length - 1].pitchPos;
+        if (models != null) {
+            for (PitchModel model : models) {
+                if (model != null && Double.isFinite(model.pitchPos) && model.pitchPos > max) {
+                    max = model.pitchPos;
+                }
+            }
         }
-        return params.pitchMax;
+        return Double.isFinite(max) ? clampPitch(max) : params.pitchMax;
     }
 
     /**

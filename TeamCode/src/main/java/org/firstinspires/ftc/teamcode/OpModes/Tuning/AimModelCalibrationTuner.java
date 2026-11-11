@@ -225,6 +225,7 @@ public class AimModelCalibrationTuner extends LinearOpMode {
 
         // ---- 结束：再算一次最终建议（不再访问硬件）----
         chassis.stop();
+        chassis.update(0, 0, 0);
         turret.stop();
         BandFit[] finalBig = fitBands(shotsBig, Shooter.BIG_PARAMS);
         BandFit[] finalSmall = fitBands(shotsSmall, Shooter.SMALL_PARAMS);

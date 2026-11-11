@@ -41,12 +41,15 @@ import org.firstinspires.ftc.teamcode.utility.RobotStateStore;
  *   <li>Y（按下） → 切换预载开关（仅自动瞄准生效）</li>
  *   <li>LT / RT（按住） → 手动选择球门：红方 LT = AudienceDown、RT = AudienceUp，
  *       蓝方相反；MT1 非 MIDDLE 读数优先，无有效读数时保持本选择</li>
- *   <li>自动瞄准：A（按住） → 允许发射；LB → 小球强制释放；RB → 大球强制释放</li>
+ *   <li>自动瞄准：A（按住） → 允许发射，同时持续刹车并停住底盘；RB → 强制释放两个扳机</li>
  *   <li>X（按下） → 循环手动平转模式 RELATIVE → ABSOLUTE → GOAL（仅手动瞄准生效）</li>
- *   <li>手动瞄准：左摇杆 Y → 小球仰角，右摇杆 Y → 大球仰角；
+ *   <li>手动瞄准：左摇杆 Y → 小球仰角<b>速率</b>，右摇杆 Y → 大球仰角<b>速率</b>（回中即停在当前角度）；
  *       左摇杆 X → 平转角速度（回中停在当前角度）；十字键 上/下 → 大球转速步进，
- *       左/右 → 小球转速步进；LB / RB → 小球 / 大球扳机</li>
+ *       左/右 → 小球转速步进；A → 同时释放大球与小球扳机</li>
  * </ul>
+ *
+ * <p><b>扳机武装</b>：切模式（B）后必须先松开 A 再按下才允许发射 —— 手动路径的扳机不带就绪门控，
+ * 若切换瞬间 A 仍按住，会在飞轮未转起来、俯仰未到位时立刻出扳机（空打）。启动时同理。
  *
  * <p><b>送球联动</b>：任一发射器释放扳机时，吃球器自动 {@code setGiveArtifact()} 送球；
  * 停止发射后停转（主控 LB/RB 手动吃球/吐出仍然优先除外）。
@@ -62,6 +65,10 @@ public abstract class TeleOpMainBase extends LinearOpMode {
     public static int repeatPeriodMs = 120;
     /** 手动瞄准：平转角速度上限（度/秒），摇杆满偏对应此速率 */
     public static double maxYawRateDegPerSec = 120.0;
+    /** 手动瞄准：仰角舵机速率（行程/秒），摇杆满偏对应此速率（0→1 约 1.25 s） */
+    public static double pitchRatePerSec = 0.8;
+    /** 手动瞄准：仰角摇杆死区，|axis| 小于该值视为不动，避免松手后残余偏量导致缓慢漂移 */
+    public static double pitchAxisDeadband = 0.08;
 
     // ==================== 部件 ====================
 
@@ -79,10 +86,29 @@ public abstract class TeleOpMainBase extends LinearOpMode {
     private final DpadStepper vertical = new DpadStepper();
     private final DpadStepper horizontal = new DpadStepper();
 
+    /**
+     * 手动瞄准：当前仰角目标（舵机位置，行程 0~1）。
+     *
+     * <p>由摇杆速率积分推进、<b>松手保持</b>；旧实现把摇杆位置直接当舵机位置，
+     * 回中即 0.5，导致无法停在任意角度、松手会跳回中点。
+     */
+    private double targetPitchBig = 0.5;
+    private double targetPitchSmall = 0.5;
+    /** 上一次手动仰角积分时刻 (s)；0 = 尚未建立，首帧用标称周期 */
+    private double lastPitchTime = 0;
+
     /** true = 自动瞄准（炮台按定位解算），false = 手动瞄准（副控直接给定目标） */
     private boolean autoAim = true;
     /** 预载开关，仅自动瞄准生效；Y 切换 */
     private boolean preloadEnabled = true;
+    /**
+     * 扳机"已武装"：切模式后必须先松开 A 再按下，才允许发射。
+     *
+     * <p>手动路径的扳机不带就绪门控（{@code Turret.updateManual} 直接 {@code setTrigger}），
+     * 从自动切到手动时若 A 仍按住，会在飞轮未转起来、俯仰未到位时立刻释放扳机（空打/卡球）。
+     * 初始为 false，因此按住 A 启动也不会立刻发射。
+     */
+    private boolean fireArmed = false;
 
     protected TeleOpMainBase(TeamColor teamColor) {
         this.teamColor = teamColor;
@@ -147,12 +173,12 @@ public abstract class TeleOpMainBase extends LinearOpMode {
         telemetry.addData("B", "Toggle Auto / Manual Aim (auto by default)");
         telemetry.addData("Y", "Toggle Preload (auto aim only)");
         telemetry.addData("P2: LT / RT", "Manual goal: Down / Up (RED), Up / Down (BLUE)");
-        telemetry.addData("Auto: A", "Fire (hold)");
+        telemetry.addData("Auto: A", "Fire + Brake (hold)");
         telemetry.addData("Auto: RB", "Force release BOTH triggers");
-        telemetry.addData("Manual: Sticks", "LstickY small pitch | RstickY big pitch | LstickX yaw rate");
+        telemetry.addData("Manual: Sticks", "LstickY small pitch rate | RstickY big pitch rate | LstickX yaw rate");
         telemetry.addData("Manual: X", "Cycle yaw mode REL / ABS / GOAL");
         telemetry.addData("Manual: Dpad", "U/D big speed | L/R small speed");
-        telemetry.addData("Manual: RB", "Release BOTH triggers (hold)");
+        telemetry.addData("Manual: A", "Release BOTH triggers (hold; re-press after mode switch)");
         telemetry.update();
         telemetry.setMsTransmissionInterval(250);
 
@@ -173,6 +199,11 @@ public abstract class TeleOpMainBase extends LinearOpMode {
             RobotPosition.getInstance().update();
 
             // ======== P1：底盘 ========
+            // 自动瞄准按住 A 时持续刹车：stop 只登记请求，硬件统一下发在 chassis.update() 内；
+            // update 看到停止请求会下发零速并放下刹车。手动瞄准不受影响。
+            if (autoAim && gamepad2.a) {
+                chassis.stop(true);
+            }
             if (gamepad1.left_trigger > 0.5) {
                 chassis.update(gamepad1.left_stick_x, gamepad1.left_stick_y, chassisAimGoal(true));
             } else if (gamepad1.right_trigger > 0.5) {
@@ -202,7 +233,21 @@ public abstract class TeleOpMainBase extends LinearOpMode {
             // ======== P2：炮台 ========
             if (gamepad2.bWasReleased()) {
                 autoAim = !autoAim;
+                // 切模式必须解除扳机武装：手动路径没有就绪门控，切换瞬间若 A 仍按住会直接开扳机
+                fireArmed = false;
+                if (!autoAim) {
+                    // 进入手动时把仰角目标对齐当前已下发值，首帧不产生舵机跳变
+                    targetPitchBig = turret.shooterBig.getTargetPitch();
+                    targetPitchSmall = turret.shooterSmall.getTargetPitch();
+                    lastPitchTime = 0;
+                }
             }
+            // A 松开过一次才重新武装：启动时与每次切模式后都要求重按
+            if (!gamepad2.a) {
+                fireArmed = true;
+            }
+            boolean fireKey = gamepad2.a && fireArmed;
+
             if (gamepad2.yWasReleased()) {
                 preloadEnabled = !preloadEnabled;
             }
@@ -210,14 +255,13 @@ public abstract class TeleOpMainBase extends LinearOpMode {
                 turret.cycleManualYawMode();
             }
 
-            // 单一扳机键：手动/自动、大球/小球共用 RB，按下即同时释放两个扳机
-            boolean fireKey = gamepad2.right_bumper;
-
+            // 扳机键：自动瞄准用 RB 强制释放；手动瞄准用 A（已武装）同时释放两个扳机
             Turret.FireReady ready;
             if (autoAim) {
-                // 自动瞄准：A 按住即允许发射；RB 强制释放两个发射器（无视就绪与平转）
-                //todo：同时停止底盘
-                ready = turret.update(gamepad2.a, preloadEnabled, fireKey, fireKey);
+                // 自动瞄准：A 按住即允许发射（同时刹车，见 P1 底盘段）；
+                // RB 强制释放两个发射器（无视就绪与平转，也不受武装限制）
+                boolean forceRelease = gamepad2.right_bumper;
+                ready = turret.update(fireKey, preloadEnabled, forceRelease, forceRelease);
             } else {
                 ready = updateManualTurret(fireKey);
             }
@@ -277,8 +321,11 @@ public abstract class TeleOpMainBase extends LinearOpMode {
                 telemetry.addData("Manual yaw mode", turret.getManualYawMode());
                 telemetry.addData("Target speed big (tick/s)", targetSpeedBig);
                 telemetry.addData("Target speed small (tick/s)", targetSpeedSmall);
+                telemetry.addData("Target pitch big / small", "%.3f / %.3f", targetPitchBig, targetPitchSmall);
+                telemetry.addData("Pitch rate (travel/s)", "%.2f", pitchRatePerSec);
                 telemetry.addData("speedStep", speedStep);
             }
+            telemetry.addData("Fire armed (A re-press)", fireArmed);
 
             telemetry.update();
 
@@ -288,7 +335,9 @@ public abstract class TeleOpMainBase extends LinearOpMode {
             FtcDashboard.getInstance().sendTelemetryPacket(packet);
         }
 
+        // stop 只登记请求，零速与刹车由 update() 下发（帧外补一次零速）
         chassis.stop();
+        chassis.update(0, 0, 0);
         sweeper.setStop();
         sweeper.update();
         turret.stop();
@@ -301,11 +350,22 @@ public abstract class TeleOpMainBase extends LinearOpMode {
      * @return 本帧两个发射器是否具备发射条件
      */
     private Turret.FireReady updateManualTurret(boolean fireKey) {
-        // ---- 摇杆：上推时 axis = -1，取负号使"上 → 增大" ----
-        double pitchSmall = axisToRange(-gamepad2.left_stick_y,
+        // ---- 仰角：摇杆速率积分、松手保持（与平转/转速同一手感）----
+        // 旧实现把摇杆位置直接映射成舵机位置：回中 = 0.5，既停不住也调不细，
+        // 且松手瞬间会从中点弹回。改为"推着走"后，摇杆回中即停在当前角度。
+        double now = getRuntime();
+        double dt = (lastPitchTime == 0) ? 0.02 : (now - lastPitchTime);
+        lastPitchTime = now;
+        if (dt <= 0 || dt > 0.1) {
+            // 首帧或长时间停顿：用标称周期，避免一次积分跳变
+            dt = 0.02;
+        }
+        targetPitchSmall = stepPitch(targetPitchSmall, -gamepad2.left_stick_y, dt,
                 Shooter.SMALL_PARAMS.pitchMin, Shooter.SMALL_PARAMS.pitchMax);
-        double pitchBig = axisToRange(-gamepad2.right_stick_y,
+        targetPitchBig = stepPitch(targetPitchBig, -gamepad2.right_stick_y, dt,
                 Shooter.BIG_PARAMS.pitchMin, Shooter.BIG_PARAMS.pitchMax);
+        double pitchSmall = targetPitchSmall;
+        double pitchBig = targetPitchBig;
         // 推右（axis = +1）→ 顺时针，对应负角速度；摇杆回中即停在当前角度
         double yawRate = -gamepad2.left_stick_x * Math.toRadians(maxYawRateDegPerSec);
 
@@ -315,15 +375,25 @@ public abstract class TeleOpMainBase extends LinearOpMode {
         targetSpeedBig = clamp(targetSpeedBig + v * speedStep, 0, Shooter.BIG_PARAMS.flywheel.speedMax);
         targetSpeedSmall = clamp(targetSpeedSmall + h * speedStep, 0, Shooter.SMALL_PARAMS.flywheel.speedMax);
 
-        // ---- 扳机：按住释放（RB 同时释放大球与小球） ----
+        // ---- 扳机：按住释放（A 同时释放大球与小球，需已武装）----
         return turret.updateManual(yawRate, pitchBig, pitchSmall,
                 targetSpeedBig, targetSpeedSmall, fireKey, fireKey);
     }
 
-    /** 摇杆位置 [-1, 1] 线性映射到 [lo, hi] */
-    private static double axisToRange(double axis, double lo, double hi) {
-        double t = Math.max(0, Math.min(1, (axis + 1) / 2));
-        return lo + t * (hi - lo);
+    /**
+     * 仰角的单步积分：摇杆偏量 × {@link #pitchRatePerSec} × dt，并钳到机械行程。
+     *
+     * @param current 当前舵机目标位置
+     * @param axis    摇杆量（上推为正；小于 {@link #pitchAxisDeadband} 视为不动）
+     * @param dt      帧间隔 (s)
+     * @param lo      机械行程下限
+     * @param hi      机械行程上限
+     * @return 新目标位置
+     */
+    private static double stepPitch(double current, double axis, double dt, double lo, double hi) {
+        double input = (Math.abs(axis) < pitchAxisDeadband) ? 0.0 : axis;
+        double next = current + input * pitchRatePerSec * dt;
+        return Math.max(lo, Math.min(hi, next));
     }
 
     private static int clamp(int v, int lo, int hi) {

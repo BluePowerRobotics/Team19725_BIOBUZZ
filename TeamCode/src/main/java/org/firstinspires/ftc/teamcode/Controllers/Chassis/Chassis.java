@@ -5,6 +5,7 @@
  import com.acmerobotics.roadrunner.PoseVelocity2d;
  import com.acmerobotics.roadrunner.Vector2d;
  import com.qualcomm.robotcore.hardware.HardwareMap;
+import com.qualcomm.robotcore.hardware.Servo;
 
  import org.firstinspires.ftc.robotcore.external.Telemetry;
  import org.firstinspires.ftc.teamcode.Processors.RobotPosition.RobotPosition;
@@ -28,6 +29,26 @@ public class Chassis {
     private final Telemetry telemetry;
     private double lastKx = 0, lastKy = 0, lastKomega = 0;
 
+    /** 刹车舵机在 Robot Configuration 中的设备名 */
+    private static final String BRAKE_SERVO_NAME = "brakeServo";
+
+    /** 刹车抬起（不刹车）的舵机位置 [0,1]（todo: 实机标定） */
+    public static double BrakeUpPos = 1.0;
+    /** 刹车放下（刹车）的舵机位置 [0,1]（todo: 实机标定） */
+    public static double BrakeDownPos = 0.0;
+
+    /** 底盘刹车舵机：抬起 = 可自由移动，放下 = 压住地面刹车 */
+    private final Servo brakeServo;
+
+    /** 本帧是否请求停止底盘（由 {@link #stop()} 置位，update 消费） */
+    private boolean stopRequested;
+
+    /**
+     * 本帧是否请求放下刹车（由 {@link #stop(boolean)} 且参数为 true 时置位，update 消费）。
+     * 未置位时 update 会把刹车抬起。
+     */
+    private boolean brakeRequested;
+
     /** 瞄准模式航向环 P 增益 (rad/s per rad)，Dashboard 可调 */
     public static double aimKp = 3.0;
     /** 瞄准模式角速度指令上限 (rad/s)，防止过冲 */
@@ -49,6 +70,9 @@ public class Chassis {
         this.drive = RobotPosition.getInstance().getDrive();
         this.actionRunner = actionRunner;
         this.telemetry = telemetry;
+        this.brakeServo = hardwareMap.get(Servo.class, BRAKE_SERVO_NAME);
+        // 上电默认抬起刹车，等待上层显式 stop(true) 放下
+        this.brakeServo.setPosition(BrakeUpPos);
 
     }
 
@@ -58,6 +82,9 @@ public class Chassis {
         this.drive = RobotPosition.getInstance().getDrive();
         this.actionRunner = actionRunner;
         this.telemetry = telemetry;
+        this.brakeServo = hardwareMap.get(Servo.class, BRAKE_SERVO_NAME);
+        // 上电默认抬起刹车，等待上层显式 stop(true) 放下
+        this.brakeServo.setPosition(BrakeUpPos);
     }
 
     public void setUseNoHeadMode(boolean useNoHeadMode){
@@ -69,17 +96,42 @@ public class Chassis {
     public boolean getUseNoHeadMode(){
         return useNoHeadMode;
     }
+    /**
+     * 请求停止底盘（每帧调用）：只登记停止请求，<b>不操作任何硬件</b>。
+     * 零速与刹车舵机的实际下发统一在 {@code update} 内完成。
+     */
     public void stop(){
-        drive.setDrivePowers(new PoseVelocity2d(
-                new Vector2d(0,0),
-                0));
+        stopRequested = true;
+    }
+
+    /**
+     * 请求停止底盘，并可按需放下刹车：只登记请求，<b>不操作任何硬件</b>。
+     *
+     * <p>刹车是"每帧请求"式语义：只有本帧调用过 {@code stop(true)}，
+     * 下一次 {@link #update(double, double, double)} / {@link #update(double, double, Pose2d)}
+     * 才会把刹车放下；否则 update 会把刹车抬起。
+     * 因此需要持续刹车时应<b>每帧</b>调用 {@code stop(true)}。
+     *
+     * @param brake true = 本帧停止底盘并放下刹车；false = 只停止底盘
+     */
+    public void stop(boolean brake){
+        stopRequested = true;
+        if (brake) {
+            brakeRequested = true;
+        }
     }
 
     public void update(double Kx, double Ky, double Komega){
+        // 消费本帧的 stop / 刹车请求：stop() 只登记，硬件只在这里下发
+        boolean stopped = stopRequested;
+        boolean brake = brakeRequested;
+        stopRequested = false;
+        brakeRequested = false;
+
         lastKx = Kx;
         lastKy = Ky;
         lastKomega = Komega;
-        if(!actionRunner.isBusy()){
+        if(!stopped && !actionRunner.isBusy()){
             // 摇杆 → 底盘速度映射：Ky/Kx 取反以匹配 FTC SDK 手柄惯例（上推为负、右推为正）
             // 官方 SDK: forward = -gamepad1.left_stick_y, strafe = gamepad1.left_stick_x
             // Road Runner: PoseVelocity2d.y 正值 = 向左横移，故 strafe 也需取反
@@ -103,10 +155,11 @@ public class Chassis {
                 drive.setDrivePowers(new PoseVelocity2d(new Vector2d(forwardVel, strafeVel), omega));
             }
         } else {
-            // Action 运行期间手柄输入被屏蔽，此时主动刹停，避免电机维持上一帧功率；
-            // 本帧稍后由 ActionRunner.update() 下发实际的驱动指令
-            stop();
+            // 本帧有 stop 请求，或 Action 运行期间手柄输入被屏蔽：主动刹停，
+            // 避免电机维持上一帧功率；Action 的实际驱动由 ActionRunner.update() 下发
+            drive.setDrivePowers(new PoseVelocity2d(new Vector2d(0, 0), 0));
         }
+        brakeServo.setPosition(brake ? BrakeDownPos : BrakeUpPos);
     }
 
     /**
@@ -127,9 +180,15 @@ public class Chassis {
      * @param targetPose 目标位置（仅取 x/y，heading 忽略）
      */
     public void update(double Kx, double Ky, Pose2d targetPose){
+        // 消费本帧的 stop / 刹车请求：stop() 只登记，硬件只在这里下发
+        boolean stopped = stopRequested;
+        boolean brake = brakeRequested;
+        stopRequested = false;
+        brakeRequested = false;
+
         lastKx = Kx;
         lastKy = Ky;
-        if(!actionRunner.isBusy()){
+        if(!stopped && !actionRunner.isBusy()){
             double forwardVel = -Ky;
             double strafeVel = -Kx;
             // 右摇杆失效：角速度由"始终指向目标"的航向环给出
@@ -149,9 +208,10 @@ public class Chassis {
                 drive.setDrivePowers(new PoseVelocity2d(new Vector2d(forwardVel, strafeVel), omega));
             }
         } else {
-            // Action 运行期间手柄输入被屏蔽，此时主动刹停（同普通重载）
-            stop();
+            // 本帧有 stop 请求，或 Action 运行期间手柄输入被屏蔽：主动刹停（同普通重载）
+            drive.setDrivePowers(new PoseVelocity2d(new Vector2d(0, 0), 0));
         }
+        brakeServo.setPosition(brake ? BrakeDownPos : BrakeUpPos);
     }
 
     /**
