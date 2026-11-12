@@ -35,11 +35,18 @@ public class RobotPosition {
     private static final String BALL_BEAM_DEVICE = "breakBeam";
 
     /**
-     * 球道计数器（状态估计，每帧由 {@link #update(int)} 主动触发一次）。
+     * 球道计数器（状态估计，每帧由 {@link #update()} 主动触发一次）。
      * 光电门由其内部持有并在计数完成后触发采样，更新链路为
      * {@code RobotPosition → BallCounter → BreakBeam}。
      */
     private BallCounter ballCounter;
+
+    /**
+     * 球道计数方向（每帧由上层通过 {@link #setBallCounterMode(int)} 设置，
+     * <b>不作为 update 参数</b>）：{@link BallCounter#MODE_INTAKE} = 进入模式（+1），
+     * {@link BallCounter#MODE_OUTPUT} = 出球模式（-1）。默认进入模式。
+     */
+    private int ballCounterMode = BallCounter.MODE_INTAKE;
 
     /**
      * HIVE 状态跟踪值：MT1 有观测时更新为观测值，无观测 / 解算被拒时保持上一状态。
@@ -126,21 +133,16 @@ public class RobotPosition {
         currentPose = pose;
     }
 
-    // 每帧调用：推进融合定位器并返回当前位姿（球道计数按进入模式）
-    public Pose2d update() {
-        return update(BallCounter.MODE_INTAKE);
-    }
-
     /**
      * 每帧调用：推进融合定位器与下属球道计数器，并返回当前位姿。
      *
      * <p>按层层嵌套的 update 规范，本函数只调用一次下属 {@link BallCounter#update(int)}，
      * 上层（OpMode / Action）不要另行调用计数器。
      *
-     * @param ballMode 球道计数方向（外部信息）：{@link BallCounter#MODE_INTAKE} 进球 +1，
-     *                 {@link BallCounter#MODE_OUTPUT} 出球 -1
+     * <p>球道计数方向通过 {@link #setBallCounterMode(int)} 单独设置，不作为 update 参数，
+     * 保持 update 签名与帧内调用顺序稳定（上层先设模式，再调用本函数）。
      */
-    public Pose2d update(int ballMode) {
+    public Pose2d update() {
         // 唯一推进点：每帧只调用一次，避免同一帧的视觉观测被重复计入 EKF
         // （MecanumDrive 的轨迹 / 转向 Action 内部已改为复用本帧结果）
         currentVelocity2d = drive.updatePoseEstimate();
@@ -155,7 +157,9 @@ public class RobotPosition {
 
         // 自身状态更新完成后，主动触发下属计数器；
         // 计数器完成本帧计数后，再由它触发下属光电门采样（单向串行，无重复更新）
-        ballCounter.update(ballMode);
+        if (ballCounter != null) {
+            ballCounter.update(ballCounterMode);
+        }
 
         return currentPose;
     }
@@ -195,7 +199,23 @@ public class RobotPosition {
     // ---- 球道计数功能 ----
 
     /**
-     * @return 当前球道内累计的小球个数（由上一帧 {@link #update(int)} 采样的光电门上升沿得到，始终 ≥ 0）。
+     * 设置球道计数方向。应在每帧调用 {@link #update()} 之前设置：
+     * 吸球（intake）→ {@link BallCounter#MODE_INTAKE}（球挡光 +1）；
+     * 出球（output）→ {@link BallCounter#MODE_OUTPUT}（球挡光 -1）。
+     *
+     * @param mode {@link BallCounter#MODE_INTAKE} 或 {@link BallCounter#MODE_OUTPUT}
+     * @throws IllegalArgumentException mode 不是上述两个取值
+     */
+    public void setBallCounterMode(int mode) {
+        if (mode != BallCounter.MODE_INTAKE && mode != BallCounter.MODE_OUTPUT) {
+            throw new IllegalArgumentException(
+                    "mode must be MODE_INTAKE (0) or MODE_OUTPUT (1), got: " + mode);
+        }
+        this.ballCounterMode = mode;
+    }
+
+    /**
+     * @return 当前球道内累计的小球个数（由上一帧 {@link #update()} 采样的光电门上升沿得到，始终 ≥ 0）。
      *         供 Sweeper 限制吸球数量、主程序遥测读取；读取内部变量，不访问硬件。
      *         若初始化中途失败留下了未完整构建的实例，返回 0（Sweeper 通过 getInstanceOrNull 读取时不会 NPE）。
      */

@@ -70,10 +70,24 @@ public class TeleOpRed extends LinearOpMode {
         waitForStart();
 
         while (opModeIsActive()) {
-            // 球道计数方向：出球（右保险杠）按 -1 计数，其余按进球 +1 计数
-            int ballMode = gamepad1.right_bumper
-                    ? BallCounter.MODE_OUTPUT : BallCounter.MODE_INTAKE;
-            RobotPosition.getInstance().update(ballMode);
+            // ======== 球道 / 集球器指令（先设模式，再更新状态） ========
+            // 球道计数方向通过 setBallCounterMode 单独设置，不作为 update 的输入参数；
+            // 先设模式可保证本帧 RobotPosition.update() 使用正确的计数方向。
+            if (gamepad1.left_bumper) {
+                sweeper.setEat();
+                RobotPosition.getInstance().setBallCounterMode(BallCounter.MODE_INTAKE);
+            } else if (gamepad1.right_bumper) {
+                sweeper.setOutput();
+                RobotPosition.getInstance().setBallCounterMode(BallCounter.MODE_OUTPUT);
+            }
+
+            // 操作手手动清空球道计数（达到 BallMax 后吸球被锁，清空后恢复）
+            if (gamepad2.aWasReleased()) {
+                RobotPosition.getInstance().resetBallCount();
+            }
+
+            // 推进总状态估计（位姿 + 球道计数）
+            RobotPosition.getInstance().update();
 
             // ======== P1 Controls ========
 
@@ -102,20 +116,6 @@ public class TeleOpRed extends LinearOpMode {
                 RobotPosition.getInstance().ResetPoseTo(resetPose);
                 telemetry.addData("ResetPose", "Reset to " + (teamColor == TeamColor.BLUE ? "Blue" : "Red"));
             }
-
-            if (gamepad1.left_bumper) {
-                sweeper.setEat();
-            }
-
-            if (gamepad1.right_bumper) {
-                sweeper.setOutput();
-            }
-
-            // 操作手手动清空球道计数（达到 BallMax 后吸球被锁，清空后恢复）
-            if (gamepad2.aWasReleased()) {
-                RobotPosition.getInstance().resetBallCount();
-            }
-
 
             // ======== 更新 & 遥测 ========
 
