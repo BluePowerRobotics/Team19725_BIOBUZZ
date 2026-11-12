@@ -39,7 +39,7 @@ public class Sweeper {
     private Telemetry telemetry;
 
     public static int EatVel = 700;
-    public static int GiveTheArtifactVel = 2000;
+    public static int GiveBallVel = 2000;
     public static int OutputVel = -500;
 
     /** 球道容量：球道计数（RobotPosition.getBallCount()）达到该值时自动停止吸球 */
@@ -104,8 +104,8 @@ public class Sweeper {
         eatCommand = true;
     }
 
-    public void setGiveArtifact() {
-        targetVelocity = GiveTheArtifactVel;
+    public void setGiveBall() {
+        targetVelocity = GiveBallVel;
         eatCommand = false;
     }
 
@@ -136,7 +136,7 @@ public class Sweeper {
 
     public void update() {
         // 球道保护：只在"吸球"（setEat）且球道已满时强制停吸。
-        // 供料（setGiveArtifact）与反向吐球（setOutput）不受限，
+        // 供料（setGiveBall）与反向吐球（setOutput）不受限，
         // 否则满球后会既吐不出球、也供不上料，形成互锁
         if (isBallLaneFull() && eatCommand) {
             targetVelocity = 0;

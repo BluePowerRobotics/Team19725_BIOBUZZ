@@ -51,8 +51,9 @@ import org.firstinspires.ftc.teamcode.utility.RobotStateStore;
  * <p><b>扳机武装</b>：切模式（B）后必须先松开 A 再按下才允许发射 —— 手动路径的扳机不带就绪门控，
  * 若切换瞬间 A 仍按住，会在飞轮未转起来、俯仰未到位时立刻出扳机（空打）。启动时同理。
  *
- * <p><b>送球联动</b>：任一发射器释放扳机时，吃球器自动 {@code setGiveArtifact()} 送球；
- * 停止发射后停转（主控 LB/RB 手动吃球/吐出仍然优先除外）。
+ * <p><b>送球联动</b>：任一发射器释放扳机时，吃球器自动 {@code setGiveBall()} 向炮台送球，
+ * 期间忽略一操的吃球/吐出指令；发射停止后恢复一操控制
+ * （RB 吐出 &gt; LB 吃球 &gt; 均未按则停转）。
  */
 @Config
 public abstract class TeleOpMainBase extends LinearOpMode {
@@ -223,12 +224,8 @@ public abstract class TeleOpMainBase extends LinearOpMode {
             }
 
             // ======== P1：吃球 ========
-            if (gamepad1.left_bumper) {
-                sweeper.setEat();
-            }
-            if (gamepad1.right_bumper) {
-                sweeper.setOutput();
-            }
+            // 吃球/吐出指令统一在炮台更新后按"发射优先"的优先级下发（见下方送球联动），
+            // 保证发射期间一操指令不会覆盖供球。
 
             // ======== P2：炮台 ========
             if (gamepad2.bWasReleased()) {
@@ -266,22 +263,31 @@ public abstract class TeleOpMainBase extends LinearOpMode {
                 ready = updateManualTurret(fireKey);
             }
 
-            // ======== 扳机释放 → 吃球器送球；停止发射后停转 ========
+            // ======== 送球联动：扳机释放 → 强制供球，发射期间忽略一操 ========
             // 自动瞄准以 Turret 实际释放状态为准：它含 fireHoldTime 的最短保持窗口，
             // 否则就绪状态在档位边界逐帧抖动会让送球跟着断续，打断装填。
-            // 手动瞄准的扳机就是副控按键本身。
-            boolean feeding = autoAim
+            // 手动瞄准的扳机就是已武装的 fireKey 本身。
+            // 供球优先级最高；发射停止后恢复一操控制（RB 吐出 > LB 吃球 > 停转）。
+            boolean firing = autoAim
                     ? (turret.isBigFiring() || turret.isSmallFiring())
                     : fireKey;
-            if (feeding) {
-                sweeper.setGiveArtifact();
-            } else if (!gamepad1.left_bumper && !gamepad1.right_bumper) {
-                // 未发射且主控没有手动吃球/吐出：停转
+            if (firing) {
+                sweeper.setGiveBall();
+            } else if (gamepad1.right_bumper) {
+                sweeper.setOutput();
+            } else if (gamepad1.left_bumper) {
+                sweeper.setEat();
+            } else {
                 sweeper.setStop();
             }
 
             // ======== 更新 & 遥测 ========
-            actionRunner.update();
+            // ActionRunner.update() 自带一次 Dashboard 场地图发送；TeleOp 平时没有 Action，
+            // 每帧调用会与下方 packet 重复发送（后发覆盖先发，位姿历史轨迹也画不出来）。
+            // 因此只在确有 Action 待执行/执行中时才推进它。
+            if (actionRunner.isBusy()) {
+                actionRunner.update();
+            }
             // 球道计数：光电门采样已在 RobotPosition.update() 内完成，
             // 满球停吸由 Sweeper 依据 getBallCount() 判定
             sweeper.update();
