@@ -2,11 +2,13 @@ package org.firstinspires.ftc.teamcode.Auto.AutoActions;
 
 import androidx.annotation.NonNull;
 
+import com.acmerobotics.dashboard.config.Config;
 import com.acmerobotics.dashboard.telemetry.TelemetryPacket;
 import com.acmerobotics.roadrunner.Action;
 import com.acmerobotics.roadrunner.Pose2d;
 import com.acmerobotics.roadrunner.TrajectoryActionBuilder;
 
+import org.firstinspires.ftc.teamcode.Controllers.Sweeper.Sweeper;
 import org.firstinspires.ftc.teamcode.Parameter.HypParams;
 import org.firstinspires.ftc.teamcode.Parameter.TeamColor;
 import org.firstinspires.ftc.teamcode.Processors.RobotPosition.RobotPosition;
@@ -34,6 +36,7 @@ import java.util.List;
  * 可选覆写 {@link #onComplete()} 在轨迹结束时更新共享状态（如
  * {@link EatPointTracker#markVisited(int)}）。
  */
+@Config
 public abstract class HiveRouteAction implements Action {
 
     /** 取球点 / 发射区域序号：第一个 */
@@ -41,10 +44,23 @@ public abstract class HiveRouteAction implements Action {
     /** 取球点 / 发射区域序号：第二个 */
     public static final int SECOND = 2;
 
+    /**
+     * 提前放下铲子的提前量 (ms)：按剩余距离与线速度估算的 ETA 小于该值时
+     * 立即下发 {@link Sweeper#setShovelDown()}，保证到达取球点时铲子已到位。
+     */
+    public static long shovelLeadMs = 1000;
+
     private final TeamColor teamColor;
     private final boolean throughHive;
     private final Pose2d finalPose;
     private final Action trajectoryAction;
+
+    /** 集球器；为 {@code null} 时本 Action 只负责移动，不提前放铲 */
+    private final Sweeper sweeper;
+
+    /** 保证「放下铲子」只下发一次 */
+    private boolean shovelDropped = false;
+
     private boolean completed = false;
 
     /**
@@ -53,9 +69,21 @@ public abstract class HiveRouteAction implements Action {
      * @param finalPose  终点位姿（含目标航向）
      */
     protected HiveRouteAction(TeamColor teamColor, boolean throughHive, Pose2d finalPose) {
+        this(teamColor, throughHive, finalPose, null);
+    }
+
+    /**
+     * @param teamColor  队伍颜色
+     * @param throughHive true=从 Hive 正下方通过；false=绕开 Hive
+     * @param finalPose  终点位姿（含目标航向）
+     * @param sweeper    集球器；到达终点前 {@link #shovelLeadMs} 自动放下铲子，可为 null
+     */
+    protected HiveRouteAction(TeamColor teamColor, boolean throughHive, Pose2d finalPose,
+                              Sweeper sweeper) {
         this.teamColor = teamColor;
         this.throughHive = throughHive;
         this.finalPose = finalPose;
+        this.sweeper = sweeper;
 
         MecanumDrive drive = RobotPosition.getInstance().getDrive();
         Pose2d start = RobotPosition.getInstance().getPose2d();
@@ -76,12 +104,38 @@ public abstract class HiveRouteAction implements Action {
         packet.put("HiveRoute final x", finalPose.position.x);
         packet.put("HiveRoute final y", finalPose.position.y);
         packet.put("HiveRoute final heading(deg)", Math.toDegrees(finalPose.heading.toDouble()));
+
+        // 到达终点前 shovelLeadMs 放下铲子，避免到位后才动作、错过吸球时间
+        if (sweeper != null && !shovelDropped && shovelDue(finalPose)) {
+            sweeper.setShovelDown();
+            sweeper.update();
+            shovelDropped = true;
+            packet.put("HiveRoute shovel", "Down");
+        }
+
         boolean running = trajectoryAction.run(packet);
         if (!running && !completed) {
             completed = true;
             onComplete();
         }
         return running;
+    }
+
+    /**
+     * 是否已到「提前放下铲子」的时机：用剩余直线距离与当前线速度估算 ETA，
+     * 当 ETA ≤ {@link #shovelLeadMs} 时返回 {@code true}。
+     *
+     * <p>线速度过小时（起步 / 拥堵）以 {@code maxWheelVel / 2} 兜底，
+     * 避免静止时把 ETA 估得过长而迟迟不放铲。
+     *
+     * @param finalPose 终点（底盘中心）位姿
+     */
+    public static boolean shovelDue(Pose2d finalPose) {
+        RobotPosition rp = RobotPosition.getInstance();
+        double remaining = rp.getPose2d().position.minus(finalPose.position).norm();
+        double speed = rp.getDrive().getLastVelocity().linearVel.norm();
+        double v = Math.max(speed, MecanumDrive.PARAMS.maxWheelVel * 0.5);
+        return remaining / v <= shovelLeadMs / 1000.0;
     }
 
     /** 轨迹正常结束（非中断）时的回调；子类可在此更新共享状态。 */

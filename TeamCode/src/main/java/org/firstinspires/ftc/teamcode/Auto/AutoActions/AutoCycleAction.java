@@ -98,7 +98,7 @@ public class AutoCycleAction implements Action {
     private Action build() {
         List<Action> steps = new ArrayList<>();
 
-        steps.add(new DeferredAction(() -> new GoToUnvisitedEatPointAvoidHiveAction(teamColor)));
+        steps.add(new DeferredAction(() -> new GoToUnvisitedEatPointAvoidHiveAction(teamColor, sweeper)));
         steps.add(new EatAction(sweeper));
         steps.add(new DeferredAction(() -> new GoToOtherShootAreaViaHiveAction(teamColor, goal)));
 

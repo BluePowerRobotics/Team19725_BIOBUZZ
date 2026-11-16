@@ -1,5 +1,6 @@
 package org.firstinspires.ftc.teamcode.Auto.AutoActions;
 
+import org.firstinspires.ftc.teamcode.Controllers.Sweeper.Sweeper;
 import org.firstinspires.ftc.teamcode.Parameter.TeamColor;
 import org.firstinspires.ftc.teamcode.utility.EatPointTracker;
 
@@ -21,7 +22,15 @@ public class GoToUnvisitedEatPointAvoidHiveAction extends HiveRouteAction {
      * @param teamColor 队伍颜色
      */
     public GoToUnvisitedEatPointAvoidHiveAction(TeamColor teamColor) {
-        super(teamColor, false, unvisitedEatPointTargetPose(teamColor));
+        this(teamColor, null);
+    }
+
+    /**
+     * @param teamColor 队伍颜色
+     * @param sweeper   集球器：到达取球点前 {@link HiveRouteAction#shovelLeadMs} 自动放下铲子
+     */
+    public GoToUnvisitedEatPointAvoidHiveAction(TeamColor teamColor, Sweeper sweeper) {
+        super(teamColor, false, unvisitedEatPointTargetPose(teamColor), sweeper);
         this.pointIndex = unvisitedEatPointIndex(teamColor);
     }
 

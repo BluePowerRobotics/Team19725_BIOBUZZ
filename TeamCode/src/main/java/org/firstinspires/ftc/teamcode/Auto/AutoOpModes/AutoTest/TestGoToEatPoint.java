@@ -4,6 +4,7 @@ import com.acmerobotics.roadrunner.Action;
 import com.qualcomm.robotcore.eventloop.opmode.Autonomous;
 
 import org.firstinspires.ftc.teamcode.Auto.AutoActions.GoToEatPointAction;
+import org.firstinspires.ftc.teamcode.Controllers.Sweeper.Sweeper;
 
 /**
  * 实机测试：{@link GoToEatPointAction} —— 到指定取球点（intake 到位、车头朝取球点）。
@@ -24,6 +25,7 @@ public class TestGoToEatPoint extends ActionTestBase {
 
     @Override
     protected Action createTestAction() {
-        return new GoToEatPointAction(optionIndex);
+        Sweeper sweeper = new Sweeper(hardwareMap, telemetry);
+        return new GoToEatPointAction(optionIndex, sweeper);
     }
 }

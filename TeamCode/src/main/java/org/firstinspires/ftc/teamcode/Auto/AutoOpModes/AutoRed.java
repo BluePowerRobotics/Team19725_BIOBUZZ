@@ -121,7 +121,7 @@ public class AutoRed extends LinearOpMode {
         ElapsedTime matchTime = new ElapsedTime();
 
         // 首个动作：绕开 Hive 前往此前未到达的取球点（构造时以当前融合位姿为起点）
-        actionRunner.add(new GoToUnvisitedEatPointAvoidHiveAction(teamColor));
+        actionRunner.add(new GoToUnvisitedEatPointAvoidHiveAction(teamColor, sweeper));
 
         while (opModeIsActive() && currentState != AutoState.STOP) {
             // 更新位姿（每帧唯一一次推进定位器）；球道光电门采样也在这个 update 内完成
@@ -177,7 +177,7 @@ public class AutoRed extends LinearOpMode {
                         break;
 
                     case AIM_SHOOT:
-                        actionRunner.add(new GoToUnvisitedEatPointAvoidHiveAction(teamColor));
+                        actionRunner.add(new GoToUnvisitedEatPointAvoidHiveAction(teamColor, sweeper));
                         currentState = AutoState.TO_EAT_POINT;
                         break;
 

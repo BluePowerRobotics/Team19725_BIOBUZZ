@@ -6,6 +6,7 @@ import com.acmerobotics.dashboard.telemetry.TelemetryPacket;
 import com.acmerobotics.roadrunner.Action;
 import com.acmerobotics.roadrunner.Pose2d;
 
+import org.firstinspires.ftc.teamcode.Controllers.Sweeper.Sweeper;
 import org.firstinspires.ftc.teamcode.Parameter.HypParams;
 import org.firstinspires.ftc.teamcode.Processors.RobotPosition.RobotPosition;
 import org.firstinspires.ftc.teamcode.RoadRunner.MecanumDrive;
@@ -33,7 +34,21 @@ public class GoToNearestEatPointAction implements Action {
     private final Pose2d targetPose;
     private final Vector2D targetEatPoint;
 
+    /** 集球器；为 {@code null} 时不提前放铲 */
+    private final Sweeper sweeper;
+
+    /** 保证「放下铲子」只下发一次 */
+    private boolean shovelDropped = false;
+
     public GoToNearestEatPointAction() {
+        this(null);
+    }
+
+    /**
+     * @param sweeper 集球器：到达取球点前 {@link HiveRouteAction#shovelLeadMs} 自动放下铲子
+     */
+    public GoToNearestEatPointAction(Sweeper sweeper) {
+        this.sweeper = sweeper;
         MecanumDrive drive = RobotPosition.getInstance().getDrive();
         Pose2d currentPose = RobotPosition.getInstance().getPose2d();
         double cx = currentPose.position.x;
@@ -64,6 +79,15 @@ public class GoToNearestEatPointAction implements Action {
         packet.put("Target center x", targetPose.position.x);
         packet.put("Target center y", targetPose.position.y);
         packet.put("Target heading(deg)", Math.toDegrees(targetPose.heading.toDouble()));
+
+        // 到达取球点前 shovelLeadMs 放下铲子
+        if (sweeper != null && !shovelDropped && HiveRouteAction.shovelDue(targetPose)) {
+            sweeper.setShovelDown();
+            sweeper.update();
+            shovelDropped = true;
+            packet.put("GoToNearestEatPoint shovel", "Down");
+        }
+
         return trajectoryAction.run(packet);
     }
 }

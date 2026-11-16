@@ -83,7 +83,7 @@ public class AutoBlueChassisAim extends LinearOpMode {
         EatPointTracker.clear();
         ElapsedTime matchTime = new ElapsedTime();
 
-        actionRunner.add(new GoToUnvisitedEatPointAvoidHiveAction(teamColor));
+        actionRunner.add(new GoToUnvisitedEatPointAvoidHiveAction(teamColor, sweeper));
 
         while (opModeIsActive() && currentState != AutoState.STOP) {
             RobotPosition.getInstance().update();
@@ -129,7 +129,7 @@ public class AutoBlueChassisAim extends LinearOpMode {
                         currentState = AutoState.AIM_SHOOT;
                         break;
                     case AIM_SHOOT:
-                        actionRunner.add(new GoToUnvisitedEatPointAvoidHiveAction(teamColor));
+                        actionRunner.add(new GoToUnvisitedEatPointAvoidHiveAction(teamColor, sweeper));
                         currentState = AutoState.TO_EAT_POINT;
                         break;
                     case PARKING:

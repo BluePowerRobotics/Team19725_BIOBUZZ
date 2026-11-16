@@ -4,6 +4,7 @@ import com.acmerobotics.roadrunner.Action;
 import com.qualcomm.robotcore.eventloop.opmode.Autonomous;
 
 import org.firstinspires.ftc.teamcode.Auto.AutoActions.GoToUnvisitedEatPointAvoidHiveAction;
+import org.firstinspires.ftc.teamcode.Controllers.Sweeper.Sweeper;
 
 /**
  * 实机测试：{@link GoToUnvisitedEatPointAvoidHiveAction} —— 绕开 Hive 前往此前未到达过的吸球点。
@@ -19,6 +20,7 @@ public class TestGoToUnvisitedEatPointAvoidHive extends ActionTestBase {
 
     @Override
     protected Action createTestAction() {
-        return new GoToUnvisitedEatPointAvoidHiveAction(teamColor);
+        Sweeper sweeper = new Sweeper(hardwareMap, telemetry);
+        return new GoToUnvisitedEatPointAvoidHiveAction(teamColor, sweeper);
     }
 }

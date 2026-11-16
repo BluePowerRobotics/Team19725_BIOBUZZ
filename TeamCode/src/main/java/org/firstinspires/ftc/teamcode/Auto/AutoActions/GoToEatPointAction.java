@@ -6,6 +6,7 @@ import com.acmerobotics.dashboard.telemetry.TelemetryPacket;
 import com.acmerobotics.roadrunner.Action;
 import com.acmerobotics.roadrunner.Pose2d;
 
+import org.firstinspires.ftc.teamcode.Controllers.Sweeper.Sweeper;
 import org.firstinspires.ftc.teamcode.Parameter.HypParams;
 import org.firstinspires.ftc.teamcode.Processors.RobotPosition.RobotPosition;
 import org.firstinspires.ftc.teamcode.RoadRunner.MecanumDrive;
@@ -38,14 +39,29 @@ public class GoToEatPointAction implements Action {
     private final Vector2D targetEatPoint;
     private final int pointIndex;
 
+    /** 集球器；为 {@code null} 时不提前放铲 */
+    private final Sweeper sweeper;
+
+    /** 保证「放下铲子」只下发一次 */
+    private boolean shovelDropped = false;
+
     /**
      * @param pointIndex 取球点序号：{@link #FIRST} 或 {@link #SECOND}
      */
     public GoToEatPointAction(int pointIndex) {
+        this(pointIndex, null);
+    }
+
+    /**
+     * @param pointIndex 取球点序号：{@link #FIRST} 或 {@link #SECOND}
+     * @param sweeper    集球器：到达取球点前 {@link HiveRouteAction#shovelLeadMs} 自动放下铲子
+     */
+    public GoToEatPointAction(int pointIndex, Sweeper sweeper) {
         if (pointIndex != FIRST && pointIndex != SECOND) {
             throw new IllegalArgumentException("pointIndex must be FIRST(1) or SECOND(2)");
         }
         this.pointIndex = pointIndex;
+        this.sweeper = sweeper;
 
         MecanumDrive drive = RobotPosition.getInstance().getDrive();
         Pose2d currentPose = RobotPosition.getInstance().getPose2d();
@@ -72,6 +88,15 @@ public class GoToEatPointAction implements Action {
         packet.put("Target center x", targetPose.position.x);
         packet.put("Target center y", targetPose.position.y);
         packet.put("Target heading(deg)", Math.toDegrees(targetPose.heading.toDouble()));
+
+        // 到达取球点前 shovelLeadMs 放下铲子
+        if (sweeper != null && !shovelDropped && HiveRouteAction.shovelDue(targetPose)) {
+            sweeper.setShovelDown();
+            sweeper.update();
+            shovelDropped = true;
+            packet.put("GoToEatPoint shovel", "Down");
+        }
+
         return trajectoryAction.run(packet);
     }
 }

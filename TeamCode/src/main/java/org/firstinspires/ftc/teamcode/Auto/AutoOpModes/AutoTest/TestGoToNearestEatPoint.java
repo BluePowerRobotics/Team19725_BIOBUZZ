@@ -4,6 +4,7 @@ import com.acmerobotics.roadrunner.Action;
 import com.qualcomm.robotcore.eventloop.opmode.Autonomous;
 
 import org.firstinspires.ftc.teamcode.Auto.AutoActions.GoToNearestEatPointAction;
+import org.firstinspires.ftc.teamcode.Controllers.Sweeper.Sweeper;
 
 /**
  * 实机测试：{@link GoToNearestEatPointAction} —— 自动选择更近的取球点并前往。
@@ -19,6 +20,7 @@ public class TestGoToNearestEatPoint extends ActionTestBase {
 
     @Override
     protected Action createTestAction() {
-        return new GoToNearestEatPointAction();
+        Sweeper sweeper = new Sweeper(hardwareMap, telemetry);
+        return new GoToNearestEatPointAction(sweeper);
     }
 }

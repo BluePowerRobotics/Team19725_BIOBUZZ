@@ -43,6 +43,8 @@ public class EatAction implements Action {
     public boolean run(@NonNull TelemetryPacket packet) {
         if (!initialized) {
             timer = new ElapsedTime();
+            // 兜底：无论移动 Action 是否已提前放铲，吃球前一定让铲子处于放下位置
+            sweeper.setShovelDown();
             initialized = true;
         }
 

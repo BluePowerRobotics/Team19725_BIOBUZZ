@@ -17,6 +17,7 @@ import org.firstinspires.ftc.teamcode.Processors.RobotPosition.RobotPosition;
 import org.firstinspires.ftc.teamcode.RoadRunner.MecanumDrive;
 import org.firstinspires.ftc.teamcode.utility.EatPointTracker;
 import org.firstinspires.ftc.teamcode.utility.HiveRoutePlanner;
+import org.firstinspires.ftc.teamcode.utility.Vector2D;
 
 import java.util.List;
 
@@ -32,10 +33,11 @@ import java.util.List;
  * 两条独立轨迹之间的物理停车。只有把全部途经点串进同一个 {@code TrajectoryActionBuilder}，
  * 才会共用一条时间最优 profile：途经点处按速度/加速度约束通过，不停车。
  *
- * <p><b>吃球怎么做到「不停车」</b>：不再把取球点当终点，而是当<b>途经点</b>；
- * 在进入取球点前 {@link #eatTriggerDistanceIn} 英寸处用
- * {@code afterDisp(0, eatSeq)} 注册标记，Road Runner 会把该 Action 包进
- * {@code ParallelAction} 与轨迹<b>并行执行</b>——轨迹继续跑，不等待。
+ * <p><b>吃球怎么做到「不停车」</b>：不再把取球点当终点，而是当<b>途经点</b>。
+ * 到达<b>原吸球点</b>时用 {@code afterDisp(0, eatSeq)} 注册标记，Road Runner 会把该 Action
+ * 包进 {@code ParallelAction} 与轨迹<b>并行执行</b>——轨迹继续跑，不等待。
+ * 随后机器人沿<b>场地边框外法线</b>方向平移 {@link #outwardEatShiftIn} 英寸到<b>现吸球点</b>，
+ * 全程边移动边吸球；吸球最长 {@link #maxEatDurationMs}，到时即停（即使未到现吸球点）。
  *
  * <p><b>为什么标记值必须持续多帧</b>：{@code Sweeper.update()} 每帧会把目标速度归零
  * （见 {@code Sweeper#update}），因此一次性 {@code InstantAction} 无效；
@@ -60,11 +62,15 @@ import java.util.List;
 @Config
 public class ContinuousRouteAction implements Action {
 
-    /** 在到达取球点前多少英寸开始吃球（触发点沿最后一段接近方向回退） */
-    public static double eatTriggerDistanceIn = 12.0;
+    /**
+     * 现吸球点相对原吸球点沿场地边框外法线的平移距离 (in)。
+     * 原吸球点（intake 对准取球点）作为<b>开始吸球的初始位置</b>，
+     * 之后机器人沿垂直边框方向向外移动该距离，边移动边吸球。
+     */
+    public static double outwardEatShiftIn = 3.0;
 
-    /** 吃球持续时长 (ms)，应约等于触发点到轨迹结束的行驶时间 */
-    public static long eatDurationMs = 1200;
+    /** 最长吸球时间 (ms)：到时立即停转，即使尚未到达现吸球点 */
+    public static long maxEatDurationMs = 1200;
 
     /** 第二段是否经 Hive 正下方（true=通过，false=绕开） */
     public static boolean secondLegThroughHive = true;
@@ -87,6 +93,12 @@ public class ContinuousRouteAction implements Action {
     /** 首次 run() 时构建的组合 Action */
     private Action impl;
 
+    /** 原吸球点对应的底盘中心位姿（开始吸球的位置），{@link #build()} 中写入 */
+    private Pose2d eatTargetPose;
+
+    /** 保证「放下铲子」只下发一次 */
+    private boolean shovelDropped = false;
+
     /**
      * @param teamColor 队伍颜色
      * @param sweeper   集球器控制器
@@ -105,56 +117,68 @@ public class ContinuousRouteAction implements Action {
         if (impl == null) {
             impl = build();
         }
+
+        // 到达原吸球点（吸球起始点）前 shovelLeadMs 放下铲子
+        if (!shovelDropped && eatTargetPose != null && HiveRouteAction.shovelDue(eatTargetPose)) {
+            sweeper.setShovelDown();
+            sweeper.update();
+            shovelDropped = true;
+            packet.put("ContinuousRoute shovel", "Down");
+        }
+
         packet.put("ContinuousRoute", "Running");
         return impl.run(packet);
     }
 
     /**
      * 以首次执行时的位姿为起点，把两段路线与吃球标记串成一条 builder 链。
+     *
+     * <p>吸球段：到达<b>原吸球点</b>即启动吸球（并行，不打断轨迹），
+     * 随后沿场地边框外法线方向平移 {@link #outwardEatShiftIn} 英寸到<b>现吸球点</b>，
+     * 全程边移动边吸；吸球最长持续 {@link #maxEatDurationMs}，到时立即停转，
+     * 即使尚未到达现吸球点——因此吸球<b>不需要底盘静止</b>。
      */
     private Action build() {
         Pose2d start = RobotPosition.getInstance().getPose2d();
         MecanumDrive drive = RobotPosition.getInstance().getDrive();
 
-        // 目标位姿：未访问取球点（含朝向）与另一发射区域（含预瞄航向）
+        // 原吸球点（intake 对准原取球点）与另一发射区域
         Pose2d eatTarget = HiveRouteAction.unvisitedEatPointTargetPose(teamColor);
         int eatIndex = HiveRouteAction.unvisitedEatPointIndex(teamColor);
         Pose2d shootTarget = HiveRouteAction.otherShootAreaTargetPose(teamColor, goal);
+        eatTargetPose = eatTarget;
 
-        // 两段途经点：第一段绕开 Hive，第二段经 Hive 正下方（可配）
+        // 现吸球点：原吸球点沿场地边框外法线平移 outwardEatShiftIn 英寸
+        Pose2d shiftedTarget = shiftOutward(eatTarget, eatShiftNormal(eatIndex));
+
+        // 两段途经点：第一段绕开 Hive 到原吸球点，第二段从现吸球点经 Hive 正下方（可配）
         List<Pose2d> leg1 = HiveRoutePlanner.waypoints(teamColor, start, eatTarget, false);
         List<Pose2d> leg2 = HiveRoutePlanner.waypoints(
-                teamColor, eatTarget, shootTarget, secondLegThroughHive);
+                teamColor, shiftedTarget, shootTarget, secondLegThroughHive);
 
         TrajectoryActionBuilder builder = drive.actionBuilder(start);
 
-        // ---- 第一段：除末项（= 取球点）外全部作为途经点逐个加入，共用一条 profile ----
+        // ---- 第一段：除末项（= 原吸球点）外全部作为途经点逐个加入，共用一条 profile ----
         for (int i = 0; i < leg1.size() - 1; i++) {
             Pose2d wp = leg1.get(i);
             builder = builder.strafeToLinearHeading(wp.position, wp.heading.toDouble());
         }
 
-        // ---- 吃球标记：在进入取球点前 eatTriggerDistanceIn 英寸触发，并行不打断轨迹 ----
+        // ---- 吃球并行段：到达原吸球点时启动，最长 maxEatDurationMs 后停转 ----
         Action eatSeq = new SequentialAction(
-                new EatAction(sweeper, eatDurationMs),
+                new EatAction(sweeper, maxEatDurationMs),
                 new InstantAction(() -> EatPointTracker.markVisited(eatIndex)));
 
-        Pose2d approachFrom = (leg1.size() >= 2) ? leg1.get(leg1.size() - 2) : start;
-        Pose2d trigger = triggerPose(approachFrom, eatTarget);
-        if (trigger != null) {
-            builder = builder
-                    .strafeToLinearHeading(trigger.position, trigger.heading.toDouble())
-                    .afterDisp(0.0, eatSeq);
-        }
+        // ---- 原吸球点：开始吸球的初始位置（作为途经点，不减速）----
+        builder = builder
+                .strafeToLinearHeading(eatTarget.position, eatTarget.heading.toDouble())
+                .afterDisp(0.0, eatSeq);
 
-        // ---- 取球点本身作为途经点（不是终点）→ 车不停继续前进 ----
-        builder = builder.strafeToLinearHeading(eatTarget.position, eatTarget.heading.toDouble());
-        if (trigger == null) {
-            // 接近段太短、无法提前触发时，退化为「到达取球点即开始吃」
-            builder = builder.afterDisp(0.0, eatSeq);
-        }
+        // ---- 现吸球点：沿垂直场地边框方向外移，边移动边吸 ----
+        builder = builder
+                .strafeToLinearHeading(shiftedTarget.position, shiftedTarget.heading.toDouble());
 
-        // ---- 第二段：经 Hive 正下方去另一发射区域，仍属同一条 builder 链 ----
+        // ---- 第二段：从现吸球点前往另一发射区域，仍属同一条 builder 链 ----
         for (Pose2d wp : leg2) {
             builder = builder.strafeToLinearHeading(wp.position, wp.heading.toDouble());
         }
@@ -168,28 +192,27 @@ public class ContinuousRouteAction implements Action {
     }
 
     /**
-     * 计算吃球触发位姿：沿 {@code from → eatTarget} 方向，在取球点前 {@link #eatTriggerDistanceIn}
-     * 英寸处，航向与终点航向一致（保持最后一段为朝向取料口的直线）。
+     * 取球点所在场地边框的外法线方向：比较 |x| 与 |y|，取更接近边界的那一轴，
+     * 符号与该坐标符号一致。例如红队 {@code (24,-72)} → {@code (0,-1)}，
+     * {@code (-72,-24)} → {@code (-1,0)}。
      *
-     * @param from      最后一段靠近取球点的起点（上一途经点或起点）
-     * @param eatTarget 取球点位姿
-     * @return 触发位姿；若接近距离不足（无法提前触发）返回 null
+     * @param eatIndex 取球点序号（{@link HiveRouteAction#FIRST} / {@link HiveRouteAction#SECOND}）
      */
-    private static Pose2d triggerPose(Pose2d from, Pose2d eatTarget) {
-        double dx = eatTarget.position.x - from.position.x;
-        double dy = eatTarget.position.y - from.position.y;
-        double dist = Math.hypot(dx, dy);
-        if (dist < 1e-6) {
-            return null;
+    private Vector2D eatShiftNormal(int eatIndex) {
+        Vector2D p = EatPointTracker.eatPoint(teamColor, eatIndex);
+        if (Math.abs(p.getY()) >= Math.abs(p.getX())) {
+            return new Vector2D(0.0, Math.signum(p.getY()));
         }
-        // 触发点不能落在上一个途经点之前，至少保留 1 in 的接近段
-        double back = Math.min(eatTriggerDistanceIn, dist - 1.0);
-        if (back <= 0.0) {
-            return null;
-        }
+        return new Vector2D(Math.signum(p.getX()), 0.0);
+    }
+
+    /**
+     * 把底盘中心位姿沿给定方向平移 {@link #outwardEatShiftIn} 英寸，航向保持不变。
+     */
+    private static Pose2d shiftOutward(Pose2d pose, Vector2D normal) {
         return new Pose2d(
-                eatTarget.position.x - dx / dist * back,
-                eatTarget.position.y - dy / dist * back,
-                eatTarget.heading.toDouble());
+                pose.position.x + outwardEatShiftIn * normal.getX(),
+                pose.position.y + outwardEatShiftIn * normal.getY(),
+                pose.heading.toDouble());
     }
 }
