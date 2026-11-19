@@ -63,7 +63,7 @@ public class RobotPosition {
     /** 当前球门的缓存值：在 init 与每帧 update 中刷新，getGoalPose 只读该缓存 */
     private Pose2d cachedGoalPose = HypParams.RedAudienceUp;
 
-    /** 球道计数器（对射光电门上升沿计数，reset 时清零），对外只做透传 */
+    /** 球道计数器（对射光电门双向边沿计数：吸球 +1 / 吐球 −1，reset 时清零），对外只做透传 */
     private BallCounter ballCounter;
 
     /** 球道光电门在机器人配置中的设备名 */
