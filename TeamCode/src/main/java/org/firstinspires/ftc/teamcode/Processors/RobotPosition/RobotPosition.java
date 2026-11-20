@@ -63,7 +63,7 @@ public class RobotPosition {
     /** 当前球门的缓存值：在 init 与每帧 update 中刷新，getGoalPose 只读该缓存 */
     private Pose2d cachedGoalPose = HypParams.RedAudienceUp;
 
-    /** 球道计数器（对射光电门上升沿计数，reset 时清零），对外只做透传 */
+    /** 球道计数器（对射光电门双向边沿计数：吸球 +1 / 吐球 −1，reset 时清零），对外只做透传 */
     private BallCounter ballCounter;
 
     /** 球道光电门在机器人配置中的设备名 */
@@ -156,8 +156,19 @@ public class RobotPosition {
         currentPose = pose;
     }
 
-    // 每帧调用：推进融合定位器并返回当前位姿
+    // 每帧调用：推进融合定位器并返回当前位姿（默认球流方向为吸球）
     public Pose2d update() {
+        return update(false);
+    }
+
+    /**
+     * 每帧调用：推进融合定位器并返回当前位姿。
+     *
+     * @param outflow 本帧球流方向：true = 吃球器反向吐球（球经球道入口光电门排出），
+     *                由上层（OpMode）按吃球器指令给出；false = 吸球 / 静止。
+     *                透传给下级 {@link BallCounter#update(boolean)}，吐球边沿会让计数减 1。
+     */
+    public Pose2d update(boolean outflow) {
         // 唯一推进点：每帧只调用一次，避免同一帧的视觉观测被重复计入 EKF
         // （MecanumDrive 的轨迹 / 转向 Action 内部已改为复用本帧结果）
         currentVelocity2d = drive.updatePoseEstimate();
@@ -189,10 +200,10 @@ public class RobotPosition {
         cachedGoalPose = goalPose(goalDown);
 
         currentPose = drive.localizer.getPose();
-        // 球道计数：本类每帧「更新」其下级 BallCounter（见球道计数架构图），
-        // 光电门采样只在这里发生一次，getBallCount() 只读缓存值
+        // 球道双向计数：本类每帧「更新」其下级 BallCounter（见球道计数架构图），
+        // 光电门采样只在这里发生一次，方向由上层输入透传，getBallCount() 只读缓存值
         if (ballCounter != null) {
-            ballCounter.update();
+            ballCounter.update(outflow);
         }
 
         return currentPose;
@@ -269,9 +280,9 @@ public class RobotPosition {
     public MT1Localizer.HiveState getHiveState(){return hiveState;}
     public double getOmega(){return currentVelocity2d.angVel;}
 
-    // ---- 球道计数透传（BallCounter：上升沿计数，reset 时清零） ----
+    // ---- 球道计数透传（BallCounter：吸球 +1 / 吐球 −1，reset 时清零） ----
 
-    /** @return 球道内累计小球个数（上升沿计数，resetBallCount 后重置为光路中的球数 0/1；无光电门时恒为 0） */
+    /** @return 球道内累计小球个数（吸球 +1 / 吐球 −1，resetBallCount 后重置为光路中的球数 0/1；无光电门时恒为 0） */
     public int getBallCount() {
         return ballCounter == null ? 0 : ballCounter.getCount();
     }

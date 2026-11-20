@@ -197,7 +197,14 @@ public abstract class TeleOpMainBase extends LinearOpMode {
                 RobotPosition.getInstance().setManualGoalDown(teamColor == TeamColor.BLUE);
             }
 
-            RobotPosition.getInstance().update();
+            // ======== 球道计数方向：吐球时小球经入口光电门排出，计数做减法 ========
+            // 发射供球（setGiveBall）优先于吐球，此时球流向炮台、不经过入口光电门，不按出球计数。
+            // 用上一帧的发射状态即可：方向只决定边沿计数的符号，一帧延迟无影响。
+            boolean feeding = autoAim
+                    ? (turret.isBigFiring() || turret.isSmallFiring())
+                    : (gamepad2.a && fireArmed);
+
+            RobotPosition.getInstance().update(!feeding && gamepad1.right_bumper);
 
             // ======== P1：底盘 ========
             // 自动瞄准按住 A 时持续刹车：stop 只登记请求，硬件统一下发在 chassis.update() 内；
