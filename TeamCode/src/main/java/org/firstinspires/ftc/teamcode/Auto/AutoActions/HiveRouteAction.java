@@ -54,6 +54,8 @@ public abstract class HiveRouteAction implements Action {
     private final boolean throughHive;
     private final Pose2d finalPose;
     private final Action trajectoryAction;
+    /** 目标发射区域序号；0 表示本 Action 不是「前往发射区域」类 */
+    private final int routeTargetAreaIndex;
 
     /** 集球器；为 {@code null} 时本 Action 只负责移动，不提前放铲 */
     private final Sweeper sweeper;
@@ -69,7 +71,7 @@ public abstract class HiveRouteAction implements Action {
      * @param finalPose  终点位姿（含目标航向）
      */
     protected HiveRouteAction(TeamColor teamColor, boolean throughHive, Pose2d finalPose) {
-        this(teamColor, throughHive, finalPose, null);
+        this(teamColor, throughHive, finalPose, null, null);
     }
 
     /**
@@ -80,14 +82,47 @@ public abstract class HiveRouteAction implements Action {
      */
     protected HiveRouteAction(TeamColor teamColor, boolean throughHive, Pose2d finalPose,
                               Sweeper sweeper) {
+        this(teamColor, throughHive, finalPose, sweeper, null);
+    }
+
+    /**
+     * 前往发射区域的构造方式：在路径的两个三等分点处插入「车头面向最近 Hive 端点」的检查点，
+     * 并在每个检查点用实时球门判断是否在抬升侧，必要时改道去另一个发射区域
+     * （见 {@link ShootAreaApproachAction}）。
+     *
+     * @param teamColor       队伍颜色
+     * @param throughHive     true=从 Hive 正下方通过；false=绕开 Hive
+     * @param finalPose       终点位姿（含目标航向）
+     * @param targetAreaIndex 目标发射区域序号（{@link #FIRST} / {@link #SECOND}）
+     * @param sweeper         集球器，可为 null
+     */
+    protected HiveRouteAction(TeamColor teamColor, boolean throughHive, Pose2d finalPose,
+                              int targetAreaIndex, Sweeper sweeper) {
+        this(teamColor, throughHive, finalPose, sweeper, Integer.valueOf(targetAreaIndex));
+    }
+
+    /**
+     * @param targetAreaIndex 为 null 时采用传统「单段轨迹直达终点」；
+     *                        非 null 时交由 {@link ShootAreaApproachAction} 执行带检查点的三段行驶
+     */
+    private HiveRouteAction(TeamColor teamColor, boolean throughHive, Pose2d finalPose,
+                            Sweeper sweeper, Integer targetAreaIndex) {
         this.teamColor = teamColor;
         this.throughHive = throughHive;
         this.finalPose = finalPose;
         this.sweeper = sweeper;
+        this.routeTargetAreaIndex = (targetAreaIndex == null) ? 0 : targetAreaIndex;
 
         MecanumDrive drive = RobotPosition.getInstance().getDrive();
         Pose2d start = RobotPosition.getInstance().getPose2d();
         List<Pose2d> waypoints = HiveRoutePlanner.waypoints(teamColor, start, finalPose, throughHive);
+
+        if (targetAreaIndex != null) {
+            // 前往发射区域：三段行驶 + 三等分点面向 Hive 的检查点 + 抬升侧判定 / 改道
+            this.trajectoryAction = new ShootAreaApproachAction(
+                    teamColor, start, waypoints, targetAreaIndex, throughHive);
+            return;
+        }
 
         // 末速度 = 底盘最大移速（PARAMS.maxWheelVel），使轨迹以最快速度结束，
         // 便于与后续动作（如 AutoAimAction）衔接时减少停车损失。
@@ -155,6 +190,11 @@ public abstract class HiveRouteAction implements Action {
     /** @return 本 Action 的队伍颜色 */
     public TeamColor teamColor() {
         return teamColor;
+    }
+
+    /** @return 目标发射区域序号（{@link #FIRST} / {@link #SECOND}）；0 表示不是「前往发射区域」类 */
+    public int routeTargetAreaIndex() {
+        return routeTargetAreaIndex;
     }
 
     // ==================== 子类共用的目标位姿计算 ====================

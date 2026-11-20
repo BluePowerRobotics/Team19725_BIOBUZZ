@@ -21,7 +21,7 @@ public class GoToOtherShootAreaViaHiveAction extends HiveRouteAction {
      * @param goal      预瞄准的单个球门目标点（与手动瞄准传入 Chassis 的目标点一致）
      */
     public GoToOtherShootAreaViaHiveAction(TeamColor teamColor, Pose2d goal) {
-        super(teamColor, true, otherShootAreaTargetPose(teamColor, goal));
+        super(teamColor, true, otherShootAreaTargetPose(teamColor, goal), otherShootAreaIndex(teamColor), null);
         this.targetAreaIndex = otherShootAreaIndex(teamColor);
     }
 

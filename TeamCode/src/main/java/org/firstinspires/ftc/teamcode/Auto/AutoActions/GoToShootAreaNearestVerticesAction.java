@@ -9,9 +9,10 @@ import com.acmerobotics.roadrunner.Pose2d;
 import org.firstinspires.ftc.teamcode.Parameter.HypParams;
 import org.firstinspires.ftc.teamcode.Parameter.TeamColor;
 import org.firstinspires.ftc.teamcode.Processors.RobotPosition.RobotPosition;
-import org.firstinspires.ftc.teamcode.RoadRunner.MecanumDrive;
 import org.firstinspires.ftc.teamcode.utility.Geometry.ConvexPolygon;
 import org.firstinspires.ftc.teamcode.utility.Vector2D;
+
+import java.util.Arrays;
 
 /**
  * 依次抵达两个发射区域中各自距离场地原点最近的顶点。
@@ -55,7 +56,6 @@ public class GoToShootAreaNearestVerticesAction implements Action {
      */
     public GoToShootAreaNearestVerticesAction(TeamColor teamColor, Pose2d goal) {
         RobotPosition robotPosition = RobotPosition.getInstance();
-        MecanumDrive drive = robotPosition.getDrive();
 
         ConvexPolygon firstArea = (teamColor == TeamColor.RED)
                 ? HypParams.ShootFirstAreaRed : HypParams.ShootFirstAreaBlue;
@@ -74,11 +74,11 @@ public class GoToShootAreaNearestVerticesAction implements Action {
         this.firstVertexPose = nearestVertexToOriginPose(nearestArea, goal);
         this.secondVertexPose = nearestVertexToOriginPose(otherArea, goal);
 
-        // 单个 actionBuilder 链：两个顶点依次作为途经点，段间速度连续、不中途停车
-        this.trajectoryAction = drive.actionBuilder(currentPose)
-                .strafeToLinearHeading(firstVertexPose.position, firstVertexPose.heading.toDouble())
-                .strafeToLinearHeading(secondVertexPose.position, secondVertexPose.heading.toDouble())
-                .build();
+        // 行驶中在路径两个三等分点处面向最近的 Hive 端点，并据实时球门判断是否在抬升侧：
+        // 目标取「第二个顶点」所在的发射区域，若该区域不在抬升侧则改道去另一个发射区域的最近点
+        int targetAreaIndex = firstNearest ? HiveRouteAction.SECOND : HiveRouteAction.FIRST;
+        this.trajectoryAction = new ShootAreaApproachAction(teamColor, currentPose,
+                Arrays.asList(firstVertexPose, secondVertexPose), targetAreaIndex, false);
     }
 
     @Override

@@ -52,12 +52,19 @@
 | `GoToOtherShootAreaViaHiveAction` | 经 Hive 正下方前往另一发射区域并预瞄球门 | `(TeamColor, Pose2d goal)` |
 | `GoToUnvisitedEatPointAvoidHiveAction` | 绕开 Hive（外侧）前往此前未访问的取球点 | `(TeamColor)` 或 `(TeamColor, Sweeper)` |
 | `GoToOtherShootAreaAvoidHiveAction` | 绕开 Hive（外侧）前往另一发射区域并预瞄球门 | `(TeamColor, Pose2d goal)` |
+| `GoToNearestShootAreaAvoidHiveAction` | 绕开 Hive（外侧）前往**最近**发射区域内离机器人最近的可发射点 | `(TeamColor, Pose2d goal)` 或 `(TeamColor, Pose2d goal, Sweeper)` |
+| `GoToNearestShootAreaViaHiveAction` | 经 Hive 正下方前往**最近**发射区域内离机器人最近的可发射点 | `(TeamColor, Pose2d goal)` 或 `(TeamColor, Pose2d goal, Sweeper)` |
 | `AutoAimAction` | 底盘不动，炮台自动瞄准并发射（Turret 自动扣扳机） | `(MecanumDrive, Turret)` |
 | `AutoTurretAimShootWithChassisAction` | 底盘主动转向球门辅助瞄准，炮台自动瞄准并发射 | `(MecanumDrive, Turret)` |
 | `EatAction` | 集球器以吃球速度运转指定时长后停转 | `(Sweeper)` 或 `(Sweeper, long durationMs)` |
 | `AdaptiveParkAction` | T-3s 检测整机是否接触场地边框，接触则开到安全位置停靠，否则原地停止 | `(MecanumDrive, ElapsedTime matchTime, long durationMs, long leadTimeMs)` |
 | `AutoCycleAction` | **保守版**：把「去取球点 → 吃球 → 去另一发射区 →（可选）瞄准」合成一个 Action（取球点仍停车） | `(TeamColor, Sweeper, Turret, Pose2d goal)` |
 | `ContinuousRouteAction` | **激进版**：去取球点 + 路过式吃球 + 去另一发射区，全程**单条轨迹不停车** | `(TeamColor, Sweeper, Turret, Pose2d goal)` |
+| `ShootAreaApproachAction` | 「前往发射区域」类 Action 的行驶内核：路径三等分点处面向最近一次有效判定的 Hive 侧 + 抬升侧判定 + 必要时改道 | `(TeamColor, Pose2d start, List<Pose2d> baseWaypoints, int targetAreaIndex, boolean replanThroughHive)` |
+
+> 所有 **前往发射区域** 的移动 Action（`GoToShootAreaAction`、`GoToShootAreaNearestVerticesAction`、
+> `GoToOtherShootArea{Avoid,Via}HiveAction`、`GoToNearestShootArea{Avoid,Via}HiveAction`）
+> 的行驶段都由 `ShootAreaApproachAction` 驱动，详见第 9.6 节。
 
 ---
 
@@ -187,6 +194,62 @@ new GoToShootAreaNearestVerticesAction(TeamColor.RED, HypParams.RedAudienceUp);
 **作用**：从机器人所在发射区域出发，**绕开 Hive**（外侧）前往**另一个发射区域**，其余同
 `GoToOtherShootAreaViaHiveAction`，仅路径模式不同。
 **构造**：`new GoToOtherShootAreaAvoidHiveAction(TeamColor.RED, HypParams.RedAudienceUp)`。
+
+## 9.5 GoToNearestShootAreaAvoidHiveAction / GoToNearestShootAreaViaHiveAction
+
+**作用**：前往**距离机器人最近的发射区域**，终点为该区域内距机器人最近的可发射点，
+航向指向调用方指定的单个球门（精确瞄准仍由后续 `AutoAimAction` 完成）。
+
+1. 「最近的发射区域」由 `HiveRouteAction.currentShootAreaIndex` 判定：机器人已在某区域内则取该区域，
+   否则比较到两个区域边界的最近距离、取近者——等价于 `GoToShootAreaAction` 里 `areaIndex` 的自动版；
+2. 终点 = `shootArea.NearestVectorFrom(当前位姿)` 得到的边界最近点（已在区域内时即为原地）；
+3. 两个类的唯一区别是 Hive 通行方式：
+   - `GoToNearestShootAreaAvoidHiveAction` → `throughHive = false`，沿矩形外侧车道绕行；
+   - `GoToNearestShootAreaViaHiveAction` → `throughHive = true`，从 Hive 正下方内车道通过。
+
+**构造**：`new GoToNearestShootAreaAvoidHiveAction(TeamColor.RED, goal)` /
+`new GoToNearestShootAreaViaHiveAction(TeamColor.RED, goal)`；
+可选第三参 `Sweeper`（传了才会提前放铲）。
+
+> ⚠️ 与 `GoToOtherShootArea*Action` 的区别：后者去的是**另一个**（通常是更远的）发射区，
+> 本组去的是**最近的**发射区。
+
+## 9.6 ShootAreaApproachAction（前往发射区域 · 三等分点检查点与抬升侧改道）
+
+**作用**：把一条既定的「前往发射区域」路径按**里程三等分**拆成三段执行，在两个三等分点处
+让底盘**边移动边把车头转向最近一次有效判定的 Hive 一侧**，并判断是否正在前往抬升侧；保证段间不停车
+（每段以 `MecanumDrive.PARAMS.maxWheelVel` 作为首尾速度）。
+
+**检查点航向**：面向**最近一次有效判定的 Hive 一侧**，<b>以 AudienceUp 侧为正例</b>——
+`RobotPosition.getGoalPose().position.x >= 0`（含未判定时的默认值）⇒ 面向 Hive 矩形的 `+x` 面
+（AudienceUp 侧抬升），否则面向 `-x` 面（AudienceDown 侧抬升）；
+瞄准点取该面上**距机器人最近**的点（`y` 夹到该面区间内），
+航向 = `atan2(aimY-y, faceX-x)`，由 `HiveRoutePlanner.hiveSideFacingPose` 生成。
+每个分段在构建分段轨迹时都会重算检查点航向，因此若第一段面向 Hive 时视觉刚更新了抬升侧，
+后两段会立即跟随新的侧别。位置仍在原路径上，**不改变路径几何**。
+
+**抬升侧判定**（在每个三等分点处实时执行）：
+
+1. `RobotPosition.getGoalPose().position.x > 0` ⇒ 场地 +x 侧抬升（AudienceUp），`< 0` ⇒ -x 侧（AudienceDown）；
+2. 取目标发射区域边界上距机器人最近点的 x 符号，与球门 x 符号**相同**即「正在前往抬升侧」；
+3. **是** → 继续沿原路径以最短时间前往目标发射位置（第二段 →第三段）；
+4. **不是** → 立即放弃剩余原路径，用 `HiveRoutePlanner.waypoints` 重新规划，
+   以最短时间前往**另一个发射区域**内距当前位置最近的可发射点（航向指向实时球门）。
+
+**「目标 / 另一个发射区域」的取法**（`targetAreaIndex`）：
+
+| Action | `targetAreaIndex` |
+|---|---|
+| `GoToShootAreaAction` | 调用方指定的 `areaIndex` |
+| `GoToShootAreaNearestVerticesAction` | 第二个顶点所在的区域（`firstNearest ? SECOND : FIRST`） |
+| `GoToOtherShootArea{Avoid,Via}HiveAction` | `otherShootAreaIndex` |
+| `GoToNearestShootArea{Avoid,Via}HiveAction` | `currentShootAreaIndex` |
+
+**构造**（一般不由 OpMode 直接使用）：
+`new ShootAreaApproachAction(team, currentPose, baseWaypoints, targetAreaIndex, replanThroughHive)`；
+其中 `baseWaypoints` 末项为终点位姿，`replanThroughHive` 决定改道时是否走 Hive 正下方。
+
+**遥测**：`ShootApproach leg`（当前段 1/2/3）、`ShootApproach diverted`（是否已改道）。
 
 ## 10. AutoAimAction（底盘不动 · 炮台自动瞄准与发射）
 
@@ -578,15 +641,77 @@ actionRunner.add(new ContinuousRouteAction(teamColor, sweeper, goal));  // 激�
 
 两者都只需在 `actionRunner` 空闲时投递即可，后续周期重复投递。
 
-## 自动阶段主程序（AutoRed / AutoBlue）
+## 自动阶段主程序（四组 × 红蓝，共 8 个 OpMode）
 
-两个 OpMode 使用同一套状态机，仅队伍颜色、起始位姿与预瞄准球门不同：
+8 个 OpMode 各自是完整的独立 `LinearOpMode`（私有 `AutoState` 枚举 + `switch` 状态机），
+只在两个维度上不同：**Hive 通行方式** 与 **瞄准时底盘是否参与转向**。
 
-| 项目 | AutoRed | AutoBlue |
-|------|---------|----------|
-| 队伍 | `TeamColor.RED` | `TeamColor.BLUE` |
-| 起始位姿 | `HypParams.startPoseRed` | `HypParams.startPoseBlue` |
-| 预瞄准球门 | `currentGoal()` → `RobotPosition.getGoalPose()` | 同（同一来源，内部按队伍颜色取红/蓝球门） |
+### 分组
+
+| 组 | Hive 通行 | 瞄准 | 红队 | 蓝队 |
+|----|-----------|------|------|------|
+| 1 | 绕开 Hive（外侧车道） | 底盘不动 · `AutoAimAction` | `AutoRed` | `AutoBlue` |
+| 2 | 经 Hive 正下方（内车道） | 底盘不动 · `AutoAimAction` | `AutoRedViaHive` | `AutoBlueViaHive` |
+| 3 | 绕开 Hive（外侧车道） | 底盘辅助转向 · `AutoTurretAimShootWithChassisAction` | `AutoRedChassisAim` | `AutoBlueChassisAim` |
+| 4 | 经 Hive 正下方（内车道） | 底盘辅助转向 · `AutoTurretAimShootWithChassisAction` | `AutoRedChassisAimViaHive` | `AutoBlueChassisAimViaHive` |
+
+| 项目 | 取值 |
+|------|------|
+| 队伍 | `TeamColor.RED` / `TeamColor.BLUE` |
+| 起始位姿 | `HypParams.startPoseRed` / `HypParams.startPoseBlue` |
+| 预瞄准球门 | `currentGoal()` → `RobotPosition.getGoalPose()`（八者同源） |
+
+### 状态机（8 个 OpMode 共用）
+
+```
+START_SHOOT    → 瞄准发射 Action，连打 START_SHOTS 发（底盘不动或底盘辅助转向）
+TO_EAT_POINT   → GoToUnvisitedEatPointAvoidHiveAction / ViaHiveAction（自动选最近未访问取球点）
+EATING         → EatAction
+TO_SHOOT_AREA  → GoToNearestShootAreaAvoidHiveAction / ViaHiveAction（自动选最近发射区；
+                 途中两个三等分点面向 Hive 侧检查，若不在抬升侧则改道另一个发射区，见第 9.6 节）
+AIM_SHOOT      → 瞄准发射 Action（1 发）
+CYCLE_END      → cyclesDone++；未满 CYCLES 回 TO_EAT_POINT，满则转 PARKING
+PARKING        → AdaptiveParkAction
+STOP
+```
+
+> 与旧版的三点差异：① 起点先瞄准发射 `START_SHOTS` 发；
+> ② 去发射区改用**最近**发射区（`GoToNearestShootArea*`），不再去「另一个」发射区；
+> ③ 循环 `CYCLES` 次后主动停靠，不再无限循环到时间耗尽。
+
+### Dashboard 可调参数
+
+| 参数 | 默认 | 含义 |
+|------|------|------|
+| `START_SHOTS` | 4 | 起点连续发射的发数（= 预载球数） |
+| `CYCLES` | 2 | 「取球 → 吃球 → 最近发射区（含途中改道）→ 瞄准发射」的循环次数 |
+
+两个字段都是 `public static int`，且类上有 `@Config`，可在 Dashboard 的 Config 页实时修改。
+
+> ⚠️ `AutoAimAction` 以「扳机下降沿」或超时结束，一次只保证一发。
+> 若实际预载不足 `START_SHOTS` 球，多出的发会各自空等到超时，建议按真实预载数设置。
+
+### 半区约定
+
+| 半区 | 几何 |
+|------|------|
+| 红队半区 | `y < 0` |
+| 蓝队半区 | `y > 0` |
+
+「非我方联盟半区」= 对方的半区（红队为 `y > 0`，蓝队为 `y < 0`）。
+各 OpMode 把它作为遥测项 `In Forbidden Half` 上报，**不在规划层做绕行**。
+
+> 按此约定，红队两个吃球点 `(24,-72)`、`(-72,-24)`、两个发射区域（`y ∈ [-30,-3]`）、
+> Hive 正下方矩形（`y ∈ [-25,-1]`）与 `HiveRoutePlanner` 的全部车道
+> （内侧 `y = -12.5`、外侧 `y = -39.7`）均落在 `y < 0`，属于红队本方半区，与「不走非我方联盟半区」一致；
+> 蓝队为中心对称（`y > 0`），同样一致。
+>
+> ⚠️ 例外：`HypParams.startPoseRed = (-41.3, 55)` 与 `StopPoseRed = (0, 24)` 落在 `y > 0`，
+> 蓝队的 `startPoseBlue = (-41.3, -55)` 与 `StopPoseBlue = (0, -24)` 落在 `y < 0`，
+> 按本约定属于各自队伍的非我方联盟半区。若起点/停靠点必须在己方半区，需核对 `HypParams` 中
+> 两者的 `y` 符号。
+
+### 预瞄准球门必须与炮台瞄准同源
 
 > ⚠️ **预瞄准球门必须与炮台瞄准同源**。`AutoAimAction` /
 > `AutoTurretAimShootWithChassisAction` 内部通过 `Turret.update(...)` 读取
@@ -596,47 +721,31 @@ actionRunner.add(new ContinuousRouteAction(teamColor, sweeper, goal));  // 激�
 > 若写死 `HypParams.RedAudienceUp`，当 HIVE 判定为 `AUDIENCE_DOWN` 时
 > 车头会朝向上侧球门、炮台需额外转约 180° 才能发射，白白损失周期时间。
 
-**状态机与动作循环**（动作队列空闲时投递下一段）：
+### 停靠的硬保障
 
-```
-TO_EAT_POINT   → GoToUnvisitedEatPointAvoidHiveAction（绕开 Hive 去未访问取球点）
-EATING         → EatAction
-TO_SHOOT_AREA  → GoToOtherShootAreaViaHiveAction（经 Hive 正下方去另一发射区）
-AIM_SHOOT      → AutoAimAction（底盘不动，炮台自动瞄准并发射）
-AIM_SHOOT 完成 → 回到 TO_EAT_POINT，持续循环
-PARKING        → AdaptiveParkAction
-STOP
-```
-
-> 状态机中的瞄准发射使用 {@link AutoAimAction}（底盘不动版）。
-> 若需要底盘旋转辅助的版本，改用下面的 {@link AutoRedChassisAim} / {@link AutoBlueChassisAim}。
-
-**停靠的硬保障**：主循环每帧计算 `remainingMs`；一旦
+主循环每帧计算 `remainingMs`；一旦
 `remainingMs <= PARK_TIME_THRESHOLD_MS` 且尚未投递过停靠动作，立即
 `actionRunner.clear()` 中断**正在执行**的任意 Action，再投递 `AdaptiveParkAction`，
 并用 `parkScheduled` 保证只投递一次。因此即使上一段长轨迹尚未跑完，T-3s 也一定会转入停靠。
+另外 `CYCLE_END` 跑满 `CYCLES` 次时也会立即转入同一段停靠流程。
 
-**盟友禁区守卫**：每帧查询 `AutoParams` 中当前时间窗生效的盟友活动区，整机轮廓一旦闯入，
+### 盟友禁区守卫
+
+每帧查询 `AutoParams` 中当前时间窗生效的盟友活动区，整机轮廓一旦闯入，
 立即清空队列并改投「开到最近安全位姿」的脱困动作，脱离后自动恢复状态机。
 
-**结束收尾**：`RobotStateStore.savePose(...)` 记录结束位姿，`sweeper.setStop()` +
-`turret.stop()` + `chassis.stop()` 确保底盘、集球器与炮台停稳。
+### 结束收尾
 
-## 自动阶段主程序（底盘旋转辅助版：AutoRedChassisAim / AutoBlueChassisAim）
+`RobotStateStore.savePose(...)` 记录结束位姿，`sweeper.setStop()` +
+`turret.stop()` + `chassis.stop()` + `chassis.update(0,0,0)` 确保底盘、集球器与炮台停稳。
 
-这两个 OpMode 是 {@link AutoRed} / {@link AutoBlue} 的**唯一变体**：状态机、取球、移动、
-停靠、盟友禁区守卫完全一致，仅 `AIM_SHOOT` 状态把 {@link AutoAimAction} 替换为
-{@link AutoTurretAimShootWithChassisAction}——底盘主动转向球门，使炮台需旋转角度最小。
+### 选型建议
 
-| 项目 | AutoRedChassisAim | AutoBlueChassisAim |
-|------|-------------------|--------------------|
-| 队伍 | `TeamColor.RED` | `TeamColor.BLUE` |
-| 瞄准发射 Action | `AutoTurretAimShootWithChassisAction` | 同左 |
-| 其余状态 | 与 `AutoRed` 一致 | 与 `AutoBlue` 一致 |
-
-**适用场景**：当炮台平转速度成为瞄准瓶颈时（如目标偏离车头角度大、炮台惯量大），
-底盘转向能把目标拉进炮台行程中心，缩短总瞄准时间。代价是底盘会有旋转动作，
-对场地占用与队友协同的要求更高。
+| 场景 | 推荐 |
+|------|------|
+| Hive 外侧车道空闲、追求稳定 | 第 1 / 3 组（`*AvoidHive`） |
+| 外侧车道被占、需要穿 Hive 正下方 | 第 2 / 4 组（`*ViaHive`） |
+| 炮台平转是瞄准瓶颈 | 第 3 / 4 组（`*ChassisAim*`） |
 
 ## 自动阶段主程序（组合 Action 循环版）
 

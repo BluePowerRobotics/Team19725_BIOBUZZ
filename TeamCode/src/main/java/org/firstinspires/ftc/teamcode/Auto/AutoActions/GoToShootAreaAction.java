@@ -9,9 +9,10 @@ import com.acmerobotics.roadrunner.Pose2d;
 import org.firstinspires.ftc.teamcode.Parameter.HypParams;
 import org.firstinspires.ftc.teamcode.Parameter.TeamColor;
 import org.firstinspires.ftc.teamcode.Processors.RobotPosition.RobotPosition;
-import org.firstinspires.ftc.teamcode.RoadRunner.MecanumDrive;
 import org.firstinspires.ftc.teamcode.utility.Geometry.ConvexPolygon;
 import org.firstinspires.ftc.teamcode.utility.Vector2D;
+
+import java.util.Collections;
 
 /**
  * 抵达指定发射区域内距离机器人最近的点（合并原第一 / 第二发射区域 Action）。
@@ -54,7 +55,6 @@ public class GoToShootAreaAction implements Action {
         }
         this.areaIndex = areaIndex;
 
-        MecanumDrive drive = RobotPosition.getInstance().getDrive();
         boolean isRed = (teamColor == TeamColor.RED);
         ConvexPolygon shootArea;
         if (areaIndex == FIRST) {
@@ -77,9 +77,10 @@ public class GoToShootAreaAction implements Action {
                 goal.position.x - targetX);
 
         this.targetPose = new Pose2d(targetX, targetY, heading);
-        this.trajectoryAction = drive.actionBuilder(currentPose)
-                .strafeToLinearHeading(targetPose.position, targetPose.heading.toDouble())
-                .build();
+        // 行驶中在路径两个三等分点处面向最近的 Hive 端点，并据实时球门判断是否在抬升侧，
+        // 必要时改道去另一个发射区域（见 ShootAreaApproachAction）
+        this.trajectoryAction = new ShootAreaApproachAction(teamColor, currentPose,
+                Collections.singletonList(targetPose), areaIndex, false);
     }
 
     @Override

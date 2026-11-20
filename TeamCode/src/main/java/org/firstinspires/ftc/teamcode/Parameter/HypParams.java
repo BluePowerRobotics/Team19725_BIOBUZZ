@@ -6,11 +6,11 @@ import com.acmerobotics.roadrunner.Pose2d;
 import org.firstinspires.ftc.teamcode.utility.Geometry.ConvexPolygon;
 import org.firstinspires.ftc.teamcode.utility.Vector2D;
 
-@Config
 /**
  * 全局超参数配置类
  * 用于集中管理机器人控制系统中的所有超参数，超参应为无需拟合的常量，如工程参数等
  */
+@Config
 //todo：添加球门位置、hive初始状态、hive高度阈值等超参
 public class HypParams {
     /**

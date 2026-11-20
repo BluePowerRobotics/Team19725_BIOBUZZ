@@ -1,6 +1,7 @@
 package org.firstinspires.ftc.teamcode.Auto.AutoOpModes;
 
 import com.acmerobotics.dashboard.FtcDashboard;
+import com.acmerobotics.dashboard.config.Config;
 import com.acmerobotics.dashboard.telemetry.MultipleTelemetry;
 import com.acmerobotics.roadrunner.Pose2d;
 import com.qualcomm.robotcore.eventloop.opmode.Autonomous;
@@ -10,7 +11,7 @@ import com.qualcomm.robotcore.util.ElapsedTime;
 import org.firstinspires.ftc.teamcode.Auto.AutoActions.AdaptiveParkAction;
 import org.firstinspires.ftc.teamcode.Auto.AutoActions.AutoAimAction;
 import org.firstinspires.ftc.teamcode.Auto.AutoActions.EatAction;
-import org.firstinspires.ftc.teamcode.Auto.AutoActions.GoToOtherShootAreaViaHiveAction;
+import org.firstinspires.ftc.teamcode.Auto.AutoActions.GoToNearestShootAreaAvoidHiveAction;
 import org.firstinspires.ftc.teamcode.Auto.AutoActions.GoToStopPose;
 import org.firstinspires.ftc.teamcode.Auto.AutoActions.GoToUnvisitedEatPointAvoidHiveAction;
 import org.firstinspires.ftc.teamcode.Controllers.Chassis.Chassis;
@@ -20,52 +21,58 @@ import org.firstinspires.ftc.teamcode.Parameter.AutoParams;
 import org.firstinspires.ftc.teamcode.Parameter.HypParams;
 import org.firstinspires.ftc.teamcode.Parameter.TeamColor;
 import org.firstinspires.ftc.teamcode.Processors.RobotPosition.RobotPosition;
-
 import org.firstinspires.ftc.teamcode.RoadRunner.MecanumDrive;
 import org.firstinspires.ftc.teamcode.utility.ActionRunner;
 import org.firstinspires.ftc.teamcode.utility.EatPointTracker;
 import org.firstinspires.ftc.teamcode.utility.RobotStateStore;
 
 /**
- * 蓝队自动阶段主程序。
+ * 蓝队自动阶段主程序 —— <b>第 1 组</b>（绕开 Hive · 底盘不动瞄准）。
  *
- * <p><b>动作循环</b>（动作队列空闲时自动投递下一段）：
+ * <p><b>动作序列</b>：
  * <pre>
- *   绕开 Hive 前往未访问取球点 → 吃球 → 经 Hive 正下方前往另一发射区域
- *   → 炮台自动瞄准并发射（底盘不动）→ 回到第一步 …
+ *   起点原地自动瞄准发射 × {@link #START_SHOTS}（满预载）
+ *     → 绕开 Hive 前往最近未访问取球点 → 吃球
+ *     → 前往最近发射区域（途中三等分点面向 Hive 侧检查，偏离抬升侧则改道）→ 原地自动瞄准发射
+ *     → 再循环一次 → 自适应停靠
  * </pre>
- * 蓝队的取球点、发射区域、Hive 矩形与禁线均为红队的中心对称版本，
+ *
+ * <p>蓝队的取球点、发射区域、Hive 矩形与禁线均为红队的中心对称版本，
  * 由各 Action 内部按 {@link TeamColor#BLUE} 自动换算。
  *
- * <p><b>自适应停靠</b>：剩余时间降至 {@link HypParams#PARK_TIME_THRESHOLD_MS}（3 s）时，
- * 立即清空当前动作队列，改投 {@link AdaptiveParkAction}——
- * 检测整机外接矩形是否接触场地边框：接触则开到「不接触」的位置并以此为本局停靠点
- * （停靠点随当时位姿变化，不是固定点）；不接触则原地停止。
+ * <p><b>非我方联盟半区</b>：蓝队 {@code y < 0} 视为禁入。全部途经点本身都在 {@code y > 0}，
+ * 本类只把是否越界上报到遥测。
  *
- * <p><b>盟友禁区守卫</b>：每帧查询 {@code AutoParams} 中当前时间窗生效的盟友活动区
- * （即我方禁止活动区），一旦整机轮廓闯入，立即清空动作队列并改投「开到最近安全位姿」
- * 的脱困动作；脱困期间暂停常规动作投递，脱离后自动恢复。
- *
- * <p>状态机：{@code TO_EAT_POINT → EATING → TO_SHOOT_AREA → AIM_SHOOT → TO_EAT_POINT … → PARKING → STOP}
+ * <p>状态机：{@code START_SHOOT → TO_EAT_POINT → EATING → TO_SHOOT_AREA → AIM_SHOOT → CYCLE_END → … → PARKING → STOP}
  */
+@Config
 @Autonomous(name = "AutoBlue", group = "Auto")
 public class AutoBlue extends LinearOpMode {
 
     /** 自动阶段状态机 */
     private enum AutoState {
+        /** 起点原地连续瞄准发射 */
+        START_SHOOT,
         /** 前往未访问取球点（绕开 Hive） */
         TO_EAT_POINT,
         /** 吃球 */
         EATING,
-        /** 经 Hive 正下方前往另一发射区域 */
+        /** 前往最近发射区域（途中三等分点检查抬升侧，必要时改道另一个发射区域） */
         TO_SHOOT_AREA,
-        /** 炮台自动瞄准并发射（底盘不动） */
+        /** 自动瞄准并发射（底盘不动） */
         AIM_SHOOT,
+        /** 一个循环结束，决定继续还是停靠 */
+        CYCLE_END,
         /** 自适应停靠 */
         PARKING,
         /** 结束 */
         STOP
     }
+
+    /** 起点连续发射的发数（等于预载球数），Dashboard 可实时调整 */
+    public static int START_SHOTS = 4;
+    /** 「取球 → 吃球 → 最近发射区 → 瞄准发射」的循环次数，Dashboard 可实时调整 */
+    public static int CYCLES = 2;
 
     private ActionRunner actionRunner;
     private MecanumDrive drive;
@@ -88,8 +95,14 @@ public class AutoBlue extends LinearOpMode {
         return RobotPosition.getInstance().getGoalPose();
     }
 
-    /** 当前状态，初始为「前往取球点」 */
-    private AutoState currentState = AutoState.TO_EAT_POINT;
+    /** 当前状态，初始为「起点连续发射」 */
+    private AutoState currentState = AutoState.START_SHOOT;
+
+    /** 起点已完成的发射数 */
+    private int shotsFired = 0;
+
+    /** 已完成的「取球-发射」循环数 */
+    private int cyclesDone = 0;
 
     /** 是否已投递自适应停靠动作（保证只投递一次） */
     private boolean parkScheduled = false;
@@ -111,6 +124,8 @@ public class AutoBlue extends LinearOpMode {
 
         telemetry.addData("Status", "Initialized");
         telemetry.addData("Team", teamColor);
+        telemetry.addData("Route", "avoid Hive");
+        telemetry.addData("Aim", "turret only (chassis still)");
         telemetry.update();
 
         waitForStart();
@@ -122,31 +137,19 @@ public class AutoBlue extends LinearOpMode {
         // 比赛计时从 START 按下后开始（自适应停靠共用同一个计时器）
         ElapsedTime matchTime = new ElapsedTime();
 
-        // 首个动作：绕开 Hive 前往此前未到达的取球点（构造时以当前融合位姿为起点）
-        actionRunner.add(new GoToUnvisitedEatPointAvoidHiveAction(teamColor, sweeper));
-
         while (opModeIsActive() && currentState != AutoState.STOP) {
-            // 更新位姿（每帧唯一一次推进定位器）；球道光电门采样也在这个 update 内完成
+            // 更新位姿（每帧唯一一次推进定位器）
             RobotPosition.getInstance().update();
 
-            // 已流逝时间与剩余时间（毫秒）
             long matchMs = (long) matchTime.milliseconds();
             long remainingMs = HypParams.AUTONOMOUS_DURATION_MS - matchMs;
 
             // ===== 规定时间前 3 秒：中断当前动作，转入自适应停靠 =====
             if (!parkScheduled && remainingMs <= HypParams.PARK_TIME_THRESHOLD_MS) {
-                actionRunner.clear();
-                actionRunner.add(new AdaptiveParkAction(
-                        drive, matchTime,
-                        HypParams.AUTONOMOUS_DURATION_MS,
-                        HypParams.PARK_TIME_THRESHOLD_MS));
-                parkScheduled = true;
-                currentState = AutoState.PARKING;
+                startParking(matchTime);
             }
 
             // ===== 盟友活动区（我方禁止活动区）守卫 =====
-            // 生效禁区由 AutoParams 按时间窗给出；整机轮廓一旦闯入，立即中断当前动作，
-            // 改投「开到最近安全位姿」的脱困动作，脱困期间不再投递常规动作。
             Pose2d pose = RobotPosition.getInstance().getPose2d();
             AutoParams.AllyZone conflict = parkScheduled || !AutoParams.useAllyZones
                     ? null
@@ -163,24 +166,42 @@ public class AutoBlue extends LinearOpMode {
             // ===== 动作队列空闲且未在脱困时，投递下一段动作 =====
             if (!actionRunner.isBusy() && !zoneEscapeActive) {
                 switch (currentState) {
+                    case START_SHOOT:
+                        if (shotsFired < START_SHOTS) {
+                            actionRunner.add(new AutoAimAction(drive, turret));
+                            shotsFired++;
+                        } else {
+                            currentState = AutoState.TO_EAT_POINT;
+                        }
+                        break;
+
                     case TO_EAT_POINT:
-                        actionRunner.add(new EatAction(sweeper));
+                        actionRunner.add(new GoToUnvisitedEatPointAvoidHiveAction(teamColor, sweeper));
                         currentState = AutoState.EATING;
                         break;
 
                     case EATING:
-                        actionRunner.add(new GoToOtherShootAreaViaHiveAction(teamColor, currentGoal()));
+                        actionRunner.add(new EatAction(sweeper));
                         currentState = AutoState.TO_SHOOT_AREA;
                         break;
 
                     case TO_SHOOT_AREA:
-                        actionRunner.add(new AutoAimAction(drive, turret));
+                        actionRunner.add(new GoToNearestShootAreaAvoidHiveAction(teamColor, currentGoal()));
                         currentState = AutoState.AIM_SHOOT;
                         break;
 
                     case AIM_SHOOT:
-                        actionRunner.add(new GoToUnvisitedEatPointAvoidHiveAction(teamColor, sweeper));
-                        currentState = AutoState.TO_EAT_POINT;
+                        actionRunner.add(new AutoAimAction(drive, turret));
+                        currentState = AutoState.CYCLE_END;
+                        break;
+
+                    case CYCLE_END:
+                        cyclesDone++;
+                        if (cyclesDone >= CYCLES) {
+                            startParking(matchTime);
+                        } else {
+                            currentState = AutoState.TO_EAT_POINT;
+                        }
                         break;
 
                     case PARKING:
@@ -196,9 +217,12 @@ public class AutoBlue extends LinearOpMode {
             actionRunner.update();
 
             telemetry.addData("State", currentState);
+            telemetry.addData("Shots fired", shotsFired + "/" + START_SHOTS);
+            telemetry.addData("Cycles done", cyclesDone + "/" + CYCLES);
             telemetry.addData("Remaining(ms)", remainingMs);
             telemetry.addData("Active Zones", AutoParams.activeZoneNames(teamColor, matchMs));
             telemetry.addData("In Forbidden", conflict != null);
+            telemetry.addData("In Forbidden Half", pose.position.y < 0);
             telemetry.addData("Escaping", zoneEscapeActive);
             telemetry.addData("x", pose.position.x);
             telemetry.addData("y", pose.position.y);
@@ -215,5 +239,16 @@ public class AutoBlue extends LinearOpMode {
         turret.stop();
         chassis.stop();
         chassis.update(0, 0, 0);
+    }
+
+    /** 清空动作队列并投递自适应停靠（只执行一次）。 */
+    private void startParking(ElapsedTime matchTime) {
+        actionRunner.clear();
+        actionRunner.add(new AdaptiveParkAction(
+                drive, matchTime,
+                HypParams.AUTONOMOUS_DURATION_MS,
+                HypParams.PARK_TIME_THRESHOLD_MS));
+        parkScheduled = true;
+        currentState = AutoState.PARKING;
     }
 }
