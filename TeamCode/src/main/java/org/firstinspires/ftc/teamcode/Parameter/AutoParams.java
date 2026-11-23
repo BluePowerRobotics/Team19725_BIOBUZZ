@@ -15,9 +15,9 @@ import java.util.List;
 /**
  * 自动阶段专用参数：<b>盟友活动区（我方禁止活动区）</b>的统一配置入口。
  *
- * <p><b>用途</b>：3～5 名队友在「我方区域」的某段时间内会占据一块场地。为避免抢位 / 相撞，
- * 把「队友活动范围 + 该范围生效的时间窗」登记为<b>我方在该时段内的禁止活动区域</b>。
- * 运动规划与动作投递前只需查询本类即可：
+ * <p><b>用途</b>：我方联盟只有 <b>1 名队友</b>；该队友在自动阶段会依次占据 <b>5 块</b>活动范围。
+ * 为避免抢位 / 相撞，把「每块活动范围 + 该范围生效的时间窗」登记为
+ * <b>我方在该时段内的禁止活动区域</b>。运动规划与动作投递前只需查询本类即可：
  * <ul>
  *   <li>{@link #activeZones(TeamColor, long)} —— 指定时刻生效的禁区列表；</li>
  *   <li>{@link #isForbidden(TeamColor, Pose2d, long)} —— 给定底盘位姿是否落入任一禁区；</li>
@@ -34,6 +34,20 @@ import java.util.List;
  *
  * <p><b>参数修改说明</b>：区域与时间窗在类加载时构建为不可变列表，
  * 修改后需重新运行 OpMode 生效（Dashboard 的 Config 页可改本类的标量参数）。
+ *
+ * <p><b>如何增加「队友活动范围」数量</b>（当前为 5 个）：
+ * <ol>
+ *   <li>在本类的「盟友活动区」区块内新增一个字段，例如
+ *       {@code public static AllyZone ALLY_ZONE_6 = new AllyZone("AllyRange6-XXX", startMs, endMs, new ConvexPolygon(...));}
+ *       （区域仍按<b>红队</b>视角、场地坐标填写）；</li>
+ *   <li>把新字段追加到 {@link #ALLY_ZONES_RED} 的 {@code Arrays.asList(...)} 参数末尾；</li>
+ *   <li>{@link #ALLY_ZONES_BLUE} 由 {@code mirror(ALLY_ZONES_RED)} 自动生成中心对称副本，<b>无需修改</b>；</li>
+ *   <li>查询（{@code activeZones} / {@code isForbidden} / {@code firstConflictingZone} / {@code nearestSafePose}）
+ *       全部遍历列表、不硬编码数量，<b>无需修改</b>；</li>
+ *   <li>唯一需要留意的是 {@link #nearestSafePose}：多处禁区相互重叠时最多迭代 4 次脱困，
+ *       若「同一时刻生效且彼此重叠」的禁区可能超过 4 个，请把该迭代上限调大。</li>
+ * </ol>
+ * 若需要<b>减少</b>数量：删除对应字段，并同步从 {@link #ALLY_ZONES_RED} 列表中移除即可。
  */
 @Config
 public class AutoParams {
@@ -59,47 +73,48 @@ public class AutoParams {
     public static double allyZoneEscapeMarginIn = 1.0;
 
     // ==================== 盟友活动区（红队视角，场地坐标 / 英寸） ====================
+    // 我方联盟仅 1 名队友，其自动阶段的 5 块活动范围逐一登记为 ALLY_ZONE_1～5（每块带独立时间窗）。
     // todo: 以下区域与时间窗均为占位默认值，必须按队友实际跑位与战术安排修改。
 
-    /** 队友 A：红队起始区附近（0～6 s） */
+    /** 队友活动范围 1：红队起始区附近（0～6 s） */
     public static AllyZone ALLY_ZONE_1 = new AllyZone(
-            "AllyA-StartCorner", 0, 6000,
+            "AllyRange1-StartCorner", 0, 6000,
             new ConvexPolygon(
                     new Vector2D(-70, 40),
                     new Vector2D(-40, 40),
                     new Vector2D(-40, 60),
                     new Vector2D(-70, 60)));
 
-    /** 队友 B：中路偏左（3～12 s） */
+    /** 队友活动范围 2：中路偏左（3～12 s） */
     public static AllyZone ALLY_ZONE_2 = new AllyZone(
-            "AllyB-MidLeft", 3000, 12000,
+            "AllyRange2-MidLeft", 3000, 12000,
             new ConvexPolygon(
                     new Vector2D(-20, 30),
                     new Vector2D(10, 30),
                     new Vector2D(10, 50),
                     new Vector2D(-20, 50)));
 
-    /** 队友 C：右侧起始区（0～9 s） */
+    /** 队友活动范围 3：右侧起始区（0～9 s） */
     public static AllyZone ALLY_ZONE_3 = new AllyZone(
-            "AllyC-RightStart", 0, 9000,
+            "AllyRange3-RightStart", 0, 9000,
             new ConvexPolygon(
                     new Vector2D(25, 35),
                     new Vector2D(55, 35),
                     new Vector2D(55, 55),
                     new Vector2D(25, 55)));
 
-    /** 队友 D：靠近 Hive 上方通道（8～20 s） */
+    /** 队友活动范围 4：靠近 Hive 上方通道（8～20 s） */
     public static AllyZone ALLY_ZONE_4 = new AllyZone(
-            "AllyD-NearHive", 8000, 20000,
+            "AllyRange4-NearHive", 8000, 20000,
             new ConvexPolygon(
                     new Vector2D(-15, 8),
                     new Vector2D(15, 8),
                     new Vector2D(15, 28),
                     new Vector2D(-15, 28)));
 
-    /** 队友 E：右下侧（12～30 s） */
+    /** 队友活动范围 5：右下侧（12～30 s） */
     public static AllyZone ALLY_ZONE_5 = new AllyZone(
-            "AllyE-RightLow", 12000, 30000,
+            "AllyRange5-RightLow", 12000, 30000,
             new ConvexPolygon(
                     new Vector2D(40, 5),
                     new Vector2D(68, 5),

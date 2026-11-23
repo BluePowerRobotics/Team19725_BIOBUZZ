@@ -1,4 +1,4 @@
-package org.firstinspires.ftc.teamcode.Auto.AutomaticCalibration;
+package org.firstinspires.ftc.teamcode.Auto.AutoFullFeatured.AutomaticCalibration;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;

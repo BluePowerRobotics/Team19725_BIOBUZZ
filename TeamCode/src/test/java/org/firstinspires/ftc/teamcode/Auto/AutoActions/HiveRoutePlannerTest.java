@@ -1,4 +1,4 @@
-package org.firstinspires.ftc.teamcode.Auto.AutoActions;
+package org.firstinspires.ftc.teamcode.Auto.AutoFullFeatured.AutoActions;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;

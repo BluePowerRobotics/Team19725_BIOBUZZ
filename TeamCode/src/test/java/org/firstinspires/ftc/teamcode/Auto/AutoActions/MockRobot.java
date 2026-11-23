@@ -1,4 +1,4 @@
-package org.firstinspires.ftc.teamcode.Auto.AutoActions;
+package org.firstinspires.ftc.teamcode.Auto.AutoFullFeatured.AutoActions;
 
 import com.acmerobotics.roadrunner.Action;
 import com.acmerobotics.roadrunner.Pose2d;

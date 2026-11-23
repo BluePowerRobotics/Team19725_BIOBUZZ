@@ -23,6 +23,7 @@ import org.firstinspires.ftc.teamcode.Parameter.TeamColor;
 import org.firstinspires.ftc.teamcode.Processors.RobotPosition.RobotPosition;
 import org.firstinspires.ftc.teamcode.RoadRunner.MecanumDrive;
 import org.firstinspires.ftc.teamcode.utility.ActionRunner;
+import org.firstinspires.ftc.teamcode.utility.AutoStartOptions;
 import org.firstinspires.ftc.teamcode.utility.EatPointTracker;
 import org.firstinspires.ftc.teamcode.utility.RobotStateStore;
 
@@ -126,7 +127,15 @@ public class AutoRedChassisAim extends LinearOpMode {
         telemetry.addData("Aim", "chassis assisted");
         telemetry.update();
 
+        // ===== waitForStart 之前：gamepad1 的 X 键切换「开局是否先发射」（默认 true）=====
+        AutoStartOptions.reset();
+        while (opModeInInit()) {
+            AutoStartOptions.update(gamepad1);
+            telemetry.addData("Start Shoot (gamepad1.X)", AutoStartOptions.startShoot());
+            telemetry.update();
+        }
         waitForStart();
+        final boolean startShoot = AutoStartOptions.startShoot();
 
         // ===== 自动阶段开始：清空上一局遗留状态 =====
         RobotStateStore.clear();
@@ -165,7 +174,7 @@ public class AutoRedChassisAim extends LinearOpMode {
             if (!actionRunner.isBusy() && !zoneEscapeActive) {
                 switch (currentState) {
                     case START_SHOOT:
-                        if (shotsFired < START_SHOTS) {
+                        if (startShoot && shotsFired < START_SHOTS) {
                             actionRunner.add(new AutoTurretAimShootWithChassisAction(drive, turret));
                             shotsFired++;
                         } else {

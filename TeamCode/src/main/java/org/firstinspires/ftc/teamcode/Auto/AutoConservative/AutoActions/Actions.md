@@ -1,11 +1,11 @@
 # AutoActions 使用说明
 
-> **本目录是 `Auto/AutoActions/` 的保守备份（`AutoConservative`）**：
+> **本目录是 `Auto/AutoFullFeatured/AutoActions/` 的保守备份（`AutoConservative`）**：
 > 其中**不含**「前往发射区域途中在路径三等分点检查抬升侧、必要时改道」的逻辑，
 > 所有「前往发射区域」的移动 Action 均为**单段轨迹直达终点**。
-> 原目录 `Auto/AutoActions/` 的代码不受影响。
+> 原目录 `Auto/AutoFullFeatured/AutoActions/` 的代码不受影响。
 
-本目录（`Auto/AutoActions/`）汇总自动阶段可入队执行的 Road Runner `Action`。
+本目录（`Auto/AutoConservative/AutoActions/`）汇总自动阶段可入队执行的 Road Runner `Action`。
 所有移动类 Action 的位姿来源统一为 **`AdaptiveEKFLocalizer` 融合定位系统**
 （Pinpoint 里程计 + Limelight MT1 视觉的自适应 EKF 融合位姿）：
 
@@ -31,7 +31,7 @@
    实现方式：**一段移动只用一个 `actionBuilder` 链**，中间点作为链式途经点
    （段间速度连续、不中途停车）；约束来源为 `MecanumDrive.Params` 五参数。
    原理、标定与验证方法见
-   [`RoadRunner/时间最优运动.md`](../../RoadRunner/时间最优运动.md)。
+   [`RoadRunner/时间最优运动.md`](../../../RoadRunner/时间最优运动.md)。
 7. **多段组合**（`SequentialAction` / `ParallelAction`）：可把一个完整周期合成单个 Action 入队，
    并用 `utility/DeferredAction` 包装移动段，使其仍在**执行时**才构造（避免用旧位姿规划）。
    但需注意：`MecanumDrive.actionBuilder` 的 `beginEndVel = 0`，Road Runner 的 `profile()`
@@ -802,11 +802,11 @@ ContinuousRouteAction.maxEatDurationMs = 1500;   // 最长吸球 1.5 s，到时�
 
 **文件**：`Parameter/AutoParams.java`（`@Config`，与 `HypParams` 同级）
 
-**作用**：登记 3～5 名队友在「我方区域」某段时间内占据的场地范围，
+**作用**：我方联盟只有 **1 名队友**，登记其在「我方区域」自动阶段依次占据的 **5 块**活动范围，
 作为**我方在该时段内的禁止活动区域**，避免自动阶段抢位 / 相撞。
 
 **关键语义**：每个禁区 = **一块凸多边形区域 + 一个时间窗**；
-时间窗之外该区域**不构成限制**，因此同一块场地在不同时段可被不同队友占用。
+时间窗之外该区域**不构成限制**，因此同一块场地在不同时段可被不同活动范围复用。
 
 ### 全局参数
 
@@ -822,17 +822,20 @@ ContinuousRouteAction.maxEatDurationMs = 1500;   // 最长吸球 1.5 s，到时�
 
 | 字段 | 区域名称 | 范围（红队） | 时间窗 |
 |------|----------|--------------|--------|
-| `ALLY_ZONE_1` | `AllyA-StartCorner` | `x∈[-70,-40]`、`y∈[40,60]` | 0 – 6000 ms |
-| `ALLY_ZONE_2` | `AllyB-MidLeft` | `x∈[-20,10]`、`y∈[30,50]` | 3000 – 12000 ms |
-| `ALLY_ZONE_3` | `AllyC-RightStart` | `x∈[25,55]`、`y∈[35,55]` | 0 – 9000 ms |
-| `ALLY_ZONE_4` | `AllyD-NearHive` | `x∈[-15,15]`、`y∈[8,28]` | 8000 – 20000 ms |
-| `ALLY_ZONE_5` | `AllyE-RightLow` | `x∈[40,68]`、`y∈[5,25]` | 12000 – 30000 ms |
+| `ALLY_ZONE_1` | `AllyRange1-StartCorner` | `x∈[-70,-40]`、`y∈[40,60]` | 0 – 6000 ms |
+| `ALLY_ZONE_2` | `AllyRange2-MidLeft` | `x∈[-20,10]`、`y∈[30,50]` | 3000 – 12000 ms |
+| `ALLY_ZONE_3` | `AllyRange3-RightStart` | `x∈[25,55]`、`y∈[35,55]` | 0 – 9000 ms |
+| `ALLY_ZONE_4` | `AllyRange4-NearHive` | `x∈[-15,15]`、`y∈[8,28]` | 8000 – 20000 ms |
+| `ALLY_ZONE_5` | `AllyRange5-RightLow` | `x∈[40,68]`、`y∈[5,25]` | 12000 – 30000 ms |
 | `ALLY_ZONES_RED` | — | 上述 5 个 | 各自时间窗 |
 | `ALLY_ZONES_BLUE` | — | 上述 5 个的原点中心对称 | 各自时间窗（不变） |
 
 > 以上坐标与时间窗均为**占位默认值**，必须按队友实际跑位与战术安排修改。
-> 需要 3 个或 4 个队友时，直接删减 `ALLY_ZONE_*` 并把 `ALLY_ZONES_RED` 的 `Arrays.asList(...)`
-> 改成对应数量即可。
+>
+> **增加范围数量**：新增 `ALLY_ZONE_6` 字段（红队视角坐标）→ 追加到 `ALLY_ZONES_RED` 的
+> `Arrays.asList(...)` 末尾即可；`ALLY_ZONES_BLUE` 与全部查询 / 判定 / 脱困逻辑自动适配，无需改动。
+> 唯一例外：`nearestSafePose` 对重叠禁区最多迭代 4 次脱困，若同一时刻生效且彼此重叠的禁区可能超过 4 个，
+> 需调大该迭代上限。**减少数量**：删除字段并同步从列表移除。
 
 **红蓝镜像**：`ALLY_ZONES_BLUE` 由 `area.inRelative(0, 0, Math.PI)` 生成，
 即 `(x, y) → (-x, -y)`，与 `HypParams` 中发射区域、Hive 矩形的红蓝约定一致。
@@ -932,7 +935,7 @@ AutoParams.useAllyZones = false;   // 等价于在 Dashboard 取消勾选
 ## 实机测试
 
 每个 Action 都有对应的实机测试 OpMode，位于
-`Auto/AutoOpModes/`（Driver Station 中组名 **ActionTest**）：
+`Auto/AutoConservative/AutoOpModes/`（Driver Station 中组名 **ActionTest**）：
 
 | OpMode | 被测 Action |
 |--------|------------|

@@ -3,6 +3,12 @@ package org.firstinspires.ftc.teamcode.Auto.AutoConservative.AutoOpModes;
 import com.acmerobotics.dashboard.FtcDashboard;
 import com.acmerobotics.dashboard.telemetry.MultipleTelemetry;
 import com.acmerobotics.roadrunner.Pose2d;
+import com.acmerobotics.dashboard.config.Config;
+import com.acmerobotics.roadrunner.Action;
+import com.acmerobotics.roadrunner.SequentialAction;
+import org.firstinspires.ftc.teamcode.Auto.AutoConservative.AutoActions.AutoAimAction;
+import java.util.ArrayList;
+import java.util.List;
 import com.qualcomm.robotcore.eventloop.opmode.Autonomous;
 import com.qualcomm.robotcore.eventloop.opmode.LinearOpMode;
 import com.qualcomm.robotcore.util.ElapsedTime;
@@ -19,6 +25,7 @@ import org.firstinspires.ftc.teamcode.Parameter.TeamColor;
 import org.firstinspires.ftc.teamcode.Processors.RobotPosition.RobotPosition;
 import org.firstinspires.ftc.teamcode.RoadRunner.MecanumDrive;
 import org.firstinspires.ftc.teamcode.utility.ActionRunner;
+import org.firstinspires.ftc.teamcode.utility.AutoStartOptions;
 import org.firstinspires.ftc.teamcode.utility.EatPointTracker;
 import org.firstinspires.ftc.teamcode.utility.RobotStateStore;
 
@@ -31,8 +38,11 @@ import org.firstinspires.ftc.teamcode.utility.RobotStateStore;
  *
  * <p>其余逻辑（自适应停靠、盟友禁区守卫、状态收尾）与 {@link AutoRed} 完全一致。
  */
+@Config
 @Autonomous(name = "ConservativeAutoRedContinuous", group = "Conservative")
 public class AutoRedContinuous extends LinearOpMode {
+    /** 开局发射的发数（等于预载球数），Dashboard 可实时调整 */
+    public static int START_SHOTS = 4;
 
     private enum AutoState {
         /** 执行一个完整周期（取球 + 吃球 + 移动 + 瞄准发射） */
@@ -80,13 +90,30 @@ public class AutoRedContinuous extends LinearOpMode {
         telemetry.addData("Mode", "Continuous (single trajectory)");
         telemetry.update();
 
+        // ===== waitForStart 之前：gamepad1 的 X 键切换「开局是否先发射」（默认 true）=====
+        AutoStartOptions.reset();
+        while (opModeInInit()) {
+            AutoStartOptions.update(gamepad1);
+            telemetry.addData("Start Shoot (gamepad1.X)", AutoStartOptions.startShoot());
+            telemetry.update();
+        }
         waitForStart();
+        final boolean startShoot = AutoStartOptions.startShoot();
 
         RobotStateStore.clear();
         EatPointTracker.clear();
         ElapsedTime matchTime = new ElapsedTime();
 
         // 首个周期：单条轨迹完成取球+吃球+移动+瞄准发射
+        // ===== 开局先发射 START_SHOTS 发（waitForStart 期间可用 gamepad1.X 关闭）=====
+        if (startShoot) {
+            List<Action> startShotActions = new ArrayList<>();
+            for (int i = 0; i < START_SHOTS; i++) {
+                startShotActions.add(new AutoAimAction(drive, turret));
+            }
+            actionRunner.add(new SequentialAction(startShotActions));
+        }
+
         actionRunner.add(new ContinuousRouteAction(teamColor, sweeper, turret, currentGoal()));
 
         while (opModeIsActive() && currentState != AutoState.STOP) {
