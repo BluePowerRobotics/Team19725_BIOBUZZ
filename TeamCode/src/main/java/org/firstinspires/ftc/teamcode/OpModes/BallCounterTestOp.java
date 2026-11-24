@@ -11,19 +11,22 @@ import org.firstinspires.ftc.teamcode.Processors.Sensors.BreakBeamSensor;
 /**
  * BallCounter 小球计数器测试程序（基于对射光电门，模拟信号接口）。
  *
- * <p>BallCounter 只负责两件事：<b>上升沿计数</b>（每来一个球 +1）
- * 与<b>被 reset 时清零</b>。满球停吸（BallMax）由 {@code Sweeper} 判断，
+ * <p>BallCounter 负责三件事：<b>吸球方向上升沿 +1</b>、<b>吐球方向下降沿 −1</b>
+ * 与<b>被 reset 时清零</b>。球流方向由本测试程序通过手柄 / Dashboard 给出
+ * （单颗光电门无法自行分辨进/出）。满球停吸（BallMax）由 {@code Sweeper} 判断，
  * 发射完毕清空由 {@code Turret} 调用 {@code RobotPosition.resetBallCount()}，
- * 本测试程序因此不再控制 intake 电机，也不判断计数方向，只验证计数与清零。
+ * 本测试程序因此不再控制 intake 电机。
  *
  * <p><b>手柄</b>
  * <ul>
+ *   <li>A（按住）→ 按吐球方向计数（球排出球道时 −1）</li>
  *   <li>B → 手动清空计数（等价于 reset）</li>
  * </ul>
  *
  * <p><b>实时显示</b>
  *   Ball Count       累计计数的小球个数（始终 ≥ 0）
- *   New Ball         本帧是否出现上升沿（1 = 是）
+ *   Flow             本帧球流方向（IN = 吸球 +1，OUT = 吐球 −1）
+ *   Count Changed    本帧计数是否变化（1 = 是）
  *   Blocked          光电门遮挡判定结果（1 = 遮挡，0 = 未遮挡）
  *   Raw Voltage      归一化原始电压（未滤波，= 伏特 / 3.3）
  *   Filtered Voltage 归一化滤波电压（EMA 输出）
@@ -33,13 +36,16 @@ import org.firstinspires.ftc.teamcode.Processors.Sensors.BreakBeamSensor;
  * <p><b>调参方式</b>：FTC Dashboard → Config → BallCounterTestOp
  *   threshold       归一化遮挡阈值 [0, 1]，滤波电压低于该值即判定为遮挡
  *   alpha           EMA 平滑系数 (0, 1]，越接近 1 响应越快、抗噪越差
+ *   outputDirection 置 true 时按吐球方向计数（与按住 A 等价）
  *   resetCounter    置 true 会清零一次计数并重置滤波器（仅上升沿生效）
  *
  * <p><b>验证步骤</b>
  * <ol>
  *   <li>让小球逐个挡过光电门，每个球应只使 Ball Count +1；</li>
  *   <li>让小球停在光电门中不动，Ball Count 应只 +1 且之后不再增加；</li>
- *   <li>任意时刻按 B 或勾选 resetCounter：Ball Count 立即清零。
+ *   <li>按住 A（或勾选 outputDirection），让球反向排出光电门，每个球应使 Ball Count −1；</li>
+ *   <li>计数为 0 时继续按出球方向过球，Ball Count 应保持 0（不出现负数）；</li>
+ *   <li>任意时刻按 B 或勾选 resetCounter：Ball Count 立即重置为光路中的球数（0 或 1）。
  * </ol>
  *
  * <p><b>注意</b>：BallCounter.update() 内部已调用 BreakBeamSensor.update()，
@@ -65,6 +71,9 @@ public class BallCounterTestOp extends LinearOpMode {
     /** EMA 平滑系数 (0, 1] */
     public static double alpha = 0.8;
 
+    /** 置 true 时按吐球方向计数（与按住 A 等价） */
+    public static boolean outputDirection = false;
+
     /** 置 true 时清零一次计数并重置滤波器（仅上升沿生效） */
     public static boolean resetCounter = false;
 
@@ -82,15 +91,18 @@ public class BallCounterTestOp extends LinearOpMode {
 
         telemetry.addData("Device", DEVICE_NAME);
         telemetry.addData("Status", "Initialized");
+        telemetry.addLine("A (hold): OUT direction (-1)");
         telemetry.addLine("B: clear count");
-        telemetry.addLine("Tune threshold/alpha/resetCounter in Dashboard");
+        telemetry.addLine("Tune threshold/alpha/outputDirection/resetCounter in Dashboard");
         telemetry.update();
 
         waitForStart();
 
         while (opModeIsActive()) {
-            // 采样 + 上升沿计数（功能 1）；B 键或 Dashboard 上升沿清零
-            boolean newBall = counter.update();
+            // 采样 + 双向计数：A 按住 / Dashboard 置位时按吐球方向（下降沿 −1）；
+            // B 键或 Dashboard 上升沿清零
+            boolean outflow = outputDirection || gamepad1.a;
+            boolean countChanged = counter.update(outflow);
             if (gamepad1.bWasPressed() || (resetCounter && !lastResetCounter)) {
                 counter.reset();
             }
@@ -102,7 +114,8 @@ public class BallCounterTestOp extends LinearOpMode {
 
             // ---- 遥测 ----
             telemetry.addData("Ball Count", counter.getCount());
-            telemetry.addData("New Ball", newBall ? 1 : 0);
+            telemetry.addData("Flow", outflow ? "OUT (-1)" : "IN (+1)");
+            telemetry.addData("Count Changed", countChanged ? 1 : 0);
             telemetry.addData("Blocked", beam.isBlocked() ? 1 : 0);
             telemetry.addData("Raw Voltage", "%.3f", beam.getRawVoltage());
             telemetry.addData("Filtered Voltage", "%.3f", beam.getVoltage());
