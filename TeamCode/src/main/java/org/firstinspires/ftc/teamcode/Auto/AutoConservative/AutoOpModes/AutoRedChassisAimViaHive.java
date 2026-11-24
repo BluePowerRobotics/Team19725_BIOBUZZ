@@ -14,6 +14,7 @@ import org.firstinspires.ftc.teamcode.Auto.AutoConservative.AutoActions.EatActio
 import org.firstinspires.ftc.teamcode.Auto.AutoConservative.AutoActions.GoToNearestShootAreaViaHiveAction;
 import org.firstinspires.ftc.teamcode.Auto.AutoConservative.AutoActions.GoToStopPose;
 import org.firstinspires.ftc.teamcode.Auto.AutoConservative.AutoActions.GoToUnvisitedEatPointViaHiveAction;
+import org.firstinspires.ftc.teamcode.Auto.AutoConservative.AutoActions.LiftedSideAimShootAction;
 import org.firstinspires.ftc.teamcode.Controllers.Chassis.Chassis;
 import org.firstinspires.ftc.teamcode.Controllers.Sweeper.Sweeper;
 import org.firstinspires.ftc.teamcode.Controllers.Turret.Turret;
@@ -198,7 +199,8 @@ public class AutoRedChassisAimViaHive extends LinearOpMode {
                         break;
 
                     case AIM_SHOOT:
-                        actionRunner.add(new AutoTurretAimShootWithChassisAction(drive, turret));
+                        // 到达发射区后先检查抬升侧：不在抬升侧则改去另一发射区域再瞄准发射
+                        actionRunner.add(new LiftedSideAimShootAction(teamColor, drive, turret, true, true));
                         currentState = AutoState.CYCLE_END;
                         break;
 

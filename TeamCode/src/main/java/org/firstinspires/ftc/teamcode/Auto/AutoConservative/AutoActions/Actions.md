@@ -12,8 +12,9 @@
 - 构造时通过 `RobotPosition.getInstance().getPose2d()` 取起点位姿（轨迹在构造时刻固化）；
 - 执行时轨迹跟随内部持续调用融合定位器推进；
 - `AutoAimAction` 每帧直接读 `AdaptiveEKFLocalizer.getPose()`；
-- 组合类 Action（`AutoCycleAction` / `ContinuousRouteAction`）把移动段交给
-  `utility/DeferredAction` 延迟构造，保证仍以**执行时的真实位姿**规划。
+- 组合类 Action（`AutoCycleAction` / `ContinuousRouteAction`）在**首次 `run()` 时**才构造
+  `SequentialAction` 并规划轨迹（`AutoCycleAction` 的移动段经 `utility/DeferredAction` 包装），
+  保证仍以**执行时的真实位姿**规划。
 
 ## 通用约定
 
@@ -37,7 +38,7 @@
    但需注意：`MecanumDrive.actionBuilder` 的 `beginEndVel = 0`，Road Runner 的 `profile()`
    用同一个值同时作为**起点与终点速度**，因此**每一份 `build()` 出来的轨迹必然以 v=0 结束**——
    任何 Action 组合器都无法消除两条独立轨迹之间的物理停车。
-   「周期组合」见第 13 节，「单条轨迹不停车」见第 14 节。
+   「周期组合」见第 13 / 14 节——两者都是「到点停车吃球」，区别只在投递粒度。
 8. **铲子提前放下**：前往取球点的移动 Action（`GoToUnvisitedEatPoint*` / `GoToEatPointAction` /
    `GoToNearestEatPointAction` / `ContinuousRouteAction`）接收 `Sweeper`，每帧用
    「剩余直线距离 ÷ 线速度」估算 ETA，当 ETA ≤ `HiveRouteAction.shovelLeadMs`
@@ -61,10 +62,11 @@
 | `GoToNearestShootAreaViaHiveAction` | 经 Hive 正下方前往**最近**发射区域内离机器人最近的可发射点 | `(TeamColor, Pose2d goal)` 或 `(TeamColor, Pose2d goal, Sweeper)` |
 | `AutoAimAction` | 底盘不动，炮台自动瞄准并发射（Turret 自动扣扳机） | `(MecanumDrive, Turret)` |
 | `AutoTurretAimShootWithChassisAction` | 底盘主动转向球门辅助瞄准，炮台自动瞄准并发射 | `(MecanumDrive, Turret)` |
-| `EatAction` | 集球器以吃球速度运转指定时长后停转 | `(Sweeper)` 或 `(Sweeper, long durationMs)` |
+| `LiftedSideAimShootAction` | 到达发射区后先判断抬升侧：在抬升侧则瞄准发射；否则先去另一发射区域最近点再瞄准发射 | `(TeamColor, MecanumDrive, Turret, boolean chassisAim, boolean throughHive)` |
+| `EatAction` | 底盘原地不动（每帧驱动归零），集球器吃球（默认 2.5 s）后停转 | `(Sweeper)` 或 `(Sweeper, long durationMs)` |
 | `AdaptiveParkAction` | T-3s 检测整机是否接触场地边框，接触则开到安全位置停靠，否则原地停止 | `(MecanumDrive, ElapsedTime matchTime, long durationMs, long leadTimeMs)` |
 | `AutoCycleAction` | **保守版**：把「去取球点 → 吃球 → 去另一发射区 →（可选）瞄准」合成一个 Action（取球点仍停车） | `(TeamColor, Sweeper, Turret, Pose2d goal)` |
-| `ContinuousRouteAction` | **激进版**：去取球点 + 路过式吃球 + 去另一发射区，全程**单条轨迹不停车** | `(TeamColor, Sweeper, Turret, Pose2d goal)` |
+| `ContinuousRouteAction` | **合成版**：轨迹1（起点→取球点，绕开 Hive）→ 停车吃球 → 轨迹2（取球点→另一发射区）→（可选）瞄准；**两段轨迹之间停车** | `(TeamColor, Sweeper, Turret, Pose2d goal)` |
 
 > 保守备份中，所有 **前往发射区域** 的移动 Action（`GoToShootAreaAction`、`GoToShootAreaNearestVerticesAction`、
 > `GoToOtherShootArea{Avoid,Via}HiveAction`、`GoToNearestShootArea{Avoid,Via}HiveAction`）
@@ -276,22 +278,43 @@ new GoToShootAreaNearestVerticesAction(TeamColor.RED, HypParams.RedAudienceUp);
 
 **构造**：`new AutoTurretAimShootWithChassisAction(drive, turret)`。
 
+## 10.7 LiftedSideAimShootAction（抬升侧检查后再瞄准发射）
+
+**作用**：替换状态机 `AIM_SHOOT` 阶段与周期 Action 末尾的纯瞄准动作。首次 `run()` 时按
+**当时的实时位姿与实时球门**判断：
+
+1. `HiveRouteAction.currentShootAreaIndex` 得出机器人所在发射区域（`FIRST` / `SECOND`）；
+2. **在抬升侧**（该区域边界上距机器人最近点的 x 符号与 `RobotPosition.getGoalPose().position.x`
+   符号相同）→ 直接执行瞄准发射；
+3. **不在抬升侧** → 用 `HiveRoutePlanner.waypoints` 规划一段到**另一个**发射区域内
+   距当前位置最近可发射点的轨迹（航向指向实时球门），到位后再瞄准发射。
+
+**构造**：`new LiftedSideAimShootAction(teamColor, drive, turret, chassisAim, throughHive)`；
+`chassisAim = false` 用 `AutoAimAction`（底盘不动），`true` 用
+`AutoTurretAimShootWithChassisAction`（底盘辅助转向）；`throughHive` 与所在程序的
+Hive 通行风格保持一致（8 个 OpMode 中 `*ViaHive` 传 `true`，其余传 `false`）。
+
+遥测键：`LiftedAim area`（所在区域）、`LiftedAim onLiftedSide`（是否在抬升侧）、
+`LiftedAim divertToArea`（改道目标区域，仅在改道时出现）。
+
 ## 11. EatAction
 
-**作用**：每帧 `sweeper.setEat()` + `sweeper.update()`（Sweeper 每帧自动归零目标，
+**作用**：**底盘原地不动**——每帧先
+`drive.setDrivePowers(new PoseVelocity2d(new Vector2d(0, 0), 0))` 把驱动归零，
+再 `sweeper.setEat()` + `sweeper.update()`（Sweeper 每帧自动归零目标，
 必须每帧重新置位），持续到时后 `setStop()` 并结束。
 
-**铲子**：首次 `run()` 时自动调用 `sweeper.setShovelDown()` 兜底——
-即使移动 Action 没有提前放铲，吃球时铲子也一定处于放下位置。
+**铲子**：首次 `run()` **无条件** `sweeper.setShovelDown()`——EatAction 必传 `Sweeper`，
+因此吃球开始时铲子一定处于放下位置。
 
-**Dashboard 可调参数**：`eatDurationMs`（默认 2000 ms，待实机标定）；
+**Dashboard 可调参数**：`eatDurationMs`（默认 2500 ms = 2.5 s，可实时调整）；
 吃球速度 `Sweeper.EatVel`（默认 700 tick/s）在 `Sweeper` 类中调整。
 
 **构造**：
 ```java
 Sweeper sweeper = new Sweeper(hardwareMap, telemetry);
-new EatAction(sweeper);                       // 用 eatDurationMs 默认时长
-new EatAction(sweeper, 1500);                 // 指定时长
+new EatAction(sweeper);                       // 用 eatDurationMs 默认时长（2.5 s）
+new EatAction(sweeper, 1500);                 // 指定吃球时长
 ```
 
 ## 12. AdaptiveParkAction（自适应停靠）
@@ -372,7 +395,7 @@ actionRunner.add(new AdaptiveParkAction(
 
 ```
 GoToUnvisitedEatPointAvoidHiveAction → EatAction
-  → GoToOtherShootAreaViaHiveAction →（可选）AutoAimAction
+  → GoToOtherShootAreaViaHiveAction →（可选）LiftedSideAimShootAction
 ```
 
 取球点仍是终点，车会**停稳后**再吃球——与现主程序状态机语义一致，只是把「逐段投递」变成「一次投递」。
@@ -392,7 +415,7 @@ List<Action> steps = new ArrayList<>();
 steps.add(new DeferredAction(() -> new GoToUnvisitedEatPointAvoidHiveAction(teamColor, sweeper)));
 steps.add(new EatAction(sweeper));
 steps.add(new DeferredAction(() -> new GoToOtherShootAreaViaHiveAction(teamColor, goal)));
-if (includeAim) steps.add(new AutoAimAction(drive, turret));
+if (includeAim) steps.add(new LiftedSideAimShootAction(teamColor, drive, turret, false, true));
 return new SequentialAction(steps);
 ```
 
@@ -400,7 +423,7 @@ return new SequentialAction(steps);
 
 | 参数 | 默认值 | 含义 |
 |------|--------|------|
-| `includeAim` | `true` | 是否在周期末尾追加 `AutoAimAction` |
+| `includeAim` | `true` | 是否在周期末尾追加 `LiftedSideAimShootAction`（内部先查抬升侧） |
 
 **构造 / 接入**：
 
@@ -409,76 +432,62 @@ actionRunner.add(new AutoCycleAction(teamColor, sweeper, turret, HypParams.BlueA
 ```
 
 **注意**：本 Action 只能消除调度空档，**不能**消除轨迹之间的减速到零（吃球段与移动段仍是独立轨迹）。
-需要全程不停车请用第 14 节。
+第 14 节的 `ContinuousRouteAction` 同样是「到点停车吃球」，两者的区别只是投递粒度。
 
 **状态**：尚未接入 `AutoRed` / `AutoBlue`，主程序仍按原状态机逐段投递。
 
-## 14. ContinuousRouteAction（激进版：单条轨迹不停车）
+## 14. ContinuousRouteAction（合成版：轨迹1 → 停车吃球 → 轨迹2 → 可选瞄准）
 
-**作用**：把「前往取球点 + 路过式吃球 + 前往另一发射区域」合成一个 Action，
-且整条路线**只有一份 `TrajectoryActionBuilder` 链**：途经点按速度/加速度约束通过，只在最末端停车。
+**作用**：把「前往取球点 + **停车吃球** + 前往另一发射区域 +（可选）瞄准发射」合成**一个** Action，
+内部由 `SequentialAction` 依次串联：轨迹 1 → `EatAction` → `markVisited` → 轨迹 2 →（可选）`LiftedSideAimShootAction`。
+**两段轨迹之间必然停车吃球**。类别名仍为 `ContinuousRouteAction`，但已不再是「单条轨迹不停车」。
 
-**为什么必须是一条 builder 链**：
+**两段轨迹与停车**：
 
-`MecanumDrive.actionBuilder(Pose2d)` 传入 `beginEndVel = 0.0`，而 Road Runner 的 `profile()` 用同一个值
-同时作为**起点与终点速度**——因此每一份 `build()` 出来的轨迹必然以 `v = 0` 结束。
-`SequentialAction` / `ParallelAction` 都改变不了这一点；只有把全部途经点串进同一条链，
-才会共用一条时间最优 profile。
-
-> ℹ️ `MecanumDrive.actionBuilder` 另有重载 `actionBuilder(Pose2d, double beginEndVel)`，
-> 可指定首尾速度。`HiveRouteAction` 即调用 `actionBuilder(start, PARAMS.maxWheelVel)`，
-> 使轨迹以**底盘最大移速结束**（末速度 = `maxWheelVel`），减少与后续动作衔接时的停车损失。
-> 注意 `beginEndVel` 同时是起点速度假设：机器人实际静止时控制器会以最大加速度追赶，
-> 前段跟踪误差略大但不会失控。
+`MecanumDrive.actionBuilder(start, beginEndVel)` 的 `beginEndVel` 在 Road Runner 的 `profile()` 中
+同时作为**起点与终点速度**。本类两段轨迹都用 `actionBuilder(start, PARAMS.maxWheelVel)` 构建，
+但每一份 `build()` 仍是独立轨迹，中间还夹着 `EatAction`（每帧驱动归零）——
+因此到点停车是**设计行为**，任何 `SequentialAction` / `ParallelAction` 组合都无法消除。
 
 **路线构成**：
 
 ```
-start → leg1 途经点（绕开 Hive） → 原吸球点（开始吸球） → 现吸球点（沿外法线外移 3 in） → leg2 途经点（经 Hive 正下方） → 发射区
+start → leg1 途经点（绕开 Hive） → 取球点（intake 对准）【停车吃球 → markVisited】
+      → leg2 途经点（secondLegThroughHive ? 经 Hive 正下方 : 绕外侧） → 发射区 →（可选）LiftedSideAimShootAction
 ```
 
-- **原吸球点**：intake 恰好对准原取球点的底盘中心位姿，作为**开始吸球的初始位置**；
-- **现吸球点**：原吸球点沿**场地边框外法线**平移 `outwardEatShiftIn`（默认 3 in）。
-  外法线取 `|x|` 与 `|y|` 中更接近边界的那一轴、符号与该坐标一致
-  （红队 `(24,-72)→(0,-1)`、`(-72,-24)→(-1,0)`；蓝队为其中心对称）；
-- 两个吸球点都作为**途经点**而非终点，经过时不停车；
-- leg1 / leg2 途经点分别由 `HiveRoutePlanner.waypoints(..., throughHive=false / true)` 生成，
-  几何约束同第 6~9 节；
-- 到达后自动 `EatPointTracker.markVisited(eatIndex)`。
+- **取球点**：`HiveRouteAction.unvisitedEatPointTargetPose` 给出的底盘中心位姿（intake 恰好对准取球点）；
+- **去程**：固定 `throughHive = false`，由 `HiveRoutePlanner.waypoints` 生成绕开 Hive 的外侧车道；
+- **回程**：由 `secondLegThroughHive` 决定是否经 Hive 正下方，几何约束同第 6~9 节；
+- **访问标记**：吃球结束之后才 `EatPointTracker.markVisited(eatIndex)`（不再在贴近取球点时提前标记）。
 
-**吸球如何与移动并行**：
+**吃球段**：
 
-到达**原吸球点**时用 `builder.afterDisp(0.0, eatSeq)` 注册标记。Road Runner 构建时会把它包成：
+`EatAction` 每帧先把底盘驱动归零、再 `setEat()` + `update()`，因此吃球期间**底盘原地不动**；
+默认吃 `eatDurationMs`（2500 ms）后 `setStop()` 并返回 false。吃球结束后才经
+`InstantAction(() -> EatPointTracker.markVisited(eatIndex))` 标记该取球点已访问。
 
-```
-ParallelAction(轨迹 Action, SequentialAction(SleepAction(触发时间), eatSeq))
-```
-
-即吸球与轨迹跟随**并行执行**，轨迹不等待吸球。随后机器人沿垂直边框方向向外移动
-`outwardEatShiftIn` 到现吸球点，全程边移动边吸球。`eatSeq` 直接复用 `EatAction`
-（每帧 `setEat()` + `update()`；因为 `Sweeper.update()` 每帧会把目标速度归零，
-一次性 `InstantAction` 无效）。
-
-吸球最长 `maxEatDurationMs`（默认 1200 ms），到时立即 `setStop()`，
-**即使尚未到达现吸球点**——因此吸球全程不需要底盘静止。
+**铲子**：`run()` 每帧用 `HiveRouteAction.shovelDue(eatTargetPose)` 估算 ETA，
+剩余时间 ≤ `HiveRouteAction.shovelLeadMs`（默认 1000 ms）时提前 `setShovelDown()`；
+`EatAction` 首次 `run()` 还会无条件再放一次。
 
 **必须知道的代价**：
 
 | 现象 | 原因 | 规避 |
 |------|------|------|
-| 车已停在发射区，Action 仍未结束 | `ParallelAction` 需**两个子项都结束**；吸球时长 > 剩余轨迹时间 | `maxEatDurationMs` 设为约等于「原吸球点到路线结束」的行驶时间 |
-| 吸球不充分 | 3 in 的外移段很短，超时即停 | 增大 `maxEatDurationMs` 或 `outwardEatShiftIn`；也可改回保守版 |
-| 吃球触发提前/滞后 | `afterDisp` 实际是 `SleepAction(profile.inverse(disp))` 的**墙钟计时**，按**规划时间**触发而非实际位移；打滑、被顶、电压低时偏差明显 | 需精确时改为「每帧读实际位姿，距原吸球点 ≤ 容差才启动」的自定义 Action |
-| 行驶中吃球 | 前提是集球器能在行驶中把球吃进去 | 必须静止对准才能进球时，请用第 13 节保守版 |
+| 单周期变长 | 两段轨迹之间必然停车吃球（默认 2.5 s） | 按实际进球效果下调 `EatAction.eatDurationMs`，或选择更短的返程车道 |
+| 段间两次加减速 | 轨迹 1 与轨迹 2 是两份独立的 `build()`，各自以 v=0 结束 | 属设计行为，Action 组合无法消除 |
+| 取球点被重复选择 | 访问标记在吃球**结束**后才写入 | 若中途被 `actionRunner.clear()` 打断，该点不会被标记，下一周期可能再次前往 |
+| 空跑一个取球点 | `unvisitedEatPointIndex` 按「最近的未访问点」选择 | 两个点都已访问时会退回最近者，属预期行为 |
 
 **Dashboard 可调参数**：
 
 | 参数 | 默认值 | 含义 |
 |------|--------|------|
-| `outwardEatShiftIn` | 3.0 | 现吸球点相对原吸球点沿场地边框外法线的平移距离 (in) |
-| `maxEatDurationMs` | 1200 | 最长吸球时间 (ms)，到时即停，即使未到现吸球点 |
 | `secondLegThroughHive` | `true` | 第二段是否经 Hive 正下方（`false` 为绕外侧） |
-| `includeAim` | `true` | 路线末尾是否追加 `AutoAimAction` |
+| `includeAim` | `true` | 路线末尾是否追加 `LiftedSideAimShootAction`（内部先查抬升侧） |
+
+> 吃球时长不在本类：改 `EatAction.eatDurationMs`（默认 2500 ms = 2.5 s，Dashboard 可调）。
 
 **构造 / 接入**：
 
@@ -490,9 +499,9 @@ actionRunner.add(new ContinuousRouteAction(teamColor, sweeper, turret,
 
 **状态**：已接入 `AutoRedContinuous` / `AutoBlueContinuous`（见「自动阶段主程序（组合 Action 循环版）」）。
 
-## 15. 铲子与吸球策略（提前放铲 / 吸球外移）
+## 15. 铲子与吃球策略（提前放铲 / 到点停车吃球）
 
-本节汇总本版对「吸球」的两项改动：**铲子提前放下** 与 **`ContinuousRouteAction` 的吸球点外移**。
+本节汇总与吃球相关的两项机制：**铲子提前放下** 与 **吃球时底盘锁死（到点停车吃球）**。
 
 ### 15.1 铲子提前放下
 
@@ -522,7 +531,7 @@ boolean due = remaining / v <= HiveRouteAction.shovelLeadMs / 1000.0; // 默认 
 | `GoToUnvisitedEatPointAvoidHiveAction` | 同上 | 需传 `Sweeper` |
 | `GoToEatPointAction` | 指定取球点中心位姿 | 需传 `Sweeper` |
 | `GoToNearestEatPointAction` | 自动选中的取球点中心位姿 | 需传 `Sweeper` |
-| `ContinuousRouteAction` | **原吸球点**（吸球起始点） | 内部自带 `Sweeper` |
+| `ContinuousRouteAction` | 取球点底盘中心位姿（轨迹 1 终点） | 内部自带 `Sweeper` |
 | `EatAction` | —— | 首次 `run()` 无条件 `setShovelDown()` 兜底 |
 | `GoToOtherShootArea*` | —— | 去发射区，无 `Sweeper`、不放铲 |
 
@@ -536,58 +545,42 @@ boolean due = remaining / v <= HiveRouteAction.shovelLeadMs / 1000.0; // 默认 
 > 若实机发现放铲偏晚，把 `shovelLeadMs` 调到 1300~1500 ms；
 > 若太早（铲子刮地、影响穿过 Hive），调到 700~800 ms。
 
-### 15.2 ContinuousRouteAction 吸球点外移
+### 15.2 ContinuousRouteAction 的到点停车吃球
 
-**为什么**：原实现把取球点当途经点，机器人在边界处略过——intake 只与球接触很短一段，
-吸球不充分；改成停车对准又浪费时间。本版改为「在原吸球点开始吸，然后向外平移 3 in
-继续吸」，全程不停车。
+**为什么**：本类最初把吃球与轨迹并行（`afterDisp` 触发、边移动边吸），实测难以保证进球，
+因此改为**到点停车吃**：轨迹 1 把 intake 送到取球点 → `EatAction`（每帧驱动归零，默认 2.5 s）
+→ `markVisited` → 轨迹 2 前往另一发射区。
 
-**几何**：
-
-```
-原吸球点 P（intake 对准取球点，车头朝外法线）
-   ↓ 沿场地边框外法线 n 平移 outwardEatShiftIn（默认 3 in）
-现吸球点 P' = P + 3 in · n
-```
-
-外法线 `n` 的取法（`eatShiftNormal`）：比较 `|x|` 与 `|y|`，取更接近边界的那一轴，
-符号与该坐标符号一致：
-
-| 队伍 | 原取球点 | `n` | 现吸球点 |
-|------|---------|-----|---------|
-| 红 | `(24,-72)` | `(0,-1)` | `(24,-75)` |
-| 红 | `(-72,-24)` | `(-1,0)` | `(-75,-24)` |
-| 蓝 | `(-24,72)` | `(0,+1)` | `(-24,75)` |
-| 蓝 | `(72,24)` | `(+1,0)` | `(75,24)` |
-
-**轨迹**（单条 builder 链）：
+**时序**：
 
 ```
-start → leg1 途经点（绕开 Hive） → 原吸球点【afterDisp(0, eatSeq) 启动吸球】
-      → 现吸球点（外移 3 in） → leg2 途经点（经 Hive 正下方） → 发射区
+轨迹1：start → 绕开 Hive 的途经点 → 取球点（intake 对准）
+吃球：EatAction 停车吃 2.5 s（底盘驱动每帧归零）→ markVisited
+轨迹2：取球点 →（经 Hive 正下方 / 绕外侧，由 secondLegThroughHive 决定）→ 发射区
+（可选）LiftedSideAimShootAction（先查抬升侧，必要时改道另一发射区）
 ```
 
-**限时吸球**：`maxEatDurationMs`（默认 1200 ms）。到时立即 `setStop()`，
-**即使尚未到达现吸球点**——因此吸球全程不需要底盘静止，也不会因吸球拖住轨迹。
+**代价**：两段轨迹之间必然多出约 2.5 s 的静止吃球时间，以及两次 v=0 的加减速；
+换来的是对齐质量与进球稳定性。
 
 **参数**：
 
 | 参数 | 默认 | 单位 | 含义 |
 |------|------|------|------|
-| `outwardEatShiftIn` | 3.0 | in | 现吸球点相对原吸球点的外移距离 |
-| `maxEatDurationMs` | 1200 | ms | 最长吸球时间，到时即停 |
+| `EatAction.eatDurationMs` | 2500 | ms | 停车吃球时长（Dashboard 可调） |
+| `secondLegThroughHive` | `true` | — | 第二段是否经 Hive 正下方 |
+| `includeAim` | `true` | — | 末尾是否追加 `LiftedSideAimShootAction` |
 
 **调参建议**：
 
-- 吸球不足 → 增大 `maxEatDurationMs`（先试 1500 ms），或把 `outwardEatShiftIn` 加到 4~5 in；
-- 车到发射区后仍等待 → `maxEatDurationMs` 偏长，按「原吸球点 → 发射区」实测行驶时间下调；
-- 外移后贴到边框 → 现吸球点在 `±75 in` 属于**设计意图**（intake 伸出边界取球），
-  但注意底盘中心不要越过 `HypParams.fieldHalfSizeIn`（72 in）。
+- 进球不足 → 增大 `EatAction.eatDurationMs`（先试 3000 ms），并确认铲子已在到位前放下；
+- 周期偏长 → 缩短 `EatAction.eatDurationMs`，或把 `secondLegThroughHive` 切到更短的一侧；
+- 取球点被重复前往 → 访问标记现在由吃球段结束后写入，若中途被 `actionRunner.clear()` 打断则不会记账。
 
 ### 15.3 其他 Action 保持不变
 
-除 `ContinuousRouteAction` 为「边移动边吸」外，其余吃球流程仍为
-**移动到位 → 停车 → `EatAction` 静止吸球**，只在移动段新增了提前放铲。
+`AutoCycleAction` 与逐段状态机的吃球流程同样是
+**移动到位 → 停车 → `EatAction` 静止吃球**，与 15.2 一致；区别仅在于「合成一个 Action 投递」还是「逐段投递」。
 
 ## 典型串联顺序
 
@@ -595,6 +588,7 @@ start → leg1 途经点（绕开 Hive） → 原吸球点【afterDisp(0, eatSeq
 GoToShootAreaAction → AutoAimAction →（发射）
 GoToEatPointAction / GoToNearestEatPointAction → EatAction
 GoToOtherShootAreaViaHiveAction / GoToOtherShootAreaAvoidHiveAction → AutoAimAction →（发射）
+GoToNearestShootArea{Avoid,Via}HiveAction → LiftedSideAimShootAction →（发射，必要时先改道另一发射区）
 GoToUnvisitedEatPointViaHiveAction / GoToUnvisitedEatPointAvoidHiveAction → EatAction
 剩余时间 ≤ PARK_TIME_THRESHOLD_MS → ActionRunner.clear() + AdaptiveParkAction
 ```
@@ -602,8 +596,8 @@ GoToUnvisitedEatPointViaHiveAction / GoToUnvisitedEatPointAvoidHiveAction → Ea
 **整周期组合（可选，见 13 / 14 节）**：
 
 ```java
-actionRunner.add(new AutoCycleAction(teamColor, sweeper, goal));        // 保守版：取球点停车吃球
-actionRunner.add(new ContinuousRouteAction(teamColor, sweeper, goal));  // 激进版：单条轨迹不停车
+actionRunner.add(new AutoCycleAction(teamColor, sweeper, turret, goal));        // 保守版：逐段用 DeferredAction，取球点停车吃球
+actionRunner.add(new ContinuousRouteAction(teamColor, sweeper, turret, goal));  // 合成版：轨迹1 → 停车吃球 → 轨迹2
 ```
 
 两者都只需在 `actionRunner` 空闲时投递即可，后续周期重复投递。
@@ -617,10 +611,10 @@ actionRunner.add(new ContinuousRouteAction(teamColor, sweeper, goal));  // 激�
 
 | 组 | Hive 通行 | 瞄准 | 红队 | 蓝队 |
 |----|-----------|------|------|------|
-| 1 | 绕开 Hive（外侧车道） | 底盘不动 · `AutoAimAction` | `AutoRed` | `AutoBlue` |
-| 2 | 经 Hive 正下方（内车道） | 底盘不动 · `AutoAimAction` | `AutoRedViaHive` | `AutoBlueViaHive` |
-| 3 | 绕开 Hive（外侧车道） | 底盘辅助转向 · `AutoTurretAimShootWithChassisAction` | `AutoRedChassisAim` | `AutoBlueChassisAim` |
-| 4 | 经 Hive 正下方（内车道） | 底盘辅助转向 · `AutoTurretAimShootWithChassisAction` | `AutoRedChassisAimViaHive` | `AutoBlueChassisAimViaHive` |
+| 1 | 绕开 Hive（外侧车道） | 底盘不动 · `LiftedSideAimShootAction`（内用 `AutoAimAction`） | `AutoRed` | `AutoBlue` |
+| 2 | 经 Hive 正下方（内车道） | 底盘不动 · `LiftedSideAimShootAction`（内用 `AutoAimAction`） | `AutoRedViaHive` | `AutoBlueViaHive` |
+| 3 | 绕开 Hive（外侧车道） | 底盘辅助转向 · `LiftedSideAimShootAction`（内用 `AutoTurretAimShootWithChassisAction`） | `AutoRedChassisAim` | `AutoBlueChassisAim` |
+| 4 | 经 Hive 正下方（内车道） | 底盘辅助转向 · `LiftedSideAimShootAction`（内用 `AutoTurretAimShootWithChassisAction`） | `AutoRedChassisAimViaHive` | `AutoBlueChassisAimViaHive` |
 
 | 项目 | 取值 |
 |------|------|
@@ -635,7 +629,7 @@ START_SHOOT    → 瞄准发射 Action，连打 START_SHOTS 发（底盘不动�
 TO_EAT_POINT   → GoToUnvisitedEatPointAvoidHiveAction / ViaHiveAction（自动选最近未访问取球点）
 EATING         → EatAction
 TO_SHOOT_AREA  → GoToNearestShootAreaAvoidHiveAction / ViaHiveAction（自动选最近发射区，单段直达）
-AIM_SHOOT      → 瞄准发射 Action（1 发）
+AIM_SHOOT      → LiftedSideAimShootAction（先查抬升侧；不在则改道另一发射区再瞄准发射 1 发）
 CYCLE_END      → cyclesDone++；未满 CYCLES 回 TO_EAT_POINT，满则转 PARKING
 PARKING        → AdaptiveParkAction
 STOP
@@ -644,6 +638,9 @@ STOP
 > 与旧版的三点差异：① 起点先瞄准发射 `START_SHOTS` 发；
 > ② 去发射区改用**最近**发射区（`GoToNearestShootArea*`），不再去「另一个」发射区；
 > ③ 循环 `CYCLES` 次后主动停靠，不再无限循环到时间耗尽。
+
+> 另：`AIM_SHOOT` 使用 `LiftedSideAimShootAction` —— 到位后先查是否在抬升侧，
+> **不在**则自动改道另一发射区域最近可发射点，再自动瞄准发射（见 10.7）。
 
 ### Dashboard 可调参数
 
@@ -725,7 +722,7 @@ STOP
 |--------|------|-------------|------|
 | `AutoRedCycle` | 红 | {@link AutoCycleAction} | 保守版：取球点停车吃球，消除段间 1 帧调度空档 |
 | `AutoBlueCycle` | 蓝 | {@link AutoCycleAction} | 同上 |
-| `AutoRedContinuous` | 红 | {@link ContinuousRouteAction} | 激进版：全程单条轨迹，途经点不停车，路过式吃球 |
+| `AutoRedContinuous` | 红 | {@link ContinuousRouteAction} | 合成版：轨迹1 → 停车吃球 → 轨迹2 →（可选）`LiftedSideAimShootAction` |
 | `AutoBlueContinuous` | 蓝 | {@link ContinuousRouteAction} | 同上 |
 
 ### 状态机（4 个 OpMode 共用）
@@ -747,20 +744,18 @@ STOP
 
 | 参数 | 默认值 | 含义 |
 |------|--------|------|
-| `includeAim` | `true` | 是否在周期末尾追加 `AutoAimAction` |
+| `includeAim` | `true` | 是否在周期末尾追加 `LiftedSideAimShootAction`（内部先查抬升侧） |
 
 **ContinuousRouteAction 构造**：`new ContinuousRouteAction(teamColor, sweeper, turret, goal)`
 
 | 参数 | 默认值 | 单位 | 含义 |
 |------|--------|------|------|
-| `outwardEatShiftIn` | 3.0 | in | 现吸球点相对原吸球点沿场地边框外法线的平移距离 |
-| `maxEatDurationMs` | 1200 | ms | 最长吸球时间，到时即停（即使未到现吸球点） |
 | `secondLegThroughHive` | `true` | — | 第二段是否经 Hive 正下方（`false`=绕外侧） |
-| `includeAim` | `true` | — | 路线末尾是否追加 `AutoAimAction` |
+| `includeAim` | `true` | — | 路线末尾是否追加 `LiftedSideAimShootAction` |
 
-> ⚠️ `maxEatDurationMs` 必须与剩余轨迹时间匹配：若吸球时长明显长于「原吸球点 → 发射区」
-> 的行驶时间，轨迹跑完后 `ParallelAction` 仍会等吸球结束——车已停在发射区但整段
-> Action 未结束，会推迟下一周期。建议先测单周期耗时再回填此值。
+> ⚠️ 吃球时长由 `EatAction.eatDurationMs`（默认 2500 ms）控制，不在本类；
+> 两段轨迹之间是**停车吃球**而非行驶中吃球，估算单周期耗时请按
+> 「轨迹1 + 2.5 s + 轨迹2 +（可选）瞄准」累加。
 
 ### 用法示例
 
@@ -770,7 +765,7 @@ STOP
 // 保守版（取球点停车吃球，最稳妥）
 actionRunner.add(new AutoCycleAction(teamColor, sweeper, turret, goal));
 
-// 激进版（单条轨迹不停车，最快）
+// 合成版（轨迹1 → 停车吃球 → 轨迹2 → 可选瞄准）
 actionRunner.add(new ContinuousRouteAction(teamColor, sweeper, turret, goal));
 ```
 
@@ -780,19 +775,19 @@ actionRunner.add(new ContinuousRouteAction(teamColor, sweeper, turret, goal));
 AutoCycleAction.includeAim = false;        // 或 ContinuousRouteAction.includeAim = false
 ```
 
-**调整吸球策略**（外移更远、吸更久）：
+**调整吃球时长 / 返程车道**（Dashboard Config 页）：
 
 ```java
-ContinuousRouteAction.outwardEatShiftIn = 4.0;   // 从原吸球点再向外 4 in
-ContinuousRouteAction.maxEatDurationMs = 1500;   // 最长吸球 1.5 s，到时即停
+EatAction.eatDurationMs = 3000;                      // 停车吃球 3 s
+ContinuousRouteAction.secondLegThroughHive = false;  // 返程改走外侧车道
 ```
 
 ### 选型建议
 
 | 场景 | 推荐 OpMode |
 |------|-------------|
-| 集球器必须静止对准才能进球 | `AutoRedCycle` / `AutoBlueCycle` |
-| 集球器可行驶中吸球、追求最快周期 | `AutoRedContinuous` / `AutoBlueContinuous` |
+| 想逐段投递、便于观察每个 Action | `AutoRedCycle` / `AutoBlueCycle` |
+| 希望整个周期一次入队、减少调度空档 | `AutoRedContinuous` / `AutoBlueContinuous` |
 | 不确定 / 首次联调 | 先 `Cycle`，稳定后再试 `Continuous` |
 
 所有周期 Action 都在**首次 `run()` 时**以当时真实位姿规划轨迹，因此可直接入队，

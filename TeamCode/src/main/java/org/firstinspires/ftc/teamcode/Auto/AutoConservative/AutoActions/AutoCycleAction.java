@@ -104,7 +104,8 @@ public class AutoCycleAction implements Action {
 
         if (includeAim) {
             MecanumDrive drive = RobotPosition.getInstance().getDrive();
-            steps.add(new AutoAimAction(drive, turret));
+            // 到达发射区后先检查抬升侧：不在抬升侧则自动改去另一发射区域再瞄准发射
+            steps.add(new LiftedSideAimShootAction(teamColor, drive, turret, false, true));
         }
 
         return new SequentialAction(steps);
