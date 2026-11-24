@@ -63,6 +63,7 @@ public class TeleOpRed extends LinearOpMode {
         telemetry.addData("A", "Reset Pose to " + (teamColor == TeamColor.BLUE ? "Blue" : "Red") + " ResetPose");
         telemetry.addData("Left Bumper", "Sweeper Eat");
         telemetry.addData("Right Bumper", "Sweeper Output");
+        telemetry.addData("B", "Eject extra balls");
         telemetry.addData("--- P2 Controls ---", "");
         telemetry.addData("P2 A", "Clear Ball Count");
         telemetry.update();
@@ -73,7 +74,16 @@ public class TeleOpRed extends LinearOpMode {
             // ======== 球道 / 集球器指令（先设模式，再更新状态） ========
             // 球道计数方向通过 setBallCounterMode 单独设置，不作为 update 的输入参数；
             // 先设模式可保证本帧 RobotPosition.update() 使用正确的计数方向。
-            if (gamepad1.left_bumper) {
+
+            // B：吐球 —— 把多余、可能影响发射或机构运行的球反向排出（定时自动结束）
+            if (gamepad1.bWasPressed()) {
+                sweeper.setEject();
+            }
+
+            if (sweeper.isEjecting()) {
+                // 吐球期间球被排出球道，计数按出球方向递减，保持计数与实际一致
+                RobotPosition.getInstance().setBallCounterMode(BallCounter.MODE_OUTPUT);
+            } else if (gamepad1.left_bumper) {
                 sweeper.setEat();
                 RobotPosition.getInstance().setBallCounterMode(BallCounter.MODE_INTAKE);
             } else if (gamepad1.right_bumper) {
@@ -129,6 +139,8 @@ public class TeleOpRed extends LinearOpMode {
             telemetry.addData("useNoHeadMode", chassis.getUseNoHeadMode());
             telemetry.addData("Ball Count", "%d / %d",
                     RobotPosition.getInstance().getBallCount(), Sweeper.BallMax);
+            telemetry.addData("Ejecting", "%s (%.2f s left)",
+                    sweeper.isEjecting(), sweeper.getEjectRemainingSec());
 
             // 位姿信息
             telemetry.addData("Pose X", "%.2f in", RobotPosition.getInstance().getX());

@@ -16,6 +16,7 @@ public class SweeperTester extends LinearOpMode {
         sweeper = new Sweeper(hardwareMap, telemetry);
         sweeper.setStop();
         telemetry.addLine("A: Eat | B: GiveArtifact | Y: Output | X: Stop");
+        telemetry.addLine("Right Bumper: Eject (timed)");
         telemetry.addLine("Dpad Up: Shovel Up | Dpad Down: Shovel Down");
         telemetry.update();
         waitForStart();
@@ -37,10 +38,17 @@ public class SweeperTester extends LinearOpMode {
             } else if (gamepad1.dpadDownWasPressed()) {
                 sweeper.setShovelDown();
             }
-            
+
+            // 吐球：定时反向排出多余的球（优先于本帧吸球/送球命令）
+            if (gamepad1.rightBumperWasPressed()) {
+                sweeper.setEject();
+            }
+
             sweeper.update();
             sweeper.setTelemetry();
             telemetry.addData("Shovel Pos", "%.3f", sweeper.getShovelPosition());
+            telemetry.addData("Ejecting", "%s (%.2f s left)",
+                    sweeper.isEjecting(), sweeper.getEjectRemainingSec());
             telemetry.update();
         }
     }

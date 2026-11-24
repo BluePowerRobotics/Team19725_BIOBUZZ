@@ -61,6 +61,23 @@ public class Sweeper {
      */
     private boolean eatCommanded = false;
 
+    // ==================== 吐球（Ball Eject，原独立模块合并于此） ====================
+
+    /** 吐球时的目标转速 (tick/s，负值表示反向排出) */
+    public static int EjectVel = -800;
+
+    /** 单次吐球持续时间 (秒)，到时自动停止，防止长时间反转 */
+    public static double EjectDurationSec = 0.8;
+
+    /** 是否处于吐球状态（吐球期间优先级高于吸球/送球） */
+    private boolean ejecting = false;
+
+    /** 本次吐球的起始时刻（秒），由单调时钟提供 */
+    private double ejectStartTimeSec = 0;
+
+    /** 最近一次推进计算出的吐球剩余时间（秒） */
+    private double ejectRemainingSec = 0;
+
     /** 最近一次 update() 采到的功率，供读取与遥测复用 */
     private double cachedPower = 0;
     /** 最近一次 update() 采到的转速 (tick/s)，供读取与遥测复用 */
@@ -120,9 +137,11 @@ public class Sweeper {
         eatCommanded = false;
     }
 
+    /** 停止集球器：目标速度归零，并取消正在进行的吐球 */
     public void setStop() {
         targetVelocity = 0;
         eatCommanded = false;
+        stopEject();
     }
 
     /**
@@ -132,6 +151,65 @@ public class Sweeper {
     public void setTargetVelocity(int velocity) {
         targetVelocity = velocity;
         eatCommanded = false;
+    }
+
+    /**
+     * 开始吐球：把球道内多余的、可能影响发射或机构运行的球反向排出。
+     * 单次持续 {@link #EjectDurationSec} 秒后自动结束，期间覆盖吸球/送球命令。
+     */
+    public void setEject() {
+        setEject(now());
+    }
+
+    /**
+     * 指定起始时刻触发吐球（包内可见，便于单元测试注入时间）。
+     *
+     * @param nowSec 单调时间（秒）
+     */
+    void setEject(double nowSec) {
+        ejecting = true;
+        ejectStartTimeSec = nowSec;
+        ejectRemainingSec = EjectDurationSec;
+    }
+
+    /** 立即停止吐球（提前结束） */
+    public void stopEject() {
+        ejecting = false;
+        ejectRemainingSec = 0;
+    }
+
+    /** @return 当前是否正在吐球 */
+    public boolean isEjecting() {
+        return ejecting;
+    }
+
+    /** @return 吐球剩余时间 (秒)，非吐球状态为 0 */
+    public double getEjectRemainingSec() {
+        return ejecting ? ejectRemainingSec : 0;
+    }
+
+    /**
+     * 每帧推进一次吐球计时；到达 {@link #EjectDurationSec} 自动结束。
+     *
+     * @param nowSec 单调时间（秒）
+     * @return 本帧是否仍在吐球
+     */
+    boolean updateEject(double nowSec) {
+        if (!ejecting) {
+            return false;
+        }
+        double elapsed = nowSec - ejectStartTimeSec;
+        if (elapsed >= EjectDurationSec) {
+            stopEject();
+            return false;
+        }
+        ejectRemainingSec = EjectDurationSec - elapsed;
+        return true;
+    }
+
+    /** @return 单调时钟（秒），供吐球计时使用 */
+    private static double now() {
+        return System.nanoTime() / 1e9;
     }
 
     /** 铲子抬起（切换到抬起角度） */
@@ -145,21 +223,30 @@ public class Sweeper {
     }
 
     public void update() {
-        // 满球保护：球道计数由 RobotPosition 每帧更新，本类只读取其状态（不重复推进计数）。
-        // 按命令来源区分两种满球场景：
-        //   1. setEat（吸球）满球 → 停止吸球，避免超出容量；
-        //   2. setGiveArtifact（送球）满球 → 必须放行，否则炮台无法把球送出去完成发射。
-        // 出球（负速）与通用速度指令同样不受该上限拦截。
-        RobotPosition robotPosition = RobotPosition.getInstanceOrNull();
-        boolean ballLaneFull = robotPosition != null
-                && robotPosition.getBallCount() >= BallMax;
-        if (ballLaneFull && eatCommanded) {
-            targetVelocity = 0;
+        // ---- 吐球优先：推进吐球计时，吐球期间强制反向排出，覆盖本帧吸球/送球命令 ----
+        boolean ejectingThisFrame = updateEject(now());
+
+        int appliedVelocity;
+        if (ejectingThisFrame) {
+            appliedVelocity = EjectVel;
+        } else {
+            // 满球保护：球道计数由 RobotPosition 每帧更新，本类只读取其状态（不重复推进计数）。
+            // 按命令来源区分两种满球场景：
+            //   1. setEat（吸球）满球 → 停止吸球，避免超出容量；
+            //   2. setGiveArtifact（送球）满球 → 必须放行，否则炮台无法把球送出去完成发射。
+            // 出球（负速）与通用速度指令同样不受该上限拦截。
+            RobotPosition robotPosition = RobotPosition.getInstanceOrNull();
+            boolean ballLaneFull = robotPosition != null
+                    && robotPosition.getBallCount() >= BallMax;
+            if (ballLaneFull && eatCommanded) {
+                targetVelocity = 0;
+            }
+            appliedVelocity = targetVelocity;
         }
 
         // 固件闭环：把目标速度下发给 Hub 内置速度 PID
-        motor.setVelocity(targetVelocity);
-        lastTargetVelocity = targetVelocity;
+        motor.setVelocity(appliedVelocity);
+        lastTargetVelocity = appliedVelocity;
         targetVelocity = 0; // 每帧必须重新调用set函数，否则自动归零
         eatCommanded = false; // 命令来源同样每帧重新下发
         // 舵机保持位置：每帧刷新，保证 Dashboard 上改 ShovelUpPos/ShovelDownPos 后即时生效
