@@ -199,6 +199,32 @@ public class RobotPosition {
     }
 
     /**
+     * 原子地占用一个球（供显式"单球出球"使用）：检查与扣减不可分割。
+     *
+     * @return true = 成功占用（球数已 -1）；false = 球数为 0 或硬件未配置，未做任何修改
+     */
+    public boolean tryConsumeBall() {
+        return ballCounter != null && ballCounter.consume();
+    }
+
+    /**
+     * 开关光电门边缘计数（显式出球期间置 false，防止与原子扣减叠加成重复扣减）。
+     * 硬件未配置时为空操作。
+     */
+    public void setBallCounterCounting(boolean enabled) {
+        if (ballCounter != null) {
+            ballCounter.setCountingEnabled(enabled);
+        }
+    }
+
+    /**
+     * @return 当前是否允许光电门边缘计数；硬件未配置时返回 false。
+     */
+    public boolean isBallCounterCounting() {
+        return ballCounter != null && ballCounter.isCountingEnabled();
+    }
+
+    /**
      * @return 当前球道内累计的小球个数（始终 ≥ 0）。
      *         硬件未配置（ballCounter == null）时返回 0。
      */

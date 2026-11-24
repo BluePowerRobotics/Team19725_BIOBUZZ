@@ -63,6 +63,7 @@ public class TeleOpRed extends LinearOpMode {
         telemetry.addData("A", "Reset Pose to " + (teamColor == TeamColor.BLUE ? "Blue" : "Red") + " ResetPose");
         telemetry.addData("Left Bumper", "Sweeper Eat");
         telemetry.addData("Right Bumper", "Sweeper Output");
+        telemetry.addData("B", "Eject One Ball (球道空时拒绝)");
         telemetry.addData("--- P2 Controls ---", "");
         telemetry.update();
 
@@ -79,6 +80,12 @@ public class TeleOpRed extends LinearOpMode {
             } else if (gamepad1.right_bumper) {
                 sweeper.setOutput();
                 RobotPosition.getInstance().setBallCounterMode(BallCounter.MODE_OUTPUT);
+            }
+
+            // 显式单球出球（B 键，按下瞬间触发一次）：
+            // 球数在触发瞬间原子 -1，球道为空时拒绝出球并给出提示
+            if (gamepad1.bWasReleased()) {
+                sweeper.ejectOne();
             }
 
             // 手动清空球道计数（Y 键，仅按下瞬间生效一次）
@@ -135,6 +142,7 @@ public class TeleOpRed extends LinearOpMode {
             // 球道计数
             telemetry.addData("Ball Count", RobotPosition.getInstance().getBallCount());
             telemetry.addData("Ball Max (Sweeper.BallMax)", Sweeper.BallMax);
+            telemetry.addData("Eject", sweeper.isEjecting() ? "FIRING" : sweeper.getEjectFeedback());
 
             chassis.telemetry();
             sweeper.setTelemetry();

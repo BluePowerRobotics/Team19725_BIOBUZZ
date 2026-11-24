@@ -69,6 +69,14 @@ public class BallCounter {
     private int count;
 
     /**
+     * 是否允许光电门边缘计数。
+     * 显式"单球出球"期间由上层置 false：此时球数已在触发瞬间原子扣减，
+     * 若仍让光电门按 MODE_OUTPUT 再减一次会造成重复扣减。
+     * 关闭期间仍每帧采样并刷新 lastBlocked，恢复计数时不会产生虚假上升沿。
+     */
+    private boolean countingEnabled = true;
+
+    /**
      * 用默认阈值与平滑系数创建球道计数器（内部创建 BreakBeamSensor）。
      *
      * @param hardwareMap 硬件映射表
@@ -114,7 +122,7 @@ public class BallCounter {
      * @param externalState 外部信息：0 = 进入模式（intake），1 = 出球模式（output）
      * @return 本帧是否有球挡光（上升沿；无论计数 +1 还是 -1）
      */
-    public boolean update(int externalState) {
+    public synchronized boolean update(int externalState) {
         if (externalState != MODE_INTAKE && externalState != MODE_OUTPUT) {
             throw new IllegalArgumentException(
                     "externalState must be 0 (intake) or 1 (output), got: " + externalState);
@@ -125,7 +133,9 @@ public class BallCounter {
 
         // 上升沿：0 → 1 跳变。持续为 1（球停住不动）不会重复触发
         boolean risingEdge = blocked && !lastBlocked;
-        if (risingEdge) {
+        // countingEnabled = false 时（显式出球期间）只刷新边缘基准、不做计数，
+        // 避免与"触发瞬间的原子扣减"叠加成重复扣减
+        if (risingEdge && countingEnabled) {
             if (output) {
                 if (count > 0) {   // 不允许减到负数
                     count--;
@@ -139,10 +149,40 @@ public class BallCounter {
         return risingEdge;
     }
 
+    // ==================== 原子占用 / 计数开关 ====================
+
+    /**
+     * 原子地"占用"一个球：检查与扣减在同一把锁内完成，二者不可分割。
+     * 用于显式出球：只有真正扣减成功才允许出球，避免"扣减失败却已出球"
+     * 或并发 / 重入导致的重复扣减。
+     *
+     * @return true = 成功占用（count 已 -1）；false = 球数为 0，未做任何修改
+     */
+    public synchronized boolean consume() {
+        if (count <= 0) {
+            return false;
+        }
+        count--;
+        return true;
+    }
+
+    /**
+     * 开关光电门边缘计数（显式出球期间置 false 防重复扣减）。
+     * 关闭期间 update() 仍采样并刷新边缘基准，恢复后不会误触发。
+     */
+    public void setCountingEnabled(boolean enabled) {
+        this.countingEnabled = enabled;
+    }
+
+    /** @return 当前是否允许光电门边缘计数 */
+    public boolean isCountingEnabled() {
+        return countingEnabled;
+    }
+
     /**
      * 实时获取当前累计计数的小球个数（始终 ≥ 0）
      */
-    public int getCount() {
+    public synchronized int getCount() {
         return count;
     }
 
@@ -151,7 +191,7 @@ public class BallCounter {
      * <b>不读取硬件</b>：以最近一帧 {@link BreakBeamSensor#isBlocked()} 的结果作为
      * 边缘检测基准，下一帧 update() 若物理状态未变就不会产生虚假上升沿。
      */
-    public void reset() {
+    public synchronized void reset() {
         count = 0;
         breakBeam.reset();
         lastBlocked = breakBeam.isBlocked();

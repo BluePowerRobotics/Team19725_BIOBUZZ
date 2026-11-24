@@ -49,6 +49,19 @@ public class Sweeper {
      */
     public static int BallMax = 4;
 
+    /**
+     * 显式"单球出球"的持续时间（毫秒）：从触发到停转，电机以 OutputVel 反转把一颗球送出。
+     * 可在 FTC Dashboard 实时调整。时间到后自动停转并恢复光电门计数。
+     */
+    public static int EjectDurationMs = 260;
+
+    /** 是否正在执行显式单球出球（非阻塞状态机的运行标志） */
+    private boolean ejecting = false;
+    /** 本次出球的起始时刻（System.nanoTime） */
+    private long ejectStartNs = 0L;
+    /** 最近一次出球触发的结果提示（供遥测 / 操作手反馈） */
+    private String ejectFeedback = "就绪";
+
     /** 固件速度闭环 PIDF 系数（REV Hub 内置速度 PID，可在 FTC Dashboard 实时调参） */
     public static double VelocityP = 1.17;
     public static double VelocityI = 0.117;
@@ -132,12 +145,74 @@ public class Sweeper {
     public void setStop() {
         targetVelocity = 0;
         eating = false;
+        // 停止指令同时取消进行中的显式出球，并恢复光电门计数。
+        // 球数不回补：触发时已原子扣减，中断后宁可少报也不多报（绝不出现"计数 > 实际球数"）。
+        if (ejecting) {
+            ejecting = false;
+            RobotPosition rp = RobotPosition.getInstanceOrNull();
+            if (rp != null) {
+                rp.setBallCounterCounting(true);
+            }
+            ejectFeedback = "出球已中断（球数不回补）";
+        }
     }
 
     public void setTargetVelocity(int velocity) {
         targetVelocity = velocity;
         // 任意直接速度指令都不算"吸球"意图，eating 置 false 交由调用方显式 setEat()
         eating = false;
+    }
+
+    /**
+     * 显式"单球出球"：触发一次，从球道送出且仅送出一颗球。
+     *
+     * 原子性保证（对应需求 4）：
+     *   1. 方法加 synchronized，配合 {@link RobotPosition#tryConsumeBall()} 内部的
+     *      锁，使"检查球数 → 扣减球数 → 启动出球"成为不可分割的整体；
+     *   2. 只有扣减成功才真正启动出球，杜绝"已出球却未扣减"；
+     *   3. 出球期间冻结光电门计数（setBallCounterCounting(false)），
+     *      杜绝球经过光电门时被再扣一次的重复扣减。
+     *
+     * 边界校验（对应需求 3）：球数为 0（或硬件未配置）时拒绝出球，
+     * 并通过 {@link #getEjectFeedback()} 给出提示。
+     *
+     * 非阻塞：本方法只登记状态，实际电机输出与结束判定在 {@link #update()} 中完成，
+     * 不会卡住 OpMode 主循环。
+     *
+     * @return true = 已受理（球数已 -1，出球进行中）；false = 被拒绝（球数为 0 / 正在出球）
+     */
+    public synchronized boolean ejectOne() {
+        RobotPosition rp = RobotPosition.getInstanceOrNull();
+        if (rp == null) {
+            ejectFeedback = "无法出球：RobotPosition 未初始化";
+            return false;
+        }
+        if (ejecting) {
+            // 上一次出球尚未结束：拒绝重入，避免同一颗球被扣减两次
+            ejectFeedback = "出球进行中，请稍候";
+            return false;
+        }
+        // 原子占用一个球：检查与扣减不可分割
+        if (!rp.tryConsumeBall()) {
+            ejectFeedback = "球道已空（Ball=0），禁止出球";
+            return false;
+        }
+        ejecting = true;
+        ejectStartNs = System.nanoTime();
+        // 冻结光电门计数，防止球经过光电门时重复扣减
+        rp.setBallCounterCounting(false);
+        ejectFeedback = "出球中，剩余 " + rp.getBallCount();
+        return true;
+    }
+
+    /** @return 是否正在执行显式单球出球 */
+    public boolean isEjecting() {
+        return ejecting;
+    }
+
+    /** @return 最近一次出球触发的结果提示（用于操作手反馈 / 遥测） */
+    public String getEjectFeedback() {
+        return ejectFeedback;
     }
 
     /** 铲子抬起（切换到抬起角度） */
@@ -151,12 +226,28 @@ public class Sweeper {
     }
 
     public void update() {
-        // ---- 球道满自动停止吸球（仅吸球意图生效） ----
-        // 意图判定走 eating 标志，不用 targetVelocity > 0——因为 GiveTheArtifactVel（2000）
-        // 也是正速度，但"送球入炮台"恰恰需要球道满球才能打连发，满球时绝不能停。
-        // RobotPosition 未初始化（如 SweeperTester 单独调试）时跳过，不影响 Sweeper 本身功能。
         RobotPosition rp = RobotPosition.getInstanceOrNull();
-        if (eating && rp != null && rp.getBallCount() >= BallMax) {
+
+        // ---- 显式单球出球状态机（优先级最高，覆盖其他速度指令） ----
+        // 出球时长内保持 OutputVel 反转；到时停转并恢复光电门计数。
+        // 球数已在 ejectOne() 触发瞬间原子扣减，故此处只负责"动作"，
+        // 保证计数变更与出球动画在同一帧开始、同一帧结束（时序一致）。
+        if (ejecting) {
+            long elapsedMs = (System.nanoTime() - ejectStartNs) / 1_000_000L;
+            if (elapsedMs >= EjectDurationMs) {
+                ejecting = false;
+                targetVelocity = 0;
+                if (rp != null) {
+                    rp.setBallCounterCounting(true);   // 恢复光电门计数
+                }
+            } else {
+                targetVelocity = OutputVel;
+            }
+        } else if (eating && rp != null && rp.getBallCount() >= BallMax) {
+            // ---- 球道满自动停止吸球（仅吸球意图生效） ----
+            // 意图判定走 eating 标志，不用 targetVelocity > 0——因为 GiveTheArtifactVel（2000）
+            // 也是正速度，但"送球入炮台"恰恰需要球道满球才能打连发，满球时绝不能停。
+            // RobotPosition 未初始化（如 SweeperTester 单独调试）时跳过，不影响 Sweeper 本身功能。
             targetVelocity = 0;
         }
 
