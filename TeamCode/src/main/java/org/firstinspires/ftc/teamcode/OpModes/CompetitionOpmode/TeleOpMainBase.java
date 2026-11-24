@@ -16,6 +16,7 @@ import org.firstinspires.ftc.teamcode.Controllers.Turret.Turret;
 import org.firstinspires.ftc.teamcode.Parameter.HypParams;
 import org.firstinspires.ftc.teamcode.Parameter.TeamColor;
 import org.firstinspires.ftc.teamcode.Processors.RobotPosition.RobotPosition;
+import org.firstinspires.ftc.teamcode.Processors.Sensors.BallCounter;
 import org.firstinspires.ftc.teamcode.RoadRunner.Drawing;
 import org.firstinspires.ftc.teamcode.utility.ActionRunner;
 import org.firstinspires.ftc.teamcode.utility.RobotStateStore;
@@ -170,6 +171,19 @@ public abstract class TeleOpMainBase extends LinearOpMode {
                 RobotPosition.getInstance().setManualGoalDown(teamColor == TeamColor.BLUE);
             }
 
+            // ======== 球道计数方向：按主控手柄的吸/吐状态分类 ========
+            // 必须在 RobotPosition.update() 之前设置，本帧的 BallCounter.update()
+            // 才会使用该状态：RB 吐球 → 出球 -1；LB 吸球 → 进球 +1；
+            // 都未按 → MODE_IDLE，让 BallCounter 内的出球意图锁存逐帧衰减，
+            // 保证松开 RB 后仍在途中的球按出球计数（不会被误判为进球）
+            if (gamepad1.right_bumper) {
+                RobotPosition.getInstance().setBallMode(BallCounter.MODE_OUTPUT);
+            } else if (gamepad1.left_bumper) {
+                RobotPosition.getInstance().setBallMode(BallCounter.MODE_INTAKE);
+            } else {
+                RobotPosition.getInstance().setBallMode(BallCounter.MODE_IDLE);
+            }
+
             RobotPosition.getInstance().update();
 
             // ======== P1：底盘 ========
@@ -229,7 +243,10 @@ public abstract class TeleOpMainBase extends LinearOpMode {
             boolean feeding = autoAim
                     ? (turret.isBigFiring() || turret.isSmallFiring())
                     : fireKey;
-            if (feeding) {
+            // 手动吐球（RB）优先于发射供料：二者方向相反，若被供料覆盖，
+            // 计数方向（RB → 出球 -1）会与实际电机正向转动不一致，导致球被误减。
+            // 同理，RB 按住时也不进入下面的 setStop 分支，保持吐球指令生效。
+            if (feeding && !gamepad1.right_bumper) {
                 sweeper.setGiveArtifact();
             } else if (!gamepad1.left_bumper && !gamepad1.right_bumper) {
                 // 未发射且主控没有手动吃球/吐出：停转
