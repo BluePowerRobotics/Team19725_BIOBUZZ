@@ -45,7 +45,7 @@
 | Action | 作用 | 构造参数 |
 |--------|------|---------|
 | `GoToStopPose` | 前往停车位姿并停车 | `(MecanumDrive drive, Pose2d stopPose)` |
-| `GoToShootAreaAction` | 抵达指定发射区域内离机器人最近的点，车头预瞄指定球门 | `(TeamColor, int areaIndex, Pose2d goal)` |
+| `GoToShootAreaAction` | 抵达指定发射区域内离机器人最近的点，车头预瞄指定球门；内部 `ShootAreaApproachAction` 在路径三等分点处面向 Hive 侧检查、抬升侧判定、必要时改道 | `(TeamColor, int areaIndex, Pose2d goal)` 或 `(TeamColor, areaIndex, goal, throughHive)`（4 参传改道时是否经 Hive 正下方） |
 | `GoToShootAreaNearestVerticesAction` | 单段连续轨迹依次经过两个发射区域各自距原点最近的顶点 | `(TeamColor, Pose2d goal)` |
 | `GoToEatPointAction` | 到指定取球点（intake 到位、车头朝取球点） | `(int pointIndex)` 或 `(int, Sweeper)` |
 | `GoToNearestEatPointAction` | 自动选近的取球点并前往 | 无 或 `(Sweeper)` |
@@ -59,8 +59,8 @@
 | `AutoTurretAimShootWithChassisAction` | 底盘主动转向球门辅助瞄准，炮台自动瞄准并发射 | `(MecanumDrive, Turret)` |
 | `EatAction` | 底盘原地不动（每帧驱动归零），集球器吃球（默认 2.5 s）后停转 | `(Sweeper)` 或 `(Sweeper, long durationMs)` |
 | `AdaptiveParkAction` | T-3s 检测整机是否接触场地边框，接触则开到安全位置停靠，否则原地停止 | `(MecanumDrive, ElapsedTime matchTime, long durationMs, long leadTimeMs)` |
-| `AutoCycleAction` | **保守版**：把「去取球点 → 吃球 → 去另一发射区 →（可选）瞄准」合成一个 Action（取球点仍停车） | `(TeamColor, Sweeper, Turret, Pose2d goal)` |
-| `ContinuousRouteAction` | **合成版**：轨迹1（起点→取球点，绕开 Hive）→ 停车吃球 → 轨迹2（取球点→另一发射区）→（可选）瞄准；**两段轨迹之间停车** | `(TeamColor, Sweeper, Turret, Pose2d goal)` |
+| `AutoCycleAction` | **保守版**：把「去取球点 → 吃球 → 去指定发射区 →（可选）瞄准」合成一个 Action（取球点仍停车） | `(TeamColor, Sweeper, Turret, Pose2d goal)` 或 `(…, int targetShootAreaIndex)`（0=otherShootArea /默认；1=FIRST；2=SECOND）；旧 boolean `goFirstShootArea` 兼容构造保留 |
+| `ContinuousRouteAction` | **合成版**：轨迹1（起点→取球点，绕开 Hive）→ 停车吃球 → 轨迹2（取球点→指定发射区）→（可选）瞄准；**两段轨迹之间停车** | `(TeamColor, Sweeper, Turret, Pose2d goal)` 或 `(…, int targetShootAreaIndex)`（同 AutoCycleAction）；旧 boolean 兼容构造保留 |
 | `ShootAreaApproachAction` | 「前往发射区域」类 Action 的行驶内核：路径三等分点处面向最近一次有效判定的 Hive 侧 + 抬升侧判定 + 必要时改道 | `(TeamColor, Pose2d start, List<Pose2d> baseWaypoints, int targetAreaIndex, boolean replanThroughHive)` |
 
 > 所有 **前往发射区域** 的移动 Action（`GoToShootAreaAction`、`GoToShootAreaNearestVerticesAction`、
@@ -640,8 +640,10 @@ actionRunner.add(new ContinuousRouteAction(teamColor, sweeper, turret, goal));  
 START_SHOOT    → 瞄准发射 Action，连打 START_SHOTS 发（底盘不动或底盘辅助转向）
 TO_EAT_POINT   → GoToUnvisitedEatPointAvoidHiveAction / ViaHiveAction（自动选最近未访问取球点）
 EATING         → EatAction
-TO_SHOOT_AREA  → GoToNearestShootAreaAvoidHiveAction / ViaHiveAction（自动选最近发射区；
-                 途中两个三等分点面向 Hive 侧检查，若不在抬升侧则改道另一个发射区，见第 9.6 节）
+TO_SHOOT_AREA  → 三层优先级：
+                 1. AREA_CYCLE_MODE ≠ OFF → 默认 SECOND，按枚举（EVEN/ODD/EVERY）决定是否切 FIRST，投 GoToShootAreaAction(FIRST/SECOND)；
+                 2. cyclesDone ≥ 1 且 SECOND_CYCLE_FIRST_AREA=true → 投 GoToShootAreaAction(FIRST)；
+                 3. 否则 → 投 GoToShootAreaAction(SECOND)（默认第二发射区域）
 AIM_SHOOT      → 瞄准发射 Action（1 发）
 CYCLE_END      → cyclesDone++；未满 CYCLES 回 TO_EAT_POINT，满则转 PARKING
 PARKING        → AdaptiveParkAction
@@ -657,12 +659,19 @@ STOP
 | 参数 | 默认 | 含义 |
 |------|------|------|
 | `START_SHOTS` | 4 | 起点连续发射的发数（= 预载球数） |
-| `CYCLES` | 2 | 「取球 → 吃球 → 最近发射区（含途中改道）→ 瞄准发射」的循环次数 |
+| `CYCLES` | 2 | 「取球 → 吃球 → 发射区 → 瞄准发射」的循环次数 |
+| `SECOND_CYCLE_FIRST_AREA` | `false` | 第二次及以后循环的「前往发射点」改为去**第一发射区域**；init 阶段还可按 gamepad1.Y 切换，遥测实时显示 |
+| `AREA_CYCLE_MODE` | `0` | 循环数驱动发射区域切换模式，枚举：`0=OFF`（默认，所有循环默认去第二发射区域）；`1=EVEN`（偶数次末尾切第一区域）；`2=ODD`（奇数次末尾切第一区域）；`3=EVERY`（每次都切，交替模式）；init 阶段还可按 gamepad1.A 循环切换，遥测实时显示 |
 
-两个字段都是 `public static int`，且类上有 `@Config`，可在 Dashboard 的 Config 页实时修改。
+前两个是 `public static int`，后两个分别是 `public static boolean` 和 `public static int`，且类上有 `@Config`，可在 Dashboard 的 Config 页实时修改。
 
 > ⚠️ `AutoAimAction` 以「扳机下降沿」或超时结束，一次只保证一发。
 > 若实际预载不足 `START_SHOTS` 球，多出的发会各自空等到超时，建议按真实预载数设置。
+
+> 所有发射区域选择开关的**优先级**：`AREA_CYCLE_MODE ≠ OFF` > `SECOND_CYCLE_FIRST_AREA` > 默认 SECOND。
+> `AREA_CYCLE_MODE` 与 `utility/AutoStartOptions` 里对应按键（gamepad1.A / Y）合并生效
+> （OpMode helper 先读 `AutoStartOptions`，无效时回退到 OpMode 静态字段）。
+> 详见「第二次循环改去第一发射区域」与「循环数驱动发射区域切换模式」小节。
 
 ### 半区约定
 
@@ -750,13 +759,15 @@ STOP
 
 ### 构造与关键参数
 
-**AutoCycleAction 构造**：`new AutoCycleAction(teamColor, sweeper, turret, goal)`
+**AutoCycleAction 构造**：
+- `new AutoCycleAction(teamColor, sweeper, turret, goal)` —— 4 参，内部 `targetShootAreaIndex=0`，走 `HiveRouteAction.otherShootAreaTargetPose` 原逻辑
+- `new AutoCycleAction(teamColor, sweeper, turret, goal, int targetShootAreaIndex)` —— 5 参（int）：0=otherShootArea /默认；1=FIRST（第一发射区域）；2=SECOND（第二发射区域）；OpMode 里的 AREA_CYCLE_MODE 逻辑把算好的 FIRST/SECOND 传进来
+- 旧的 boolean 构造 `(teamColor, sweeper, turret, goal, boolean goFirstShootArea)` 保留做兼容（true→1，false→0）
 
-| 参数 | 默认值 | 含义 |
-|------|--------|------|
-| `includeAim` | `true` | 是否在周期末尾追加 `AutoAimAction` |
-
-**ContinuousRouteAction 构造**：`new ContinuousRouteAction(teamColor, sweeper, turret, goal)`
+**ContinuousRouteAction 构造**：
+- `new ContinuousRouteAction(teamColor, sweeper, turret, goal)` —— 4 参，同 AutoCycleAction 默认
+- `new ContinuousRouteAction(teamColor, sweeper, turret, goal, int targetShootAreaIndex)` —— 5 参（int），同 AutoCycleAction
+- 旧的 boolean 构造保留兼容
 
 | 参数 | 默认值 | 单位 | 含义 |
 |------|--------|------|------|
@@ -802,6 +813,67 @@ ContinuousRouteAction.secondLegThroughHive = false;  // 返程改走外侧车道
 
 所有周期 Action 都在**首次 `run()` 时**以当时真实位姿规划轨迹，因此可直接入队，
 无需像逐段状态机那样处理段间位姿刷新。
+
+## 发射区域选择开关（三级优先级）
+
+所有自动 OpMode 的「前往发射点」默认都去 **第二发射区域（SECOND）**，以下三级开关依次覆盖：
+
+### 开关 1：`AREA_CYCLE_MODE`（循环数驱动切换 —— **最高优先级**）
+
+**枚举值**（`public static int`，Dashboard 可实时改；init 时按 **gamepad1.A** 循环切换 OFF→EVEN→ODD→EVERY→OFF）：
+
+| 值 | 名称 | 行为（默认 SECOND，满足条件时 FIRST） |
+|----|------|------|
+| 0 | `OFF` | 关闭，不生效（交由开关 2 或默认 SECOND） |
+| 1 | `EVEN` | **偶数次**循环末尾切到第一发射区域（奇数次保持第二区域） |
+| 2 | `ODD` | **奇数次**循环末尾切到第一发射区域（偶数次保持第二区域） |
+| 3 | `EVERY` | 每次循环末尾都切（**交替模式**：第一次 SECOND → 第二次 FIRST → 第三次 SECOND → …） |
+
+**三套「当前循环数」获取**（不同程序族计数起点不同）：
+
+| 程序族 | 字段 | 第 N 次循环时的值 | 偶数判定 |
+|--------|------|-------------------|---------|
+| 8 个状态机 OpMode | `cyclesDone`（初始 0，`CYCLE_END` 后 ++） | `N-1` | `(cyclesDone + 1) % 2 == 0` |
+| Cycle / Continuous | `cycleCount`（初始 1，投完 ++） | `N` | `cycleCount % 2 == 0` |
+| AutoRoutine（4 个） | `round`（初始 1，AIM 后置 2） | `N` | `round % 2 == 0` |
+
+**实现方式**：
+- **状态机** `case TO_SHOOT_AREA`：算好 FIRST/SECOND 后投 `GoToShootAreaAction(teamColor, targetArea, goal, throughHive)`；
+  ViaHive 组 throughHive=true、AvoidHive 组 throughHive=false；行驶段由 `ShootAreaApproachAction` 驱动，
+  路径三等分点处仍会面向 Hive 侧、再次判断抬升侧、必要时即时改道另一发射区域（见第 9.6 节）。
+- **Cycle / Continuous 组合 Action**：OpMode 算出 FIRST/SECOND 后把 `targetShootAreaIndex`（1=FIRST, 2=SECOND）
+  传给 `AutoCycleAction` / `ContinuousRouteAction` 的 5 参 int 构造，内部 `shootAreaTargetPose(teamColor, areaIndex, goal)`
+  得到对应区域最近点（朝向实时球门）。最终进入 `ShootAreaApproachAction`，因此途经三等分点同样可能改道。
+- **AutoRoutine** `case TO_SHOOT_2`：算好后用固定点 `HypParams.ShootFirstAreaRed/Blue` 或 `ShootSecondAreaRed/Blue`，
+  其余同原逻辑（AIM_SHOOT 后转入下一轮或停靠）。
+
+### 开关 2：`SECOND_CYCLE_FIRST_AREA`（上一轮兼容 —— **次优先级**）
+
+**开关来源**（两处默认 `false`，合并生效）：
+
+1. 各 OpMode 的 `@Config public static boolean SECOND_CYCLE_FIRST_AREA = false`（FtcDashboard 实时改）；
+2. `utility/AutoStartOptions.secondCycleFirstArea()`（waitForStart 前按 **gamepad1.Y** 切换，`reset()` 每局复位）。
+
+OpMode 内 helper 返回 `OpMode.SECOND_CYCLE_FIRST_AREA || AutoStartOptions.secondCycleFirstArea()`，遥测键
+`2nd Cycle First Area (gamepad1.Y)` 实时显示合并值。
+
+**判定**：`AREA_CYCLE_MODE == OFF` 时，`cyclesDone >= 1`（状态机）/ `cycleCount >= 2`（Cycle/Continuous）/ `round >= 2`（AutoRoutine）
+时改去 FIRST，否则保持 SECOND。
+
+### 开关 3：默认 SECOND（**最低优先级**）
+
+两个开关都关时，所有循环统一去 **第二发射区域（SECOND）**，不再按就近选或按抬升侧改道（但行驶段 `ShootAreaApproachAction`
+内部的三等分点抬升侧检查仍可能**即时改道**另一发射区域——那是到达目标区域之前的动态修正，与本开关的初始目标选择不冲突）。
+
+### 按键一览（waitForStart 前）
+
+| 按键 | 开关 | 循环方式 |
+|------|------|---------|
+| **gamepad1.X** | `startShoot`（开局是否先发射） | 按下沿翻转 |
+| **gamepad1.Y** | `SECOND_CYCLE_FIRST_AREA`（第二次起改 FIRST） | 按下沿翻转 |
+| **gamepad1.A** | `AREA_CYCLE_MODE`（循环数驱动切换） | 按下沿循环 OFF→EVEN→ODD→EVERY→OFF |
+
+全部遥测实时显示当前值，`reset()` 每局复位。
 
 ## 参数配置：AutoParams（盟友活动区 / 我方禁止活动区）
 

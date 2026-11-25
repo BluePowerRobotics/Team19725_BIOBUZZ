@@ -31,6 +31,9 @@ import java.util.Collections;
  * 求出多边形上离机器人最近的点作为目标位置，再用 RoadRunner
  * {@code strafeToLinearHeading} 一次性平移并旋转到位。
  *
+ * <p>行驶段由 {@link ShootAreaApproachAction} 驱动（路径三等分点处面向最近 Hive 端点、
+ * 检查抬升侧、必要时改道另一发射区域），{@code throughHive} 控制改道时是否走 Hive 正下方。
+ *
  * <p>轨迹在构造时刻固化，因此应在入队前、机器人位于目标发射位置附近时再创建本 Action。
  */
 public class GoToShootAreaAction implements Action {
@@ -50,6 +53,17 @@ public class GoToShootAreaAction implements Action {
      * @param goal      预瞄准的单个球门目标点（与手动瞄准传入 Chassis 的目标点一致）
      */
     public GoToShootAreaAction(TeamColor teamColor, int areaIndex, Pose2d goal) {
+        this(teamColor, areaIndex, goal, false);
+    }
+
+    /**
+     * @param teamColor  队伍颜色
+     * @param areaIndex  发射区域序号：{@link #FIRST} 或 {@link #SECOND}
+     * @param goal       预瞄准的单个球门目标点（与手动瞄准传入 Chassis 的目标点一致）
+     * @param throughHive 三等分点处改道另一发射区域时，是否走 Hive 正下方（{@code true}），
+     *                    还是沿矩形外侧（{@code false}）。非改道时不影响主路径。
+     */
+    public GoToShootAreaAction(TeamColor teamColor, int areaIndex, Pose2d goal, boolean throughHive) {
         if (areaIndex != FIRST && areaIndex != SECOND) {
             throw new IllegalArgumentException("areaIndex must be FIRST(1) or SECOND(2)");
         }
@@ -80,7 +94,7 @@ public class GoToShootAreaAction implements Action {
         // 行驶中在路径两个三等分点处面向最近的 Hive 端点，并据实时球门判断是否在抬升侧，
         // 必要时改道去另一个发射区域（见 ShootAreaApproachAction）
         this.trajectoryAction = new ShootAreaApproachAction(teamColor, currentPose,
-                Collections.singletonList(targetPose), areaIndex, false);
+                Collections.singletonList(targetPose), areaIndex, throughHive);
     }
 
     @Override

@@ -12,6 +12,7 @@ import org.firstinspires.ftc.teamcode.Auto.AutoConservative.AutoActions.Adaptive
 import org.firstinspires.ftc.teamcode.Auto.AutoConservative.AutoActions.AutoTurretAimShootWithChassisAction;
 import org.firstinspires.ftc.teamcode.Auto.AutoConservative.AutoActions.EatAction;
 import org.firstinspires.ftc.teamcode.Auto.AutoConservative.AutoActions.GoToNearestShootAreaViaHiveAction;
+import org.firstinspires.ftc.teamcode.Auto.AutoConservative.AutoActions.GoToShootAreaAction;
 import org.firstinspires.ftc.teamcode.Auto.AutoConservative.AutoActions.GoToStopPose;
 import org.firstinspires.ftc.teamcode.Auto.AutoConservative.AutoActions.GoToUnvisitedEatPointViaHiveAction;
 import org.firstinspires.ftc.teamcode.Auto.AutoConservative.AutoActions.LiftedSideAimShootAction;
@@ -71,6 +72,10 @@ public class AutoBlueChassisAimViaHive extends LinearOpMode {
 
     /** 起点连续发射的发数（等于预载球数），Dashboard 可实时调整 */
     public static int START_SHOTS = 4;
+    /** 第二次及以后循环前往发射点时改为去第一发射区域（FtcDashboard 可实时改；init 时也可按 gamepad1.Y 切换） */
+    public static boolean SECOND_CYCLE_FIRST_AREA = false;
+    /** 循环数驱动发射区域切换模式（0=OFF, 1=EVEN, 2=ODD, 3=EVERY），init 时也可按 gamepad1.A 切换 */
+    public static int AREA_CYCLE_MODE = 0;
     /** 「取球 → 吃球 → 最近发射区 → 瞄准发射」的循环次数，Dashboard 可实时调整 */
     public static int CYCLES = 2;
 
@@ -133,6 +138,8 @@ public class AutoBlueChassisAimViaHive extends LinearOpMode {
         while (opModeInInit()) {
             AutoStartOptions.update(gamepad1);
             telemetry.addData("Start Shoot (gamepad1.X)", AutoStartOptions.startShoot());
+            telemetry.addData("2nd Cycle First Area (gamepad1.Y)",
+                    SECOND_CYCLE_FIRST_AREA || AutoStartOptions.secondCycleFirstArea());
             telemetry.update();
         }
         waitForStart();
@@ -194,7 +201,12 @@ public class AutoBlueChassisAimViaHive extends LinearOpMode {
                         break;
 
                     case TO_SHOOT_AREA:
-                        actionRunner.add(new GoToNearestShootAreaViaHiveAction(teamColor, currentGoal()));
+                        if (cyclesDone >= 1 && secondCycleFirstArea()) {
+                            actionRunner.add(new GoToShootAreaAction(
+                                    teamColor, GoToShootAreaAction.FIRST, currentGoal()));
+                        } else {
+                            actionRunner.add(new GoToNearestShootAreaViaHiveAction(teamColor, currentGoal()));
+                        }
                         currentState = AutoState.AIM_SHOOT;
                         break;
 
@@ -248,6 +260,11 @@ public class AutoBlueChassisAimViaHive extends LinearOpMode {
         turret.stop();
         chassis.stop();
         chassis.update(0, 0, 0);
+    }
+
+    /** 第二次及以后循环前往发射点时是否改去第一发射区域。 */
+    private boolean secondCycleFirstArea() {
+        return SECOND_CYCLE_FIRST_AREA || AutoStartOptions.secondCycleFirstArea();
     }
 
     /** 清空动作队列并投递自适应停靠（只执行一次）。 */

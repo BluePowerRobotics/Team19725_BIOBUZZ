@@ -5,16 +5,24 @@ import androidx.annotation.NonNull;
 import com.acmerobotics.dashboard.telemetry.TelemetryPacket;
 import com.acmerobotics.roadrunner.Action;
 import com.acmerobotics.roadrunner.Pose2d;
+import com.acmerobotics.roadrunner.TrajectoryActionBuilder;
 
 import org.firstinspires.ftc.teamcode.Parameter.HypParams;
 import org.firstinspires.ftc.teamcode.Parameter.TeamColor;
 import org.firstinspires.ftc.teamcode.Processors.RobotPosition.RobotPosition;
 import org.firstinspires.ftc.teamcode.RoadRunner.MecanumDrive;
 import org.firstinspires.ftc.teamcode.utility.Geometry.ConvexPolygon;
+import org.firstinspires.ftc.teamcode.utility.HiveRoutePlanner;
 import org.firstinspires.ftc.teamcode.utility.Vector2D;
+
+import java.util.List;
 
 /**
  * 抵达指定发射区域内距离机器人最近的点（合并原第一 / 第二发射区域 Action）。
+ *
+ * <p><b>保守备份特性</b>：所有移动均为<b>单段直达轨迹</b>，不经过三等分点 Hive 侧检查，
+ * 不改道。如需经 Hive 正下方 / 绕外侧，用 4 参构造 {@code throughHive} 指定（通过
+ * {@link HiveRoutePlanner} 规划途经点，但仍不做三等分点改道）。
  *
  * <p>目标区域按队伍颜色与区域序号取自 {@link HypParams#ShootFirstAreaRed} /
  * {@link HypParams#ShootFirstAreaBlue} / {@link HypParams#ShootSecondAreaRed} /
@@ -25,10 +33,6 @@ import org.firstinspires.ftc.teamcode.utility.Vector2D;
  * {@code Chassis#update(double, double, Pose2d)} 自动瞄准所用目标点完全相同；
  * 预瞄准航向 {@code atan2(goalY-y, goalX-x)} 也与 {@code Chassis#aimOmega} 同一公式。
  * 精确瞄准由后续 {@link AutoAimAction} 完成。
- *
- * <p>构造时以当前融合位姿为起点，调用 {@link ConvexPolygon#NearestVectorFrom}
- * 求出多边形上离机器人最近的点作为目标位置，再用 RoadRunner
- * {@code strafeToLinearHeading} 一次性平移并旋转到位。
  *
  * <p>轨迹在构造时刻固化，因此应在入队前、机器人位于目标发射位置附近时再创建本 Action。
  */
@@ -49,6 +53,17 @@ public class GoToShootAreaAction implements Action {
      * @param goal      预瞄准的单个球门目标点（与手动瞄准传入 Chassis 的目标点一致）
      */
     public GoToShootAreaAction(TeamColor teamColor, int areaIndex, Pose2d goal) {
+        this(teamColor, areaIndex, goal, false);
+    }
+
+    /**
+     * @param teamColor  队伍颜色
+     * @param areaIndex  发射区域序号：{@link #FIRST} 或 {@link #SECOND}
+     * @param goal       预瞄准的单个球门目标点（与手动瞄准传入 Chassis 的目标点一致）
+     * @param throughHive 是否经 Hive 正下方规划（{@code true} 走内车道，{@code false} 单段直达）；
+     *                    保守版无三等分点检查，仅影响路径几何。
+     */
+    public GoToShootAreaAction(TeamColor teamColor, int areaIndex, Pose2d goal, boolean throughHive) {
         if (areaIndex != FIRST && areaIndex != SECOND) {
             throw new IllegalArgumentException("areaIndex must be FIRST(1) or SECOND(2)");
         }
@@ -77,9 +92,23 @@ public class GoToShootAreaAction implements Action {
                 goal.position.x - targetX);
 
         this.targetPose = new Pose2d(targetX, targetY, heading);
-        this.trajectoryAction = drive.actionBuilder(currentPose)
-                .strafeToLinearHeading(targetPose.position, targetPose.heading.toDouble())
-                .build();
+
+        if (throughHive) {
+            // 经 Hive 正下方规划途经点（保守版：无三等分点检查，仅几何约束）
+            List<Pose2d> waypoints = HiveRoutePlanner.waypoints(
+                    teamColor, currentPose, targetPose, true);
+            TrajectoryActionBuilder builder = drive.actionBuilder(currentPose);
+            for (int i = 1; i < waypoints.size(); i++) {
+                Pose2d wp = waypoints.get(i);
+                builder = builder.strafeToLinearHeading(wp.position, wp.heading.toDouble());
+            }
+            this.trajectoryAction = builder.build();
+        } else {
+            // 单段直达
+            this.trajectoryAction = drive.actionBuilder(currentPose)
+                    .strafeToLinearHeading(targetPose.position, targetPose.heading.toDouble())
+                    .build();
+        }
     }
 
     @Override

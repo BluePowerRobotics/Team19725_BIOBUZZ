@@ -14,6 +14,8 @@ import org.firstinspires.ftc.teamcode.Parameter.TeamColor;
 import org.firstinspires.ftc.teamcode.Processors.RobotPosition.RobotPosition;
 import org.firstinspires.ftc.teamcode.RoadRunner.MecanumDrive;
 import org.firstinspires.ftc.teamcode.utility.DeferredAction;
+import org.firstinspires.ftc.teamcode.utility.Geometry.ConvexPolygon;
+import org.firstinspires.ftc.teamcode.utility.Vector2D;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -23,7 +25,7 @@ import java.util.List;
  *
  * <p>周期内容（与现 {@code AutoBlue} 状态机等价的顺序，仍然在取球点停车吃球）：
  * <pre>
- *   前往未访问取球点（绕开 Hive） → 吃球 → 经 Hive 正下方前往另一发射区域 → （可选）自动瞄准
+ *   前往未访问取球点（绕开 Hive） → 吃球 → 经 Hive 正下方前往指定发射区域 → （可选）自动瞄准
  * </pre>
  *
  * <p><b>与「每段单独入队」的差别</b>：
@@ -67,6 +69,12 @@ public class AutoCycleAction implements Action {
     /** 预瞄准的球门目标点（用于发射区域终点航向，与 {@code Chassis} 自动瞄准一致） */
     private final Pose2d goal;
 
+    /**
+     * 回程发射区域目标：0=原逻辑（otherShootArea，按当前位姿自动选另一区域）；
+     * 1=FIRST 第一发射区域；2=SECOND 第二发射区域。
+     */
+    private final int targetShootAreaIndex;
+
     /** 首次 run() 时构建的组合 Action */
     private Action impl;
 
@@ -77,10 +85,31 @@ public class AutoCycleAction implements Action {
      * @param goal      预瞄准的单个球门目标点
      */
     public AutoCycleAction(TeamColor teamColor, Sweeper sweeper, Turret turret, Pose2d goal) {
+        this(teamColor, sweeper, turret, goal, 0);
+    }
+
+    /**
+     * 兼容旧 boolean 参数构造。
+     *
+     * @param goFirstShootArea true=本周期前往发射区域时改为第一发射区域（对应 targetShootAreaIndex=1）；
+     *                         false=走原 otherShootArea 逻辑（对应 targetShootAreaIndex=0）
+     */
+    public AutoCycleAction(TeamColor teamColor, Sweeper sweeper, Turret turret, Pose2d goal,
+                           boolean goFirstShootArea) {
+        this(teamColor, sweeper, turret, goal, goFirstShootArea ? 1 : 0);
+    }
+
+    /**
+     * @param targetShootAreaIndex 0=otherShootArea（按当前位姿自动选另一区域）；
+     *                              1={@link GoToShootAreaAction#FIRST}；2={@link GoToShootAreaAction#SECOND}
+     */
+    public AutoCycleAction(TeamColor teamColor, Sweeper sweeper, Turret turret, Pose2d goal,
+                           int targetShootAreaIndex) {
         this.teamColor = teamColor;
         this.sweeper = sweeper;
         this.turret = turret;
         this.goal = goal;
+        this.targetShootAreaIndex = targetShootAreaIndex;
     }
 
     @Override
@@ -100,7 +129,28 @@ public class AutoCycleAction implements Action {
 
         steps.add(new DeferredAction(() -> new GoToUnvisitedEatPointAvoidHiveAction(teamColor, sweeper)));
         steps.add(new EatAction(sweeper));
-        steps.add(new DeferredAction(() -> new GoToOtherShootAreaViaHiveAction(teamColor, goal)));
+
+        // 计算回程发射区域的目标 Pose2d 与实际 areaIndex
+        Pose2d shootTarget;
+        int effectiveAreaIndex;
+        switch (targetShootAreaIndex) {
+            case GoToShootAreaAction.FIRST:
+                shootTarget = shootAreaTargetPose(teamColor, GoToShootAreaAction.FIRST, goal);
+                effectiveAreaIndex = GoToShootAreaAction.FIRST;
+                break;
+            case GoToShootAreaAction.SECOND:
+                shootTarget = shootAreaTargetPose(teamColor, GoToShootAreaAction.SECOND, goal);
+                effectiveAreaIndex = GoToShootAreaAction.SECOND;
+                break;
+            default: // 0 = 原逻辑 otherShootArea
+                shootTarget = HiveRouteAction.otherShootAreaTargetPose(teamColor, goal);
+                effectiveAreaIndex = HiveRouteAction.otherShootAreaIndex(teamColor);
+        }
+
+        final int finalAreaIndex = effectiveAreaIndex;
+        steps.add(new DeferredAction(() -> new HiveRouteAction(teamColor, true, shootTarget,
+                finalAreaIndex, null) {
+        }));
 
         if (includeAim) {
             MecanumDrive drive = RobotPosition.getInstance().getDrive();
@@ -108,5 +158,22 @@ public class AutoCycleAction implements Action {
         }
 
         return new SequentialAction(steps);
+    }
+
+    /**
+     * 指定发射区域内距机器人最近、朝向实时球门（{@code goal}）的底盘位姿。
+     *
+     * @param teamColor  队伍颜色
+     * @param areaIndex  发射区域序号（{@link GoToShootAreaAction#FIRST} 或 {@link GoToShootAreaAction#SECOND}）
+     * @param goal       预瞄准的单个球门目标点
+     */
+    private static Pose2d shootAreaTargetPose(TeamColor teamColor, int areaIndex, Pose2d goal) {
+        ConvexPolygon area = HiveRouteAction.shootArea(teamColor, areaIndex);
+        Pose2d current = RobotPosition.getInstance().getPose2d();
+        Vector2D nearest = area.NearestVectorFrom(current.position.x, current.position.y);
+        double x = current.position.x + nearest.getX();
+        double y = current.position.y + nearest.getY();
+        double heading = Math.atan2(goal.position.y - y, goal.position.x - x);
+        return new Pose2d(x, y, heading);
     }
 }

@@ -15,6 +15,7 @@ import com.qualcomm.robotcore.util.ElapsedTime;
 
 import org.firstinspires.ftc.teamcode.Auto.AutoFullFeatured.AutoActions.AdaptiveParkAction;
 import org.firstinspires.ftc.teamcode.Auto.AutoFullFeatured.AutoActions.AutoCycleAction;
+import org.firstinspires.ftc.teamcode.Auto.AutoFullFeatured.AutoActions.GoToShootAreaAction;
 import org.firstinspires.ftc.teamcode.Auto.AutoFullFeatured.AutoActions.GoToStopPose;
 import org.firstinspires.ftc.teamcode.Controllers.Chassis.Chassis;
 import org.firstinspires.ftc.teamcode.Controllers.Sweeper.Sweeper;
@@ -43,6 +44,10 @@ import org.firstinspires.ftc.teamcode.utility.RobotStateStore;
 public class AutoRedCycle extends LinearOpMode {
     /** 开局发射的发数（等于预载球数），Dashboard 可实时调整 */
     public static int START_SHOTS = 4;
+    /** 第二次及以后循环前往发射点时改为去第一发射区域（FtcDashboard 可实时改；init 时也可按 gamepad1.Y 切换） */
+    public static boolean SECOND_CYCLE_FIRST_AREA = false;
+    /** 循环数驱动发射区域切换模式：0=OFF；1=EVEN；2=ODD；3=EVERY。FtcDashboard 可实时改；init 时也可按 gamepad1.A 循环切换 */
+    public static int AREA_CYCLE_MODE = 0;
 
     private enum AutoState {
         /** 执行一个完整周期（取球 + 吃球 + 移动 + 瞄准发射） */
@@ -71,9 +76,23 @@ public class AutoRedCycle extends LinearOpMode {
         return RobotPosition.getInstance().getGoalPose();
     }
 
+    /** 第二次及以后循环前往发射点时是否改去第一发射区域。 */
+    private boolean secondCycleFirstArea() {
+        return SECOND_CYCLE_FIRST_AREA || AutoStartOptions.secondCycleFirstArea();
+    }
+
+    /** AREA_CYCLE_MODE 合并值（OpMode 静态字段 或 AutoStartOptions）。 */
+    private int areaCycleMode() {
+        int opt = AutoStartOptions.getAreaCycleMode();
+        return opt != AutoStartOptions.AREA_CYCLE_MODE_OFF ? opt : AREA_CYCLE_MODE;
+    }
+
     private AutoState currentState = AutoState.CYCLE;
     private boolean parkScheduled = false;
     private boolean zoneEscapeActive = false;
+
+    /** 已完成周期数（首个周期在循环外投递） */
+    private int cycleCount = 1;
 
     @Override
     public void runOpMode() throws InterruptedException {
@@ -95,6 +114,10 @@ public class AutoRedCycle extends LinearOpMode {
         while (opModeInInit()) {
             AutoStartOptions.update(gamepad1);
             telemetry.addData("Start Shoot (gamepad1.X)", AutoStartOptions.startShoot());
+            telemetry.addData("2nd Cycle First Area (gamepad1.Y)",
+                    SECOND_CYCLE_FIRST_AREA || AutoStartOptions.secondCycleFirstArea());
+            telemetry.addData("Area Cycle Mode (gamepad1.A)",
+                    AutoStartOptions.areaCycleModeName(areaCycleMode()));
             telemetry.update();
         }
         waitForStart();
@@ -147,7 +170,25 @@ public class AutoRedCycle extends LinearOpMode {
             if (!actionRunner.isBusy() && !zoneEscapeActive) {
                 switch (currentState) {
                     case CYCLE:
-                        actionRunner.add(new AutoCycleAction(teamColor, sweeper, turret, currentGoal()));
+                        boolean toFirst = false;
+                        int mode = areaCycleMode();
+                        if (mode != AutoStartOptions.AREA_CYCLE_MODE_OFF) {
+                            boolean isEven = cycleCount % 2 == 0;
+                            switch (mode) {
+                                case AutoStartOptions.AREA_CYCLE_MODE_EVEN:
+                                    toFirst = isEven; break;
+                                case AutoStartOptions.AREA_CYCLE_MODE_ODD:
+                                    toFirst = !isEven; break;
+                                case AutoStartOptions.AREA_CYCLE_MODE_EVERY:
+                                    toFirst = isEven; break;
+                            }
+                        } else if (cycleCount >= 2 && secondCycleFirstArea()) {
+                            toFirst = true;
+                        }
+                        int targetArea = toFirst ? GoToShootAreaAction.FIRST : GoToShootAreaAction.SECOND;
+                        actionRunner.add(new AutoCycleAction(
+                                teamColor, sweeper, turret, currentGoal(), targetArea));
+                        cycleCount++;
                         break;
                     case PARKING:
                         currentState = AutoState.STOP;

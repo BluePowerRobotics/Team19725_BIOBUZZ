@@ -32,7 +32,7 @@ import org.firstinspires.ftc.teamcode.utility.Vector2D;
  * <pre>
  *   开局原地瞄准发射 × {@link #START_SHOTS}（waitForStart 期间可用 gamepad1.X 关闭）
  *     → 绕开 Hive 前往取球点 1 → 吃球
- *     → 绕开 Hive 前往第一发射区域固定点 → 原地瞄准发射
+ *     → 绕开 Hive 前往第二发射区域固定点 → 原地瞄准发射
  *     → 绕开 Hive 前往取球点 2 → 吃球
  *     → 绕开 Hive 前往第二发射区域固定点 → 原地瞄准发射
  *     → 前往固定停靠位姿
@@ -50,22 +50,14 @@ public class AutoBlueRoutine extends LinearOpMode {
     private enum RoutineState {
         /** 起点原地瞄准发射 */
         START_SHOOT,
-        /** 前往取球点 1 */
-        TO_EAT_1,
-        /** 吃球 1 */
-        EATING_1,
-        /** 前往第一发射区域固定点 */
-        TO_SHOOT_1,
-        /** 瞄准发射 1 */
-        AIM_1,
-        /** 前往取球点 2 */
-        TO_EAT_2,
-        /** 吃球 2 */
-        EATING_2,
+        /** 前往取球点（复用：按 {@link #round} 选择第 1 / 2 个固定取球点） */
+        TO_EAT,
+        /** 吃球（复用） */
+        EATING,
+        /** 瞄准发射（复用） */
+        AIM,
         /** 前往第二发射区域固定点 */
         TO_SHOOT_2,
-        /** 瞄准发射 2 */
-        AIM_2,
         /** 前往固定停靠位姿 */
         PARKING,
         /** 结束 */
@@ -74,6 +66,10 @@ public class AutoBlueRoutine extends LinearOpMode {
 
     /** 开局发射的发数（等于预载球数），Dashboard 可实时调整 */
     public static int START_SHOTS = 4;
+    /** 第二次循环前往发射点时改为去第一发射区域（FtcDashboard 可实时改；init 时也可按 gamepad1.Y 切换） */
+    public static boolean SECOND_CYCLE_FIRST_AREA = false;
+    /** 循环数驱动发射区域切换模式（0=OFF, 1=EVEN, 2=ODD, 3=EVERY），init 时也可按 gamepad1.A 切换 */
+    public static int AREA_CYCLE_MODE = 0;
 
     private ActionRunner actionRunner;
     private MecanumDrive drive;
@@ -93,6 +89,8 @@ public class AutoBlueRoutine extends LinearOpMode {
     private RoutineState currentState = RoutineState.START_SHOOT;
     private int shotsFired = 0;
     private boolean parkScheduled = false;
+    /** 当前轮次：1 → 取球点 1 / 第一发射区域，2 → 取球点 2 / 第二发射区域 */
+    private int round = 1;
 
     @Override
     public void runOpMode() throws InterruptedException {
@@ -106,7 +104,7 @@ public class AutoBlueRoutine extends LinearOpMode {
 
         telemetry.addData("Status", "Initialized");
         telemetry.addData("Team", teamColor);
-        telemetry.addData("Route", "fixed: eat1 -> shoot1 -> eat2 -> shoot2 -> park");
+        telemetry.addData("Route", "fixed: eat1 -> shoot2 -> eat2 -> shoot2 -> park");
         telemetry.update();
 
         // ===== waitForStart 之前：gamepad1 的 X 键切换「开局是否先发射」（默认 true）=====
@@ -114,6 +112,9 @@ public class AutoBlueRoutine extends LinearOpMode {
         while (opModeInInit()) {
             AutoStartOptions.update(gamepad1);
             telemetry.addData("Start Shoot (gamepad1.X)", AutoStartOptions.startShoot());
+            telemetry.addData("2nd Cycle First Area (gamepad1.Y)",
+                    SECOND_CYCLE_FIRST_AREA || AutoStartOptions.secondCycleFirstArea());
+            telemetry.addData("Area Cycle Mode (gamepad1.A)", AutoStartOptions.areaCycleModeName(areaCycleMode()));
             telemetry.update();
         }
         waitForStart();
@@ -140,52 +141,50 @@ public class AutoBlueRoutine extends LinearOpMode {
                             actionRunner.add(new AutoAimAction(drive, turret));
                             shotsFired++;
                         } else {
-                            currentState = RoutineState.TO_EAT_1;
+                            currentState = RoutineState.TO_EAT;
                         }
                         break;
 
-                    case TO_EAT_1:
-                        actionRunner.add(new RoutineMoveAction(
-                                teamColor, fixedEatPose(HypParams.EatPoint1), sweeper));
-                        currentState = RoutineState.EATING_1;
+                    case TO_EAT:
+                        actionRunner.add(new RoutineMoveAction(teamColor,
+                                fixedEatPose(round == 1 ? HypParams.EatPoint1 : HypParams.EatPoint2),
+                                sweeper));
+                        currentState = RoutineState.EATING;
                         break;
 
-                    case EATING_1:
-                        actionRunner.add(new EatAction(sweeper));
-                        currentState = RoutineState.TO_SHOOT_1;
-                        break;
-
-                    case TO_SHOOT_1:
-                        actionRunner.add(new RoutineMoveAction(
-                                teamColor, fixedShootPose(HypParams.ShootFirstAreaBlue), null));
-                        currentState = RoutineState.AIM_1;
-                        break;
-
-                    case AIM_1:
-                        actionRunner.add(new AutoAimAction(drive, turret));
-                        currentState = RoutineState.TO_EAT_2;
-                        break;
-
-                    case TO_EAT_2:
-                        actionRunner.add(new RoutineMoveAction(
-                                teamColor, fixedEatPose(HypParams.EatPoint2), sweeper));
-                        currentState = RoutineState.EATING_2;
-                        break;
-
-                    case EATING_2:
+                    case EATING:
                         actionRunner.add(new EatAction(sweeper));
                         currentState = RoutineState.TO_SHOOT_2;
                         break;
 
-                    case TO_SHOOT_2:
-                        actionRunner.add(new RoutineMoveAction(
-                                teamColor, fixedShootPose(HypParams.ShootSecondAreaBlue), null));
-                        currentState = RoutineState.AIM_2;
+                    case AIM:
+                        actionRunner.add(new AutoAimAction(drive, turret));
+                        if (round == 1) {
+                            round = 2;
+                            currentState = RoutineState.TO_EAT;
+                        } else {
+                            currentState = RoutineState.PARKING;
+                        }
                         break;
 
-                    case AIM_2:
-                        actionRunner.add(new AutoAimAction(drive, turret));
-                        currentState = RoutineState.PARKING;
+                    case TO_SHOOT_2:
+                        boolean toFirst = false;
+                        int mode = areaCycleMode();
+                        if (mode != AutoStartOptions.AREA_CYCLE_MODE_OFF) {
+                            boolean isEven = round % 2 == 0;
+                            switch (mode) {
+                                case AutoStartOptions.AREA_CYCLE_MODE_EVEN:  toFirst = isEven; break;
+                                case AutoStartOptions.AREA_CYCLE_MODE_ODD:   toFirst = !isEven; break;
+                                case AutoStartOptions.AREA_CYCLE_MODE_EVERY: toFirst = isEven; break;
+                            }
+                        } else if (round >= 2 && secondCycleFirstArea()) {
+                            toFirst = true;
+                        }
+                        Pose2d shootPose = toFirst
+                                ? fixedShootPose(HypParams.ShootFirstAreaBlue)
+                                : fixedShootPose(HypParams.ShootSecondAreaBlue);
+                        actionRunner.add(new RoutineMoveAction(teamColor, shootPose, null));
+                        currentState = RoutineState.AIM;
                         break;
 
                     case PARKING:
@@ -248,6 +247,17 @@ public class AutoBlueRoutine extends LinearOpMode {
                 fixedGoal.position.y - nearest.getY(),
                 fixedGoal.position.x - nearest.getX());
         return new Pose2d(nearest.getX(), nearest.getY(), heading);
+    }
+
+    /** 第二次及以后循环前往发射点时是否改去第一发射区域。 */
+    private boolean secondCycleFirstArea() {
+        return SECOND_CYCLE_FIRST_AREA || AutoStartOptions.secondCycleFirstArea();
+    }
+
+    /** 循环数驱动发射区域切换模式：优先用 AutoStartOptions（gamepad1.A），否则用本地 Dashboard 字段。 */
+    private int areaCycleMode() {
+        int opt = AutoStartOptions.getAreaCycleMode();
+        return opt != AutoStartOptions.AREA_CYCLE_MODE_OFF ? opt : AREA_CYCLE_MODE;
     }
 
     /** 清空动作队列并前往固定停靠位姿（只执行一次）。 */

@@ -11,6 +11,7 @@
 | `Vector2D.java` | 二维向量类，提供平移、旋转、缩放、对称、点积等几何运算 |
 | `Vector3D.java` | 三维向量类，提供绕轴旋转、平面投影、球坐标转换等空间运算 |
 | `ActionRunner.java` | 动作执行器，基于 Road Runner `Action`，串行执行动作队列 |
+| `AutoStartOptions.java` | 自动阶段开局选项：waitForStart 前按 **gamepad1.X** 切换「开局是否先发射」（默认 `true`）、按 **gamepad1.Y** 切换「第二次循环去第一发射区域」（默认 `false`）、按 **gamepad1.A** 循环切换「AREA_CYCLE_MODE」（默认 `OFF`，支持 EVEN/ODD/EVERY 四种枚举值）；`reset()` 每局复位，`update(Gamepad)` 检测按下沿 |
 | `HypParams.java` | 全局超参数配置类，使用 `@Config` 支持 FTC Dashboard 实时调参 |
 | `Algebra/` | 代数工具目录，包含多项式方程求解器与复数运算 |
 | `Geometry/` | 几何工具目录，包含凸多边形、欧拉角、投影器 |
