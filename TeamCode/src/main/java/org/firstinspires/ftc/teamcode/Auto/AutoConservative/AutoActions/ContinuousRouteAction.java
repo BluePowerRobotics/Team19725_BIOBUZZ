@@ -156,7 +156,11 @@ public class ContinuousRouteAction implements Action {
         // 停车吃球：底盘原地不动，吃球结束后标记该取球点已访问
         Action eat = new SequentialAction(
                 new EatAction(sweeper),
-                new InstantAction(() -> EatPointTracker.markVisited(eatIndex)));
+                new InstantAction(() -> {
+                    // 吃球结束、前往发射区域前抬起铲子（已抬起则不改变当前铲子位置）
+                    sweeper.raiseShovelIfNotUp();
+                    EatPointTracker.markVisited(eatIndex);
+                }));
 
         Action leg2 = buildLeg(drive, eatTarget,
                 HiveRoutePlanner.waypoints(teamColor, eatTarget, shootTarget, secondLegThroughHive));

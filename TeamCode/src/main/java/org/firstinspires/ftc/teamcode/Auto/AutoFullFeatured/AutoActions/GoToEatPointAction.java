@@ -70,8 +70,8 @@ public class GoToEatPointAction implements Action {
 
         this.targetEatPoint = (pointIndex == FIRST) ? HypParams.EatPoint1 : HypParams.EatPoint2;
 
-        // 由 intake 目标点反推底盘中心目标位姿（含朝向）
-        this.targetPose = ChassisGeometry.centerPoseFromIntakeTarget(
+        // 由取球点反推底盘中心目标位姿（机器前端按「放下铲子的最前端」计算）
+        this.targetPose = ChassisGeometry.centerPoseFromShovelFrontTarget(
                 targetEatPoint.getX(), targetEatPoint.getY(), cx, cy);
 
         this.trajectoryAction = drive.actionBuilder(currentPose)
