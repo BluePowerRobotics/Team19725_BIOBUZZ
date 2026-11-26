@@ -60,6 +60,13 @@ public class BallCounter {
     private int count;
 
     /**
+     * 本帧从下属 BreakBeamSensor.update() 拿回的采样结果包。
+     * BallCounter 内部用 sample.blocked 做上升沿计数，上层（RobotPosition / 遥测）
+     * 通过本类的 getter 读取 sample 里的电压和遮挡状态（只读缓存，不重复采样）。
+     */
+    private BreakBeamSensor.BeamSample lastSample;
+
+    /**
      * 创建球道计数器，并在内部创建其下属对射光电门（严格层级：
      * RobotPosition → BallCounter → BreakBeamSensor，光电门不对外暴露）。
      *
@@ -95,26 +102,37 @@ public class BallCounter {
     }
 
     /**
-     * 采样一次并做上升沿检测计数。
-     * 应在 OpMode 主循环中每帧调用，且每帧传入当前外部模式信息。
+     * 推进一次：更新下属 BreakBeam（唯一推进点），拿到本帧采样结果后做上升沿计数。
      *
-     * @param externalState 外部信息：0 = 进入模式（intake），1 = 出球模式（output）
+     * <p>层级流程（严格单级）：
+     * <pre>
+     *   上级 RobotPosition → 本方法
+     *   本方法 → breakBeam.update()（上级更新下级）
+     *   breakBeam.update() → 返回 BeamSample（下级数据上传给上级）
+     *   本方法缓存 sample.blocked → 与 lastBlocked 比较做上升沿检测
+     * </pre>
+     * 本帧所有需要光电门数据的地方都应从 {@code sample} 或本类的 getter 里取，
+     * 不应再直接调 {@link BreakBeamSensor#update()} 或绕过本类。
+     *
+     * @param externalState 计数方向：{@link #MODE_INTAKE}（吸球 +1）/ {@link #MODE_OUTPUT}（出球 -1）
      * @return 本帧是否有球挡光（上升沿；无论计数 +1 还是 -1）
      */
     public boolean update(int externalState) {
         if (externalState != MODE_INTAKE && externalState != MODE_OUTPUT) {
             throw new IllegalArgumentException(
-                    "externalState must be 0 (intake) or 1 (output), got: " + externalState);
+                    "externalState must be MODE_INTAKE(0) or MODE_OUTPUT(1), got: " + externalState);
         }
 
-        boolean output = (externalState == MODE_OUTPUT);
-        boolean blocked = breakBeam.update();
+        // ===== 上级更新下级，下级返回完整采样包 =====
+        BreakBeamSensor.BeamSample sample = breakBeam.update();
+        this.lastSample = sample;       // 缓存，供上层通过本类 getter 读取
+        boolean blocked = sample.blocked;
 
         // 上升沿：0 → 1 跳变。持续为 1（球停住不动）不会重复触发
         boolean risingEdge = blocked && !lastBlocked;
         if (risingEdge) {
-            if (output) {
-                if (count > 0) {   // 不允许减到负数
+            if (externalState == MODE_OUTPUT) {
+                if (count > 0) {       // 不允许减到负数
                     count--;
                 }
             } else {
@@ -133,34 +151,41 @@ public class BallCounter {
         return count;
     }
 
+    /** @return 球道估计是否已空（计数为 0；单个光电门无法判断物理球道是否完全排空） */
+    public boolean isEmpty() {
+        return count == 0;
+    }
+
     /**
      * 清零计数并复位边缘检测状态（不影响光电门的 threshold/alpha 配置）。
-     * <b>不读取硬件</b>：以最近一帧 {@link BreakBeamSensor#isBlocked()} 的结果作为
-     * 边缘检测基准，下一帧 update() 若物理状态未变就不会产生虚假上升沿。
+     * <b>不读取硬件</b>：以最近一帧缓存的 {@link BeamSample#blocked} 作为边缘检测基准，
+     * 下一帧 update() 若物理状态未变就不会产生虚假上升沿。
      */
     public void reset() {
         count = 0;
         breakBeam.reset();
-        lastBlocked = breakBeam.isBlocked();
+        // 优先用最近一帧缓存的 sample.blocked，没有 sample 时 fallback 到 breakBeam 缓存
+        lastBlocked = (lastSample != null) ? lastSample.blocked : breakBeam.isBlocked();
     }
 
     // ==================== 光电门状态透传（只读 / 调参，不推进 update）====================
-    // 光电门由本类独占持有，上层需要查看原始电压、滤波电压或调阈值时通过本类访问，
-    // 既保证层级（RobotPosition → BallCounter → BreakBeam），又便于标定调试。
+    // BallCounter 独占持有下属 BreakBeamSensor，上级（RobotPosition 及其上层）
+    // 只能通过本类访问采样结果和调参；光电门 update() 只能由本类的 update() 调用，
+    // 保证严格层级：上级更新下级，下级数据返回给上级，禁止越级。
 
-    /** @return 本帧光电门是否遮挡（BreakBeamSensor 最近一次 update 的结果，不重复采样） */
+    /** @return 本帧光电门是否遮挡（来自最近一次 update 缓存的 BeamSample） */
     public boolean isBlocked() {
-        return breakBeam.isBlocked();
+        return lastSample != null ? lastSample.blocked : breakBeam.isBlocked();
     }
 
-    /** @return 归一化原始电压（未滤波） */
+    /** @return 归一化原始电压（未滤波），来自最近一次 update 缓存的 BeamSample */
     public double getRawVoltage() {
-        return breakBeam.getRawVoltage();
+        return lastSample != null ? lastSample.rawVoltage : breakBeam.getRawVoltage();
     }
 
-    /** @return 归一化滤波电压（EMA 输出） */
+    /** @return 归一化滤波电压（EMA 输出），来自最近一次 update 缓存的 BeamSample */
     public double getFilteredVoltage() {
-        return breakBeam.getVoltage();
+        return lastSample != null ? lastSample.filteredVoltage : breakBeam.getVoltage();
     }
 
     /** @return 当前归一化遮挡阈值 */
@@ -183,8 +208,13 @@ public class BallCounter {
         breakBeam.setAlpha(alpha);
     }
 
-    /** @return 下属光电门（只读访问，禁止在上层调用其 update()） */
-    public BreakBeamSensor getBreakBeamSensor() {
-        return breakBeam;
+    /**
+     * 设置下属光电门的阈值与 EMA 系数（一次设置两个标定参数）。
+     * 与 {@link BreakBeamSensor#BreakBeamSensor(HardwareMap, String, double, double)} 构造
+     * 时指定参数等效，在运行期调整标定值时使用。
+     */
+    public void setBeamParams(double alpha, double threshold) {
+        breakBeam.setAlpha(alpha);
+        breakBeam.setThreshold(threshold);
     }
 }

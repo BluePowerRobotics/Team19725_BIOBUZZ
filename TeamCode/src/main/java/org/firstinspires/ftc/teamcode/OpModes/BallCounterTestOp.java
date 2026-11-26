@@ -118,8 +118,8 @@ public class BallCounterTestOp extends LinearOpMode {
                 robotPosition.resetBallCount();
             }
 
-            // ---- 控制：下发 Sweeper（满额自动停吸由 Sweeper 内部判定）----
-            sweeper.update();
+            // ---- 控制：下发 Sweeper（计数由本层传入，满额自动停吸由 Sweeper 内部判定）----
+            sweeper.update(robotPosition.getBallCount());
 
             // ---- 控制：炮台（固定 yaw / 俯仰，二操按住 A 发射）----
             double pitchBig = (Shooter.BIG_PARAMS.pitchMin + Shooter.BIG_PARAMS.pitchMax) / 2.0;
@@ -129,26 +129,33 @@ public class BallCounterTestOp extends LinearOpMode {
                     testSpeedBig, testSpeedSmall, fire, fire);
 
             // ---- 炮台发射完毕 → 清空球道计数 ----
-            // 由 Turret.update 检测扳机下降沿后直接调用 RobotPosition.resetBallCount()，
-            // OpMode 无需转发。
+            // Turret 只置位请求，由本层（OpMode）转发给 RobotPosition，保证单级调用；
+            // 先保存 consume 结果再清零，否则遥测里读到的永远是清除后的 false
+            boolean fireCompleted = turret.consumeResetBallCountRequest();
+            if (fireCompleted) {
+                robotPosition.resetBallCount();
+            }
 
-            // ---- 遥测 ----
+            // ---- 遥测：所有球道数据均由 RobotPosition 从直接下属 BallCounter 取回 ----
+            telemetry.addData("Manual Output", gamepad1.right_bumper ? "ON (Intake Reverse)" : "OFF");
             telemetry.addData("Ball Direction", ballDirection == BallCounter.MODE_INTAKE
                     ? "INTAKE (+1)" : "OUTPUT (-1)");
             telemetry.addData("Ball Count", robotPosition.getBallCount());
+            telemetry.addData("Ball Lane Empty", robotPosition.isBallLaneEmpty());
             telemetry.addData("Ball Capacity", Sweeper.BallCapacity);
             telemetry.addData("Ball Lane Full", sweeper.isBallLaneFull());
             telemetry.addData("Sweeper Target (tick/s)", sweeper.getTargetVelocity());
+            telemetry.addData("Fire Completed", fireCompleted);
             telemetry.addData("Fire Ready big/small", ready.big + " / " + ready.small);
-            BallCounter ballCounter = robotPosition.getBallCounter();
-            telemetry.addData("Break Beam",
-                    ballCounter != null && ballCounter.isBlocked() ? 1 : 0);
+            telemetry.addData("Break Beam", robotPosition.isBreakBeamBlocked() ? "BLOCKED" : "CLEAR");
+            telemetry.addData("Beam Raw", "%.3f", robotPosition.getBreakBeamRawVoltage());
+            telemetry.addData("Beam Filtered", "%.3f", robotPosition.getBreakBeamFilteredVoltage());
             turret.setTelemetry();
             telemetry.update();
         }
 
         turret.stop();
         sweeper.setStop();
-        sweeper.update();
+        sweeper.update(RobotPosition.getInstance().getBallCount());
     }
 }

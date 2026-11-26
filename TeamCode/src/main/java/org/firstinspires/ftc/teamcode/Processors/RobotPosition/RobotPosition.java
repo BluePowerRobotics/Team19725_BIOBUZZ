@@ -193,8 +193,32 @@ public class RobotPosition {
         return ballCounter != null ? ballCounter.getCount() : 0;
     }
 
+    /** @return 球道估计是否已空；数据来自直接下属 BallCounter */
+    public boolean isBallLaneEmpty() {
+        return ballCounter == null || ballCounter.isEmpty();
+    }
+
+    /** @return 最近一帧光电门是否遮挡；只读 BallCounter 上传的缓存，不重复采样 */
+    public boolean isBreakBeamBlocked() {
+        return ballCounter != null && ballCounter.isBlocked();
+    }
+
+    /** @return 最近一帧光电门归一化原始电压；只读缓存，不重复采样 */
+    public double getBreakBeamRawVoltage() {
+        return ballCounter != null ? ballCounter.getRawVoltage() : 0.0;
+    }
+
+    /** @return 最近一帧光电门归一化滤波电压；只读缓存，不重复采样 */
+    public double getBreakBeamFilteredVoltage() {
+        return ballCounter != null ? ballCounter.getFilteredVoltage() : 0.0;
+    }
+
     /**
-     * 清空球道计数。由 OpMode（手动）或 Turret（发射完毕）调用；
+     * 清空球道计数。调用方均为 OpMode（同层，单级调用）：
+     * <ul>
+     *   <li>操作手手动清空（一操 Y 键）</li>
+     *   <li>转发 Turret 的"发射完毕"请求</li>
+     * </ul>
      * 同时把边缘检测基准重置为最近一帧的遮挡状态，因此不会产生虚假上升沿。
      */
     public void resetBallCount() {

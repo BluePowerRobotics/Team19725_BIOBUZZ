@@ -18,14 +18,31 @@ import org.firstinspires.ftc.teamcode.utility.filter.EMA;
  *   归一化到 [0, 1] 区间。因此 getRawVoltage()/getVoltage()/getThreshold()/
  *   setThreshold() 等接口返回/接收的都是归一化数值。
  *
- * 用法（OpMode 主循环中，每帧调用 update()）：
- *   BreakBeamSensor beam = new BreakBeamSensor(hardwareMap, "breakBeam");
- *   while (opModeIsActive()) {
- *       beam.update();                    // 采样 + 滤波 + 判定
- *       if (beam.isBlocked()) { ... }     // 实时布尔开关量
- *   }
+ * 层级约定（严格单级调用）：
+ *   BreakBeamSensor 是叶子，不创建 / 不 update 任何下属。
+ *   上级（BallCounter 等）只通过 update() 的返回值拿到本帧采样结果，
+ *   本类不暴露模拟输入设备引用，也不主动向上调用任何方法。
  */
 public class BreakBeamSensor {
+
+    /**
+     * 本帧采样的完整结果包，由 {@link #update()} 返回给上级。
+     * 上级拿到这一个对象就能读到所有需要的数据，不需要再调本类的其他 getter。
+     */
+    public static class BeamSample {
+        /** 本帧是否遮挡（滤波电压 < 阈值） */
+        public final boolean blocked;
+        /** 归一化原始电压（未滤波），范围 [0, 1] */
+        public final double rawVoltage;
+        /** 归一化滤波电压（EMA 输出），范围 [0, 1] */
+        public final double filteredVoltage;
+
+        public BeamSample(boolean blocked, double rawVoltage, double filteredVoltage) {
+            this.blocked = blocked;
+            this.rawVoltage = rawVoltage;
+            this.filteredVoltage = filteredVoltage;
+        }
+    }
 
     /** 模拟输入满量程电压（V），所有电压/阈值的归一化基准 */
     public static final double VOLTAGE_REFERENCE = 3.3;
@@ -91,24 +108,30 @@ public class BreakBeamSensor {
 
     /**
      * 采样一次模拟输入：读取归一化原始电压 → EMA 滤波 → 更新遮挡判定。
-     * 应在 OpMode 主循环中每帧调用。
+     * 每帧只应被上级（BallCounter）调用一次，推进一次 EMA。
      *
-     * 注意：光电门"未遮挡 = 高电压、遮挡 = 低电压"，与压敏开关相反，
+     * <p>本方法是上级从本类取数的<strong>唯一通道</strong>：返回的 {@link BeamSample}
+     * 包含本帧完整采样结果（遮挡判定 + 原始电压 + 滤波电压），上级拿到这一个对象
+     * 后，本帧内所有需要的数据都应该从 sample 里读，不应再调本类的其他 getter
+     * （那些 getter 返回的是同一帧的缓存值，只是为了兼容旧调用保留）。
+     *
+     * <p>注意：光电门"未遮挡 = 高电压、遮挡 = 低电压"，与压敏开关相反，
      *      因此用滤波电压"低于"阈值判定遮挡（压敏开关用的是高于阈值）。
      *
-     * @return 本次采样后是否遮挡（滤波电压低于阈值）
+     * @return 本帧采样结果包（包含 blocked / rawVoltage / filteredVoltage），
+     *         上级 BallCounter 用它做上升沿检测和标定透传
      */
-    public boolean update() {
+    public BeamSample update() {
         double voltage = analogInput.getVoltage();
         // 无效读数（NaN / 负值）不按"低电压 = 遮挡"处理：保持上次判定并停止推进滤波，
         // 避免断线或坏读数被误判为遮挡而产生虚假上升沿（虚假计数）
         if (Double.isNaN(voltage) || voltage < 0) {
-            return blocked;
+            return new BeamSample(blocked, rawVoltage, filteredVoltage);
         }
         rawVoltage = normalize(voltage);
         filteredVoltage = ema.update(rawVoltage);
         blocked = filteredVoltage < threshold;
-        return blocked;
+        return new BeamSample(blocked, rawVoltage, filteredVoltage);
     }
 
     /**

@@ -164,7 +164,7 @@ public class AutoBlue extends LinearOpMode {
 
         // 确保底盘与集球器停稳
         sweeper.setStop();
-        sweeper.update();
+        sweeper.update(RobotPosition.getInstance().getBallCount());
         chassis.stop();
     }
 }

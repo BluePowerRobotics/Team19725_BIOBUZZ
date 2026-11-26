@@ -38,7 +38,8 @@ public class SweeperTester extends LinearOpMode {
                 sweeper.setShovelDown();
             }
             
-            sweeper.update();
+            // 单独测 Sweeper 时不接球道计数，传 0 表示不做满额拦截
+            sweeper.update(0);
             sweeper.setTelemetry();
             telemetry.addData("Shovel Pos", "%.3f", sweeper.getShovelPosition());
             telemetry.update();

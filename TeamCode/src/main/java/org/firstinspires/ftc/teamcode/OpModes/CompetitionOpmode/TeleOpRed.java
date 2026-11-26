@@ -127,12 +127,18 @@ public class TeleOpRed extends LinearOpMode {
             // 因此这里必须在循环内调用，否则队列非空时底盘会一直被屏蔽。
             actionRunner.update();
 
-            sweeper.update();
+            sweeper.update(ballCount);
 
             telemetry.addData("Team", teamColor == TeamColor.BLUE ? "BLUE" : "RED");
             telemetry.addData("useNoHeadMode", chassis.getUseNoHeadMode());
+            telemetry.addData("Manual Output", gamepad1.right_bumper ? "ON (Intake Reverse)" : "OFF");
+            telemetry.addData("Counter Mode", ballDirection == BallCounter.MODE_OUTPUT
+                    ? "OUTPUT (-1 per ball)" : "INTAKE (+1 per ball)");
             telemetry.addData("Ball Count", ballCount);
+            telemetry.addData("Ball Lane Empty", RobotPosition.getInstance().isBallLaneEmpty());
             telemetry.addData("Ball Lane Full", sweeper.isBallLaneFull());
+            telemetry.addData("Break Beam", RobotPosition.getInstance().isBreakBeamBlocked()
+                    ? "BLOCKED" : "CLEAR");
 
             // 位姿信息
             telemetry.addData("Pose X", "%.2f in", RobotPosition.getInstance().getX());
@@ -150,6 +156,6 @@ public class TeleOpRed extends LinearOpMode {
 
         chassis.stop();
         sweeper.setStop();
-        sweeper.update();
+        sweeper.update(RobotPosition.getInstance().getBallCount());
     }
 }
