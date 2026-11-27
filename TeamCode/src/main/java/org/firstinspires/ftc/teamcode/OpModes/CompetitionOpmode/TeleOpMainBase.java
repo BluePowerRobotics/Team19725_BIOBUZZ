@@ -99,7 +99,7 @@ public abstract class TeleOpMainBase extends LinearOpMode {
     private double lastPitchTime = 0;
 
     /** true = 自动瞄准（炮台按定位解算），false = 手动瞄准（副控直接给定目标） */
-    private boolean autoAim = true;
+    private boolean autoAim = false;
     /** 预载开关，仅自动瞄准生效；Y 切换 */
     private boolean preloadEnabled = true;
     /**

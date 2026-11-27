@@ -29,16 +29,23 @@ public class Chassis {
     private final Telemetry telemetry;
     private double lastKx = 0, lastKy = 0, lastKomega = 0;
 
-    /** 刹车舵机在 Robot Configuration 中的设备名 */
-    private static final String BRAKE_SERVO_NAME = "brakeServo";
+    /** 刹车舵机（左/右）在 Robot Configuration 中的设备名，用 +L / +R 区分 */
+    private static final String BRAKE_SERVO_L_NAME = "brakeServoL";
+    private static final String BRAKE_SERVO_R_NAME = "brakeServoR";
 
-    /** 刹车抬起（不刹车）的舵机位置 [0,1]（todo: 实机标定） */
-    public static double BrakeUpPos = 1.0;
-    /** 刹车放下（刹车）的舵机位置 [0,1]（todo: 实机标定） */
-    public static double BrakeDownPos = 0.0;
+    /** 左刹车抬起（不刹车）的舵机位置 [0,1]（todo: 实机标定） */
+    public static double BrakeUpPosL = 1.0;
+    /** 左刹车放下（刹车）的舵机位置 [0,1]（todo: 实机标定） */
+    public static double BrakeDownPosL = 0.0;
+    /** 右刹车抬起（不刹车）的舵机位置 [0,1]（todo: 实机标定） */
+    public static double BrakeUpPosR = 1.0;
+    /** 右刹车放下（刹车）的舵机位置 [0,1]（todo: 实机标定） */
+    public static double BrakeDownPosR = 0.0;
 
-    /** 底盘刹车舵机：抬起 = 可自由移动，放下 = 压住地面刹车 */
-    private final Servo brakeServo;
+    /** 底盘刹车舵机（左）：抬起 = 可自由移动，放下 = 压住地面刹车 */
+    private final Servo brakeServoL;
+    /** 底盘刹车舵机（右）：与左侧同步动作，预设位置独立配置 */
+    private final Servo brakeServoR;
 
     /** 本帧是否请求停止底盘（由 {@link #stop()} 置位，update 消费） */
     private boolean stopRequested;
@@ -70,9 +77,10 @@ public class Chassis {
         this.drive = RobotPosition.getInstance().getDrive();
         this.actionRunner = actionRunner;
         this.telemetry = telemetry;
-        this.brakeServo = hardwareMap.get(Servo.class, BRAKE_SERVO_NAME);
+        this.brakeServoL = hardwareMap.get(Servo.class, BRAKE_SERVO_L_NAME);
+        this.brakeServoR = hardwareMap.get(Servo.class, BRAKE_SERVO_R_NAME);
         // 上电默认抬起刹车，等待上层显式 stop(true) 放下
-        this.brakeServo.setPosition(BrakeUpPos);
+        applyBrake(false);
 
     }
 
@@ -82,9 +90,10 @@ public class Chassis {
         this.drive = RobotPosition.getInstance().getDrive();
         this.actionRunner = actionRunner;
         this.telemetry = telemetry;
-        this.brakeServo = hardwareMap.get(Servo.class, BRAKE_SERVO_NAME);
+        this.brakeServoL = hardwareMap.get(Servo.class, BRAKE_SERVO_L_NAME);
+        this.brakeServoR = hardwareMap.get(Servo.class, BRAKE_SERVO_R_NAME);
         // 上电默认抬起刹车，等待上层显式 stop(true) 放下
-        this.brakeServo.setPosition(BrakeUpPos);
+        applyBrake(false);
     }
 
     public void setUseNoHeadMode(boolean useNoHeadMode){
@@ -159,7 +168,13 @@ public class Chassis {
             // 避免电机维持上一帧功率；Action 的实际驱动由 ActionRunner.update() 下发
             drive.setDrivePowers(new PoseVelocity2d(new Vector2d(0, 0), 0));
         }
-        brakeServo.setPosition(brake ? BrakeDownPos : BrakeUpPos);
+        applyBrake(brake);
+    }
+
+    /** 同时下发左右刹车舵机：true = 放下刹车，false = 抬起 */
+    private void applyBrake(boolean brake) {
+        brakeServoL.setPosition(brake ? BrakeDownPosL : BrakeUpPosL);
+        brakeServoR.setPosition(brake ? BrakeDownPosR : BrakeUpPosR);
     }
 
     /**
@@ -211,7 +226,7 @@ public class Chassis {
             // 本帧有 stop 请求，或 Action 运行期间手柄输入被屏蔽：主动刹停（同普通重载）
             drive.setDrivePowers(new PoseVelocity2d(new Vector2d(0, 0), 0));
         }
-        brakeServo.setPosition(brake ? BrakeDownPos : BrakeUpPos);
+        applyBrake(brake);
     }
 
     /**

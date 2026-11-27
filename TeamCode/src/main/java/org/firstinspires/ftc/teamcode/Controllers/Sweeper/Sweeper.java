@@ -32,9 +32,15 @@ import org.firstinspires.ftc.teamcode.Processors.RobotPosition.RobotPosition;
  * 注意：软件闭环延迟稍高且受 RC 线程节拍影响，仅在确需自定义控制律时切换。
  */
 public class Sweeper {
+    /** 铲子舵机设备名：左右用 +L / +R 区分 */
+    private static final String SHOVEL_SERVO_L = "shovelServoL";
+    private static final String SHOVEL_SERVO_R = "shovelServoR";
+
     public DcMotorEx motor;
-    /** 铲子升降舵机：控制 intake 前方铲子在抬起 / 放下两个已知角度间切换 */
-    public Servo shovelServo;
+    /** 铲子升降舵机（左）：控制 intake 前方铲子在抬起 / 放下两个已知角度间切换 */
+    public Servo shovelServoL;
+    /** 铲子升降舵机（右）：与左侧同步动作，预设位置独立配置 */
+    public Servo shovelServoR;
 
     private Telemetry telemetry;
 
@@ -66,18 +72,25 @@ public class Sweeper {
 
     public static int ForR = 0;
 
-    /** 铲子抬起时的舵机位置 [0,1]（todo: 实机标定） */
-    public static double ShovelUpPos = 0.5;
-    /** 铲子放下时的舵机位置 [0,1]（todo: 实机标定） */
-    public static double ShovelDownPos = 0.0;
+    /** 左铲子抬起时的舵机位置 [0,1]（todo: 实机标定） */
+    public static double ShovelUpPosL = 0.5;
+    /** 左铲子放下时的舵机位置 [0,1]（todo: 实机标定） */
+    public static double ShovelDownPosL = 0.0;
+    /** 右铲子抬起时的舵机位置 [0,1]（todo: 实机标定） */
+    public static double ShovelUpPosR = 0.5;
+    /** 右铲子放下时的舵机位置 [0,1]（todo: 实机标定） */
+    public static double ShovelDownPosR = 0.0;
 
-    /** 当前铲子舵机目标位置（[0,1]） */
-    private double targetShovelPos = ShovelDownPos;
+    /** 当前左铲子舵机目标位置（[0,1]） */
+    private double targetShovelPosL = ShovelDownPosL;
+    /** 当前右铲子舵机目标位置（[0,1]） */
+    private double targetShovelPosR = ShovelDownPosR;
 
     public Sweeper(HardwareMap hardwareMap, Telemetry telemetry) {
         this.telemetry = telemetry;
         this.motor = hardwareMap.get(DcMotorEx.class, "sweeperMotor");
-        this.shovelServo = hardwareMap.get(Servo.class, "shovelServo");
+        this.shovelServoL = hardwareMap.get(Servo.class, SHOVEL_SERVO_L);
+        this.shovelServoR = hardwareMap.get(Servo.class, SHOVEL_SERVO_R);
         setDirection();
         // 固件速度闭环：开启编码器速度模式并配置内置速度 PIDF
         motor.setMode(DcMotor.RunMode.RUN_USING_ENCODER);
@@ -85,7 +98,8 @@ public class Sweeper {
         motor.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.FLOAT);
         // 上电默认铲子抬起，等待操控/自动切换
         setShovelUp();
-        shovelServo.setPosition(targetShovelPos);
+        shovelServoL.setPosition(targetShovelPosL);
+        shovelServoR.setPosition(targetShovelPosR);
     }
 
     private void setDirection() {
@@ -124,14 +138,16 @@ public class Sweeper {
         eatCommand = false;
     }
 
-    /** 铲子抬起（切换到抬起角度） */
+    /** 铲子抬起（左右同时切换到各自抬起角度） */
     public void setShovelUp() {
-        targetShovelPos = ShovelUpPos;
+        targetShovelPosL = ShovelUpPosL;
+        targetShovelPosR = ShovelUpPosR;
     }
 
-    /** 铲子放下（切换到放下角度） */
+    /** 铲子放下（左右同时切换到各自放下角度） */
     public void setShovelDown() {
-        targetShovelPos = ShovelDownPos;
+        targetShovelPosL = ShovelDownPosL;
+        targetShovelPosR = ShovelDownPosR;
     }
 
     public void update() {
@@ -146,8 +162,9 @@ public class Sweeper {
         lastTargetVelocity = targetVelocity;
         targetVelocity = 0; // 每帧必须重新调用set函数，否则自动归零
         eatCommand = false;
-        // 舵机保持位置：每帧刷新，保证 Dashboard 上改 ShovelUpPos/ShovelDownPos 后即时生效
-        shovelServo.setPosition(targetShovelPos);
+        // 舵机保持位置：每帧刷新，保证 Dashboard 上改铲子预设位置后即时生效
+        shovelServoL.setPosition(targetShovelPosL);
+        shovelServoR.setPosition(targetShovelPosR);
         // 本帧唯一的硬件采样点：功率 / 转速 / 电流全部缓存，getter 与遥测只读缓存
         cachedPower = motor.getPower();
         cachedVelocity = motor.getVelocity();
@@ -179,9 +196,14 @@ public class Sweeper {
         return ForR;
     }
 
-    /** @return 铲子舵机当前指令位置（[0,1]） */
+    /** @return 左铲子舵机当前指令位置（[0,1]） */
     public double getShovelPosition() {
-        return targetShovelPos;
+        return targetShovelPosL;
+    }
+
+    /** @return 右铲子舵机当前指令位置（[0,1]） */
+    public double getShovelPositionR() {
+        return targetShovelPosR;
     }
 
     public double getCurrent() {

@@ -207,8 +207,15 @@ public class Shooter {
         SMALL_PARAMS.pitchModels = new PitchModel[]{
                 new PitchModel(0.30, 30.0, 70.0, 30.0, 900.0),
                 new PitchModel(0.50, 60.0, 100.0, 34.0, 1000.0),
-                new PitchModel(0.70, 90.0, 150.0, 38.0, 1100.0)
         };
+        // 大球扳机位置：关闭 0.6 / 释放 0.3
+        BIG_PARAMS.triggerOffPos = 0.6;
+        BIG_PARAMS.triggerOnPos = 0.3;
+        // 小球扳机位置：关闭 0.3 / 释放 0.6
+        SMALL_PARAMS.triggerOffPos = 0.3;
+        SMALL_PARAMS.triggerOnPos = 0.6;
+        // 小球俯仰机械行程上限
+        SMALL_PARAMS.pitchMax = 0.5;
     }
 
     // ==================== 是否展开诊断遥测 ====================

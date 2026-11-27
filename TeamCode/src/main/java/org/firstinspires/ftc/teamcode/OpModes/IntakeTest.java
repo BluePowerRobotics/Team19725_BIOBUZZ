@@ -10,10 +10,10 @@ import com.qualcomm.robotcore.hardware.DcMotorEx;
 import com.qualcomm.robotcore.hardware.VoltageSensor;
 import com.qualcomm.robotcore.util.ElapsedTime;
 
-import org.firstinspires.ftc.teamcode.Processors.Sensors.PressureSwitcher;
+import org.firstinspires.ftc.teamcode.Processors.Sensors.BreakBeamSensor;
 
 /**
- * Intake 测试台：在同一个 OpMode 中同时测试 intake 电机与压敏开关。
+ * Intake 测试台：在同一个 OpMode 中同时测试 intake 电机与对射光电门。
  *
  * <p><b>电机部分</b>
  * <ul>
@@ -26,9 +26,10 @@ import org.firstinspires.ftc.teamcode.Processors.Sensors.PressureSwitcher;
  * {@code RUN_USING_ENCODER} + {@code setVelocityPIDFCoefficients} + {@code setVelocity}，
  * PIDF 系数可在 Dashboard 实时调节。
  *
- * <p><b>压敏部分（与 {@code PressureTestOp} 相同）</b>
- * 每帧调用 {@link PressureSwitcher#update()}，实时显示原始电压 / 滤波电压 /
- * 阈值 / 按压判定 / alpha；threshold、alpha、resetFilter 在 Dashboard 可调。
+ * <p><b>光电部分（与 {@code BreakBeamTestOp} 相同）</b>
+ * 每帧调用 {@link BreakBeamSensor#update()}，实时显示原始电压 / 滤波电压 /
+ * 阈值 / 遮挡判定 / alpha；threshold、alpha、resetFilter 在 Dashboard 可调。
+ * 注意光电门"未遮挡 = 高电压、遮挡 = 低电压"，滤波电压<b>低于</b>阈值判定为遮挡。
  */
 @Config
 @TeleOp(name = "IntakeTest", group = "Tests")
@@ -38,8 +39,8 @@ public class IntakeTest extends LinearOpMode {
 
     /** 被控电机在 Robot Configuration 中的名称（改动后需重新 Init） */
     public static String motorName = "sweeperMotor";
-    /** 压敏电阻模拟输入在 Robot Configuration 中的名称 */
-    private static final String PRESSURE_DEVICE = "pressure_sensor";
+    /** 光电门模拟输入在 Robot Configuration 中的名称 */
+    private static final String BEAM_DEVICE = "breakBeam";
 
     // ==================== 电机可调参数（FTC Dashboard 实时生效） ====================
 
@@ -57,9 +58,9 @@ public class IntakeTest extends LinearOpMode {
     public static double VelocityD = 0.0;
     public static double VelocityF = 0.0;
 
-    // ==================== 压敏可调参数（FTC Dashboard 实时生效） ====================
+    // ==================== 光电可调参数（FTC Dashboard 实时生效） ====================
 
-    /** 归一化压力阈值 [0, 1] */
+    /** 归一化遮挡阈值 [0, 1]，滤波电压低于它即判定为遮挡 */
     public static double threshold = 0.5;
     /** EMA 平滑系数 (0, 1] */
     public static double alpha = 0.8;
@@ -91,7 +92,7 @@ public class IntakeTest extends LinearOpMode {
     private double lastTime = 0;
     private double dt = 1e-3;
 
-    private PressureSwitcher pressure;
+    private BreakBeamSensor beam;
     /** 上一次的 resetFilter 值，用于检测上升沿 */
     private boolean lastResetFilter = false;
 
@@ -107,11 +108,11 @@ public class IntakeTest extends LinearOpMode {
         motor.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.BRAKE);
         motor.setPower(0);
 
-        // ---- 压敏初始化 ----
-        pressure = new PressureSwitcher(hardwareMap, PRESSURE_DEVICE);
+        // ---- 光电初始化 ----
+        beam = new BreakBeamSensor(hardwareMap, BEAM_DEVICE);
 
         telemetry.addData("Motor", motorName);
-        telemetry.addData("Pressure", PRESSURE_DEVICE);
+        telemetry.addData("BreakBeam", BEAM_DEVICE);
         telemetry.addLine("X: switch mode (Power/Velocity)");
         telemetry.addLine("Dpad U/D: change setpoint | Y: E-stop");
         telemetry.addLine("Params: Dashboard group IntakeTest");
@@ -136,7 +137,7 @@ public class IntakeTest extends LinearOpMode {
                 emergencyStop();
             }
 
-            updatePressure();
+            updateBeam();
 
             runControl();
             setTelemetry();
@@ -220,22 +221,22 @@ public class IntakeTest extends LinearOpMode {
         }
     }
 
-    // ==================== 压敏辅助 ====================
+    // ==================== 光电辅助 ====================
 
     /** 采样 + EMA 滤波 + 阈值判定，并应用 Dashboard 参数与上升沿复位 */
-    private void updatePressure() {
+    private void updateBeam() {
         // 必须每帧调用
-        pressure.update();
+        beam.update();
 
         // 上升沿重置滤波器
         if (resetFilter && !lastResetFilter) {
-            pressure.reset();
+            beam.reset();
         }
         lastResetFilter = resetFilter;
 
         // 每帧应用 Dashboard 参数（带范围保护，避免非法值抛异常）
-        pressure.setThreshold(clamp(threshold, 0.0, 1.0));      // threshold ∈ [0, 1]
-        pressure.setAlpha(clamp(alpha, 0.01, 1.0));             // alpha ∈ (0, 1]
+        beam.setThreshold(clamp(threshold, 0.0, 1.0));      // threshold ∈ [0, 1]
+        beam.setAlpha(clamp(alpha, 0.01, 1.0));             // alpha ∈ (0, 1]
     }
 
     // ==================== 遥测 ====================
@@ -257,12 +258,12 @@ public class IntakeTest extends LinearOpMode {
                 break;
         }
 
-        // ---- 压敏遥测 ----
-        telemetry.addData("Pressure raw", "%.3f", pressure.getRawVoltage());
-        telemetry.addData("Pressure filtered", "%.3f", pressure.getVoltage());
-        telemetry.addData("Pressure threshold", "%.3f", pressure.getThreshold());
-        telemetry.addData("Pressure pressed", pressure.isPressed() ? 1 : 0);
-        telemetry.addData("Pressure alpha", "%.3f", pressure.getAlpha());
+        // ---- 光电遥测 ----
+        telemetry.addData("Beam raw", "%.3f", beam.getRawVoltage());
+        telemetry.addData("Beam filtered", "%.3f", beam.getVoltage());
+        telemetry.addData("Beam threshold", "%.3f", beam.getThreshold());
+        telemetry.addData("Beam blocked", beam.isBlocked() ? 1 : 0);
+        telemetry.addData("Beam alpha", "%.3f", beam.getAlpha());
     }
 
     private static double clamp(double v, double lo, double hi) {

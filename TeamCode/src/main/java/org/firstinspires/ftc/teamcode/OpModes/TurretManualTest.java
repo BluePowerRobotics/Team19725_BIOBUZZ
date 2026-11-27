@@ -14,6 +14,7 @@ import com.qualcomm.robotcore.hardware.VoltageSensor;
 import org.firstinspires.ftc.teamcode.Controllers.Turret.Shooter;
 import org.firstinspires.ftc.teamcode.Controllers.Turret.Turret;
 import org.firstinspires.ftc.teamcode.Controllers.Turret.YawController;
+import org.firstinspires.ftc.teamcode.Processors.Sensors.BreakBeamSensor;
 
 /**
  * 炮台手动控制台：用二操完整驱动 {@link Turret}（平转 + 两个发射器），
@@ -35,6 +36,11 @@ import org.firstinspires.ftc.teamcode.Controllers.Turret.YawController;
  * </ul>
  * 方向键为"按下即走一步，长按每 {@link #repeatPeriodMs} 毫秒再走一步"。
  *
+ * <p><b>光电部分（与 {@code IntakeTest} 相同）</b>
+ * 每帧调用 {@link BreakBeamSensor#update()}，实时显示原始电压 / 滤波电压 /
+ * 阈值 / 遮挡判定 / alpha；threshold、alpha、resetFilter 在 Dashboard 可调。
+ * 注意光电门"未遮挡 = 高电压、遮挡 = 低电压"，滤波电压<b>低于</b>阈值判定为遮挡。
+ *
  * <p>遥测中的 {@code Fire ready big/small} 为 {@link Turret#update} 的返回值，
  * 即对应发射器当前是否具备发射条件（飞轮转速 + 俯仰 + 平转均到位）。
  */
@@ -55,6 +61,18 @@ public class TurretManualTest extends LinearOpMode {
     /** intake 电机在 Robot Configuration 中的名称（改动后需重新 Init） */
     public static String intakeMotorName = "sweeperMotor";
 
+    /** 光电门模拟输入在 Robot Configuration 中的名称 */
+    private static final String BEAM_DEVICE = "breakBeam";
+
+    // ==================== 光电可调参数（FTC Dashboard 实时生效） ====================
+
+    /** 归一化遮挡阈值 [0, 1]，滤波电压低于它即判定为遮挡 */
+    public static double threshold = 0.5;
+    /** EMA 平滑系数 (0, 1] */
+    public static double alpha = 0.8;
+    /** 置 true 时重置一次滤波器状态（仅上升沿生效） */
+    public static boolean resetFilter = false;
+
     private Turret turret;
 
     /** intake 电机：由二操 RT 直通功率控制 */
@@ -66,6 +84,10 @@ public class TurretManualTest extends LinearOpMode {
 
     private final DpadStepper vertical = new DpadStepper();
     private final DpadStepper horizontal = new DpadStepper();
+
+    private BreakBeamSensor beam;
+    /** 上一次的 resetFilter 值，用于检测上升沿 */
+    private boolean lastResetFilter = false;
 
     @Override
     public void runOpMode() {
@@ -79,6 +101,9 @@ public class TurretManualTest extends LinearOpMode {
         intakeMotor.setMode(DcMotor.RunMode.RUN_WITHOUT_ENCODER);
         intakeMotor.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.BRAKE);
         intakeMotor.setPower(0);
+
+        // ---- 光电初始化 ----
+        beam = new BreakBeamSensor(hardwareMap, BEAM_DEVICE);
 
         telemetry.addLine("GP2 LstickX: yaw | pitch from Dashboard (targetPitchBig/Small)");
         telemetry.addLine("GP2 Dpad U/D: big speed | Dpad L/R: small speed");
@@ -112,6 +137,9 @@ public class TurretManualTest extends LinearOpMode {
             Turret.FireReady ready = turret.update(targetYaw, pitchBig, pitchSmall,
                     targetSpeedBig, targetSpeedSmall, triggerBig, triggerSmall);
 
+            // ---- 光电门采样 + 滤波 + 遮挡判定 ----
+            updateBeam();
+
             // ---- 遥测 ----
             turret.setTelemetry();
             telemetry.addLine("--- manual targets ---");
@@ -126,11 +154,36 @@ public class TurretManualTest extends LinearOpMode {
             telemetry.addData("Intake power (RT)", "%.3f", intakeMotor.getPower());
             telemetry.addData("Intake velocity (tick/s)", "%.0f", intakeMotor.getVelocity());
             telemetry.addData("Battery (V)", "%.2f", getBatteryVoltage());
+
+            // ---- 光电遥测 ----
+            telemetry.addData("Beam raw", "%.3f", beam.getRawVoltage());
+            telemetry.addData("Beam filtered", "%.3f", beam.getVoltage());
+            telemetry.addData("Beam threshold", "%.3f", beam.getThreshold());
+            telemetry.addData("Beam blocked", beam.isBlocked() ? 1 : 0);
+            telemetry.addData("Beam alpha", "%.3f", beam.getAlpha());
             telemetry.update();
         }
 
         intakeMotor.setPower(0);
         turret.stop();
+    }
+
+    // ==================== 光电辅助 ====================
+
+    /** 采样 + EMA 滤波 + 阈值判定，并应用 Dashboard 参数与上升沿复位 */
+    private void updateBeam() {
+        // 必须每帧调用
+        beam.update();
+
+        // 上升沿重置滤波器
+        if (resetFilter && !lastResetFilter) {
+            beam.reset();
+        }
+        lastResetFilter = resetFilter;
+
+        // 每帧应用 Dashboard 参数（带范围保护，避免非法值抛异常）
+        beam.setThreshold(clamp(threshold, 0.0, 1.0));      // threshold ∈ [0, 1]
+        beam.setAlpha(clamp(alpha, 0.01, 1.0));             // alpha ∈ (0, 1]
     }
 
     /** 取各 Hub 电压最小值（近似电池电压） */
@@ -143,6 +196,10 @@ public class TurretManualTest extends LinearOpMode {
     }
 
     private static int clamp(int v, int lo, int hi) {
+        return Math.max(lo, Math.min(hi, v));
+    }
+
+    private static double clamp(double v, double lo, double hi) {
         return Math.max(lo, Math.min(hi, v));
     }
 
