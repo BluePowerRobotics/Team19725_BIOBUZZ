@@ -89,8 +89,8 @@ public class BallCounterTestOp extends LinearOpMode {
         waitForStart();
 
         while (opModeIsActive()) {
-            // 采样 + 上升沿计数（功能 1）；B 键或 Dashboard 上升沿清零
-            boolean newBall = counter.update();
+            // 采样 + 上升沿计数（功能 1）；本测试程序固定按进球方向 +1
+            boolean newBall = counter.update(BallCounter.MODE_INTAKE);
             if (gamepad1.bWasPressed() || (resetCounter && !lastResetCounter)) {
                 counter.reset();
             }

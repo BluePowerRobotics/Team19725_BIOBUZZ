@@ -66,6 +66,13 @@ public class RobotPosition {
     /** 球道计数器（对射光电门上升沿计数，reset 时清零），对外只做透传 */
     private BallCounter ballCounter;
 
+    /**
+     * 本帧计数方向：由 OpMode 每帧通过 {@link #setBallMode(int)} 设置，
+     * 在 {@link #update()} 中随「更新下级」一起传给 BallCounter。
+     * 初值为进球模式；未设置时沿用上一次方向。
+     */
+    private int ballMode = BallCounter.MODE_INTAKE;
+
     /** 球道光电门在机器人配置中的设备名 */
     private static final String BREAK_BEAM_NAME = "breakBeam";
 
@@ -190,9 +197,10 @@ public class RobotPosition {
 
         currentPose = drive.localizer.getPose();
         // 球道计数：本类每帧「更新」其下级 BallCounter（见球道计数架构图），
+        // 并把本帧的吸/吐方向一并传下去（进球 +1 / 出球 -1）；
         // 光电门采样只在这里发生一次，getBallCount() 只读缓存值
         if (ballCounter != null) {
-            ballCounter.update();
+            ballCounter.update(ballMode);
         }
 
         return currentPose;
@@ -269,7 +277,20 @@ public class RobotPosition {
     public MT1Localizer.HiveState getHiveState(){return hiveState;}
     public double getOmega(){return currentVelocity2d.angVel;}
 
-    // ---- 球道计数透传（BallCounter：上升沿计数，reset 时清零） ----
+    // ---- 球道计数透传（BallCounter：进球上升沿 +1 / 出球下降沿 -1，reset 时重置为光路中的球数） ----
+
+    /**
+     * 设置本帧的吸/吐状态（透传给 BallCounter）。
+     * 由 OpMode 每帧在 {@link #update()} <b>之前</b>调用，本帧的 BallCounter.update()
+     * 才会使用该状态；不调用时沿用上一次的状态（初始为进球模式）。
+     *
+     * @param externalState {@link BallCounter#MODE_INTAKE}（进球 +1）
+     *                      、{@link BallCounter#MODE_OUTPUT}（出球 -1）
+     *                      或 {@link BallCounter#MODE_IDLE}（无请求，出球意图锁存逐帧衰减）
+     */
+    public void setBallMode(int externalState) {
+        this.ballMode = externalState;
+    }
 
     /** @return 球道内累计小球个数（上升沿计数，resetBallCount 后重置为光路中的球数 0/1；无光电门时恒为 0） */
     public int getBallCount() {
