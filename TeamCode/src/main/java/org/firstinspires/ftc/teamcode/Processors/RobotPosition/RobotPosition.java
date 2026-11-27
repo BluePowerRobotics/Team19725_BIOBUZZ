@@ -67,9 +67,9 @@ public class RobotPosition {
     private BallCounter ballCounter;
 
     /**
-     * 本帧计数方向：由 OpMode 每帧通过 {@link #setBallMode(int)} 设置，
-     * 在 {@link #update()} 中随「更新下级」一起传给 BallCounter。
-     * 初值为进球模式；未设置时沿用上一次方向。
+     * 本帧计数方向：由 {@code Sweeper.update()} 依据<b>实际下发</b>的电机指令通过
+     * {@link #setBallMode(int)} 写入，在 {@link #update()} 中随「更新下级」一起传给
+     * BallCounter。初值为进球模式；未设置时沿用上一次方向。
      */
     private int ballMode = BallCounter.MODE_INTAKE;
 
@@ -281,8 +281,9 @@ public class RobotPosition {
 
     /**
      * 设置本帧的吸/吐状态（透传给 BallCounter）。
-     * 由 OpMode 每帧在 {@link #update()} <b>之前</b>调用，本帧的 BallCounter.update()
-     * 才会使用该状态；不调用时沿用上一次的状态（初始为进球模式）。
+     * 由 {@code Sweeper.update()} 每帧在电机指令下发后调用（方向来自实际功率符号），
+     * OpMode 不再按手柄按键推断。由于 {@link #update()} 早于同一帧的
+     * {@code sweeper.update()}，该方向实际作用于<b>下一帧</b>的光电门采样。
      *
      * @param externalState {@link BallCounter#MODE_INTAKE}（进球 +1）
      *                      、{@link BallCounter#MODE_OUTPUT}（出球 -1）

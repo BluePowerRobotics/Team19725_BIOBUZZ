@@ -9,6 +9,7 @@ import com.qualcomm.robotcore.hardware.Servo;
 import org.firstinspires.ftc.robotcore.external.Telemetry;
 import org.firstinspires.ftc.robotcore.external.navigation.CurrentUnit;
 import org.firstinspires.ftc.teamcode.Processors.RobotPosition.RobotPosition;
+import org.firstinspires.ftc.teamcode.Processors.Sensors.BallCounter;
 
 @Config
 /**
@@ -24,6 +25,12 @@ import org.firstinspires.ftc.teamcode.Processors.RobotPosition.RobotPosition;
  * 用法约定：每帧必须先调用 {@code setEat/setGiveBall/setOutput/setStop} 之一，
  * 再调用 {@link #update()} 下发；目标功率在 {@code update()} 末尾自动归零，
  * 漏调用即停车（安全默认）。
+ *
+ * <p><b>球道计数方向</b>：{@link #update()} 会把本帧<b>实际下发</b>的指令折算成
+ * {@link BallCounter} 的计数方向（反向 = 出球 -1、吸球 = 进球 +1、供球/停转 = 无方向请求）
+ * 并写入 {@link RobotPosition#setBallMode(int)}，不再依赖操作手按键推断。
+ * 由于 {@code RobotPosition.update()} 早于本帧的 {@code update()}，
+ * 采样方向滞后 1 帧（20 ms），对光电门边沿判定无影响。
  */
 public class Sweeper {
     /** 铲子舵机设备名：左右用 +L / +R 区分 */
@@ -172,6 +179,8 @@ public class Sweeper {
         // 恒定功率：把目标功率直接下发给电机
         motor.setPower(targetPower);
         lastTargetPower = targetPower;
+        // 把本帧实际下发的指令折算为球道计数方向（供下一帧 BallCounter 采样使用）
+        publishBallLaneMode();
         targetPower = 0; // 每帧必须重新调用set函数，否则自动归零
         eatCommand = false;
         // 舵机保持位置：每帧刷新，保证 Dashboard 上改铲子预设位置后即时生效
@@ -190,6 +199,33 @@ public class Sweeper {
     private boolean isBallLaneFull() {
         RobotPosition rp = RobotPosition.getInstanceOrNull();
         return rp != null && rp.getBallCount() >= BallMax;
+    }
+
+    /**
+     * 把本帧实际下发的电机指令折算成球道计数方向并写入 RobotPosition。
+     *
+     * <p>判定只用"真正下发"的指令，不看操作手按键：
+     * 反向功率 = {@link BallCounter#MODE_OUTPUT}（出球 -1）；
+     * 正功率且本帧为吸球 = {@link BallCounter#MODE_INTAKE}（进球 +1）；
+     * 供球 / 停转 / 满球停吸 = {@link BallCounter#MODE_IDLE}（不改变方向，出球锁存逐帧衰减）。
+     *
+     * <p>满球停吸时功率已归零，因此上报 IDLE 而不是 INTAKE，与实际硬件状态一致。
+     * 未初始化 RobotPosition 时静默跳过。
+     */
+    private void publishBallLaneMode() {
+        RobotPosition rp = RobotPosition.getInstanceOrNull();
+        if (rp == null) {
+            return;
+        }
+        int mode;
+        if (lastTargetPower < 0) {
+            mode = BallCounter.MODE_OUTPUT;
+        } else if (lastTargetPower > 0 && eatCommand) {
+            mode = BallCounter.MODE_INTAKE;
+        } else {
+            mode = BallCounter.MODE_IDLE;
+        }
+        rp.setBallMode(mode);
     }
 
     public double getPower() {
