@@ -105,4 +105,10 @@ __pycache__/
 /tools/tuning/analyze_generations.py
 /tools/tuning/__pycache__/
 __pycache__/
+/doc/ppt/
+/sketch.py
+/_mltest.png
+/_siteprobe.png
+/make_ppt.py
+/pptkit.py
 
