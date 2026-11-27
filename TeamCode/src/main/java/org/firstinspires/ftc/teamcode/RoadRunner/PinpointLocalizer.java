@@ -67,8 +67,9 @@ public final class PinpointLocalizer implements Localizer {
         driver.setEncoderResolution(1 / mmPerTick, DistanceUnit.MM);
         driver.setOffsets(mmPerTick * PARAMS.parYTicks, mmPerTick * PARAMS.perpXTicks, DistanceUnit.MM);
 
-        // TODO: 如果需要，反转编码器方向
-        initialParDirection = GoBildaPinpointDriver.EncoderDirection.FORWARD;
+        // 实测：本车平行（前进）编码器计数方向与 Pinpoint 默认相反——车前进时
+        // pinpoint 的 X 速度为负、EKF 积分后退（左右平移与转向正常）。故平行方向取 REVERSED。
+        initialParDirection = GoBildaPinpointDriver.EncoderDirection.REVERSED;
         initialPerpDirection = GoBildaPinpointDriver.EncoderDirection.REVERSED;
 
         driver.setEncoderDirections(initialParDirection, initialPerpDirection);

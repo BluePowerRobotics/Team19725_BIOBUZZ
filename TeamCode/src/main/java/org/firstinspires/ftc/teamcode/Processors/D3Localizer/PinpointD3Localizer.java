@@ -90,8 +90,9 @@ public class PinpointD3Localizer implements Localizer {
         pinpoint.setEncoderResolution(1 / mmPerTick, DistanceUnit.MM);
         pinpoint.setOffsets(mmPerTick * PARAMS.parYTicks, mmPerTick * PARAMS.perpXTicks, DistanceUnit.MM);
 
-        // TODO: 如果需要，反转编码器方向
-        initialParDirection = GoBildaPinpointDriver.EncoderDirection.FORWARD;
+        // 与 PinpointLocalizer 保持一致：本车平行（前进）编码器需反向，
+        // 否则车前进时 X 速度为负、纯里程计积分会后退（左右平移与转向正常）
+        initialParDirection = GoBildaPinpointDriver.EncoderDirection.REVERSED;
         initialPerpDirection = GoBildaPinpointDriver.EncoderDirection.REVERSED;
 
         pinpoint.setEncoderDirections(initialParDirection, initialPerpDirection);

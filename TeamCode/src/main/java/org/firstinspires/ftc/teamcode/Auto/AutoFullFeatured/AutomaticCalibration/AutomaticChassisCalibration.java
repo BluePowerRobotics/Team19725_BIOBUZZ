@@ -152,10 +152,12 @@ public class AutomaticChassisCalibration extends LinearOpMode {
     private DcMotorEx lf, lb, rb, rf;
     private Localizer localizer;
     private FtcDashboard dashboard;
-    /** 机械刹车舵机（可缺省）：标定前必须解除，否则电机转但车不动 */
-    private Servo brakeServo;
+    /** 机械刹车舵机（左/右，可缺省）：标定前必须解除，否则电机转但车不动 */
+    private Servo brakeServoL;
+    private Servo brakeServoR;
     /** 刹车舵机设备名（与 Chassis 保持一致） */
-    private static final String BRAKE_SERVO_NAME = "brakeServo";
+    private static final String BRAKE_SERVO_L_NAME = "brakeServoL";
+    private static final String BRAKE_SERVO_R_NAME = "brakeServoR";
     /** true = 融合定位可用（打滑判据有效）；false = 退回内置里程计（禁用打滑判据） */
     private boolean fusionAvailable;
 
@@ -208,7 +210,7 @@ public class AutomaticChassisCalibration extends LinearOpMode {
             if (initError != null) {
                 telemetry.addLine("!! 初始化失败，无法开始标定 !!");
                 telemetry.addLine(initError);
-                telemetry.addLine("请检查配置：fL/bL/bR/fR、imu、limelight、brakeServo");
+                telemetry.addLine("请检查配置：fL/bL/bR/fR、imu、limelight、brakeServoL/R");
                 telemetry.update();
                 continue;
             }
@@ -219,7 +221,8 @@ public class AutomaticChassisCalibration extends LinearOpMode {
             telemetry.addLine("B = 跳过当前阶段    Y = 急停终止");
             telemetry.addLine();
             telemetry.addLine("定位：" + (fusionAvailable ? "融合定位（含打滑判据）" : "内置里程计（打滑判据已禁用）"));
-            telemetry.addLine("刹车舵机：" + (brakeServo != null ? "已解除" : "未找到（若车被机械刹车抱死请检查配置）"));
+            telemetry.addLine("刹车舵机："
+                    + (brakeServoL != null && brakeServoR != null ? "已解除" : "未找到（若车被机械刹车抱死请检查配置）"));
             telemetry.addLine();
             telemetry.addLine("当前 PARAMS：kS=" + fmt(MecanumDrive.PARAMS.kS)
                     + " kV=" + fmt(MecanumDrive.PARAMS.kV)
@@ -269,8 +272,11 @@ public class AutomaticChassisCalibration extends LinearOpMode {
         }
         stopMotors();
         // 标定结束：重新落下机械刹车，避免机器人被推动
-        if (brakeServo != null) {
-            brakeServo.setPosition(Chassis.BrakeDownPos);
+        if (brakeServoL != null) {
+            brakeServoL.setPosition(Chassis.BrakeDownPosL);
+        }
+        if (brakeServoR != null) {
+            brakeServoR.setPosition(Chassis.BrakeDownPosR);
         }
     }
 
@@ -281,11 +287,14 @@ public class AutomaticChassisCalibration extends LinearOpMode {
     private void initHardware() {
         // 1) 机械刹车舵机（可缺省）：必须先解除，否则电机转但车不动
         try {
-            brakeServo = hardwareMap.get(Servo.class, BRAKE_SERVO_NAME);
-            brakeServo.setPosition(Chassis.BrakeUpPos);
+            brakeServoL = hardwareMap.get(Servo.class, BRAKE_SERVO_L_NAME);
+            brakeServoR = hardwareMap.get(Servo.class, BRAKE_SERVO_R_NAME);
+            brakeServoL.setPosition(Chassis.BrakeUpPosL);
+            brakeServoR.setPosition(Chassis.BrakeUpPosR);
         } catch (RuntimeException e) {
-            brakeServo = null;
-            RobotLog.ee("Cal", "未找到 brakeServo，跳过刹车释放：" + e.getMessage());
+            brakeServoL = null;
+            brakeServoR = null;
+            RobotLog.ee("Cal", "未找到 brakeServoL/R，跳过刹车释放：" + e.getMessage());
         }
 
         // 2) 定位：优先融合定位；失败则退回 MecanumDrive 内置轮式里程计

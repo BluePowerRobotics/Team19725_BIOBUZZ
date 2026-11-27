@@ -150,9 +150,10 @@ public class Sweeper {
         targetShovelPosR = ShovelDownPosR;
     }
 
-    /** @return 铲子当前目标位置是否为「抬起」 */
+    /** @return 左右铲子当前目标位置是否均为「抬起」 */
     public boolean isShovelUp() {
-        return Math.abs(targetShovelPos - ShovelUpPos) < 1e-6;
+        return Math.abs(targetShovelPosL - ShovelUpPosL) < 1e-6
+                && Math.abs(targetShovelPosR - ShovelUpPosR) < 1e-6;
     }
 
     /**
@@ -165,7 +166,8 @@ public class Sweeper {
             return;
         }
         setShovelUp();
-        shovelServo.setPosition(targetShovelPos);
+        shovelServoL.setPosition(targetShovelPosL);
+        shovelServoR.setPosition(targetShovelPosR);
     }
 
     public void update() {
