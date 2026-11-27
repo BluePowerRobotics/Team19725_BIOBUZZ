@@ -208,12 +208,12 @@ public class Shooter {
                 new PitchModel(0.30, 30.0, 70.0, 30.0, 900.0),
                 new PitchModel(0.50, 60.0, 100.0, 34.0, 1000.0),
         };
-        // 大球扳机位置：关闭 0.6 / 释放 0.3
-        BIG_PARAMS.triggerOffPos = 0.6;
-        BIG_PARAMS.triggerOnPos = 0.3;
-        // 小球扳机位置：关闭 0.3 / 释放 0.6
-        SMALL_PARAMS.triggerOffPos = 0.3;
-        SMALL_PARAMS.triggerOnPos = 0.6;
+        // 大球扳机位置：关闭 0.65 / 释放 0.4
+        BIG_PARAMS.triggerOffPos = 0.65;
+        BIG_PARAMS.triggerOnPos = 0.4;
+        // 小球扳机位置：关闭 0.55 / 释放 0.3
+        SMALL_PARAMS.triggerOffPos = 0.55;
+        SMALL_PARAMS.triggerOnPos = 0.3;
         // 小球俯仰机械行程上限
         SMALL_PARAMS.pitchMax = 0.5;
     }

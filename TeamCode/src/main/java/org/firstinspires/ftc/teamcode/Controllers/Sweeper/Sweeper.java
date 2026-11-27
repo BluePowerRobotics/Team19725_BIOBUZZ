@@ -14,22 +14,16 @@ import org.firstinspires.ftc.teamcode.Processors.RobotPosition.RobotPosition;
 /**
  * 集球器（Sweeper）控制器
  *
- * 当前实现（固件速度闭环，推荐）：
- *   使用 REV Hub 内置速度 PIDF（RUN_USING_ENCODER + setVelocity + setVelocityPIDFCoefficients），
- *   PID 在 Hub 固件内以约 1kHz 完成，延迟低、且不占用 Robot Controller 线程。
+ * 当前实现：<b>恒定功率驱动</b>。
+ *   电机工作在 {@code RUN_WITHOUT_ENCODER}，每帧把目标功率直接 {@code setPower()} 下发，
+ *   不做速度闭环（吸球/供球/吐球各用一个固定功率，可在 FTC Dashboard 实时调整）。
  *
- * 未来如需软件闭环（自定义控制律：变增益/前馈/抗积分饱和等），可按以下步骤改造：
- *   1. 将 motor 切到 RUN_WITHOUT_ENCODER（让 setPower 直接控制功率）。
- *   2. 使用 utility.PID 包的 PIDSVAController + SlotConfig（或 PIDController）做速度闭环：
- *        PIDSVAController ctrl = new PIDSVAController().withSlot0(
- *            new SlotConfig()
- *                .withKP(kP).withKI(kI).withKD(kD)
- *                .withKS(kS).withKV(kV).withKA(kA)
- *                .withOutputLimits(-1.0, 1.0));
- *        // 每帧：double out = ctrl.calculate(targetVel, motor.getVelocity(), dt, true);
- *        //        motor.setPower(out);
- *   3. 具体用法参见 utility/PID/Guide.md 与 MotorPIDCore.java。
- * 注意：软件闭环延迟稍高且受 RC 线程节拍影响，仅在确需自定义控制律时切换。
+ * 优点：逻辑简单、无固件速度环的饱和/振荡问题，负载（球多球少）变化时转速自然下降。
+ * 代价：电池电压下降时同一功率对应的转速会变慢，需按实测电压重新标定功率值。
+ *
+ * 用法约定：每帧必须先调用 {@code setEat/setGiveBall/setOutput/setStop} 之一，
+ * 再调用 {@link #update()} 下发；目标功率在 {@code update()} 末尾自动归零，
+ * 漏调用即停车（安全默认）。
  */
 public class Sweeper {
     /** 铲子舵机设备名：左右用 +L / +R 区分 */
@@ -44,21 +38,20 @@ public class Sweeper {
 
     private Telemetry telemetry;
 
-    public static int EatVel = 700;
-    public static int GiveBallVel = 2000;
-    public static int OutputVel = -500;
+    /** 吃球功率 [-1,1]（todo: 实机标定） */
+    public static double EatPower = 0.7;
+    /** 供球（送球进炮台）功率 [-1,1]（todo: 实机标定） */
+    public static double GiveBallPower = 0.7;
+    /** 反向吐球功率 [-1,1]（负值即反转） */
+    public static double OutputPower = -0.5;
 
     /** 球道容量：球道计数（RobotPosition.getBallCount()）达到该值时自动停止吸球 */
     public static int BallMax = 4;
 
-    /** 固件速度闭环 PIDF 系数（REV Hub 内置速度 PID，可在 FTC Dashboard 实时调参） */
-    public static double VelocityP = 1.17;
-    public static double VelocityI = 0.117;
-    public static double VelocityD = 0.0;
-    public static double VelocityF = 0.0;
-
-    private int targetVelocity = 0;
-    private int lastTargetVelocity = 0;
+    /** 本帧目标功率 [-1,1] */
+    private double targetPower = 0;
+    /** 上一帧实际下发的功率，供遥测复用 */
+    private double lastTargetPower = 0;
 
     /** 本帧目标是否为"吸球"（仅吸球受球道满容量保护，供料与吐球不受限） */
     private boolean eatCommand = false;
@@ -92,9 +85,8 @@ public class Sweeper {
         this.shovelServoL = hardwareMap.get(Servo.class, SHOVEL_SERVO_L);
         this.shovelServoR = hardwareMap.get(Servo.class, SHOVEL_SERVO_R);
         setDirection();
-        // 固件速度闭环：开启编码器速度模式并配置内置速度 PIDF
-        motor.setMode(DcMotor.RunMode.RUN_USING_ENCODER);
-        motor.setVelocityPIDFCoefficients(VelocityP, VelocityI, VelocityD, VelocityF);
+        // 恒定功率驱动：绕过固件速度环，setPower 直接决定电机功率
+        motor.setMode(DcMotor.RunMode.RUN_WITHOUT_ENCODER);
         motor.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.FLOAT);
         // 上电默认铲子抬起，等待操控/自动切换
         setShovelUp();
@@ -114,27 +106,27 @@ public class Sweeper {
     }
 
     public void setEat() {
-        targetVelocity = EatVel;
+        targetPower = EatPower;
         eatCommand = true;
     }
 
     public void setGiveBall() {
-        targetVelocity = GiveBallVel;
+        targetPower = GiveBallPower;
         eatCommand = false;
     }
 
     public void setOutput() {
-        targetVelocity = OutputVel;
+        targetPower = OutputPower;
         eatCommand = false;
     }
 
     public void setStop() {
-        targetVelocity = 0;
+        targetPower = 0;
         eatCommand = false;
     }
 
-    public void setTargetVelocity(int velocity) {
-        targetVelocity = velocity;
+    public void setTargetPower(double power) {
+        targetPower = power;
         eatCommand = false;
     }
 
@@ -175,12 +167,12 @@ public class Sweeper {
         // 供料（setGiveBall）与反向吐球（setOutput）不受限，
         // 否则满球后会既吐不出球、也供不上料，形成互锁
         if (isBallLaneFull() && eatCommand) {
-            targetVelocity = 0;
+            targetPower = 0;
         }
-        // 固件闭环：把目标速度下发给 Hub 内置速度 PID
-        motor.setVelocity(targetVelocity);
-        lastTargetVelocity = targetVelocity;
-        targetVelocity = 0; // 每帧必须重新调用set函数，否则自动归零
+        // 恒定功率：把目标功率直接下发给电机
+        motor.setPower(targetPower);
+        lastTargetPower = targetPower;
+        targetPower = 0; // 每帧必须重新调用set函数，否则自动归零
         eatCommand = false;
         // 舵机保持位置：每帧刷新，保证 Dashboard 上改铲子预设位置后即时生效
         shovelServoL.setPosition(targetShovelPosL);
@@ -208,8 +200,9 @@ public class Sweeper {
         return cachedVelocity;
     }
 
-    public int getTargetVelocity() {
-        return lastTargetVelocity;
+    /** @return 上一帧实际下发的功率 [-1,1] */
+    public double getTargetPower() {
+        return lastTargetPower;
     }
 
     public int getFR() {
