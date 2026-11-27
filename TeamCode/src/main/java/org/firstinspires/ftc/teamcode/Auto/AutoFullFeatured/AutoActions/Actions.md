@@ -111,10 +111,11 @@ new GoToShootAreaNearestVerticesAction(TeamColor.RED, HypParams.RedAudienceUp);
 
 ## 4. GoToEatPointAction
 
-**作用**：取球点为底盘前端 intake 的目标点（`HypParams.EatPoint1=(24,-72)`、
+**作用**：取球点为底盘前端（按**放下铲子的最前端 / 铲尖**计）的目标点（`HypParams.EatPoint1=(24,-72)`、
 `EatPoint2=(-72,-24)`，场地固定坐标不分红蓝）。构造时：
-1. 用 `ChassisGeometry.centerPoseFromIntakeTarget` 由 intake 目标点反推底盘中心位姿
-   ——前端 intake 恰好落在取球点，且车头面朝取球点；
+1. 用 `ChassisGeometry.centerPoseFromShovelFrontTarget` 由取球点反推底盘中心位姿
+   ——铲尖恰好落在取球点，且车头面朝取球点（中心到铲尖距离 =
+   `HypParams.chassisHalfLengthIn + HypParams.shovelDownExtraIn`，其余动作仍按 `chassisHalfLengthIn`）；
 2. `strafeToLinearHeading` 到位。到位后通常入队 `EatAction`。
 
 **铲子**：传入 `Sweeper` 时，到达终点前 `HiveRouteAction.shovelLeadMs`（默认 1000 ms）
@@ -164,7 +165,7 @@ new GoToShootAreaNearestVerticesAction(TeamColor.RED, HypParams.RedAudienceUp);
 **作用**：从机器人所在发射区域出发，**经 Hive 正下方**前往此前未到达过的吸球点。
 1. 「未访问取球点」由 `utility/EatPointTracker` 共享状态决定：在未访问的取球点中选距
    机器人最近者（两个都已访问时退回取最近者）；红队用共享取球点，蓝队用其中心对称点；
-2. 由 `ChassisGeometry.centerPoseFromIntakeTarget` 反推使 intake 到位、车头朝取球点的中心位姿；
+2. 由 `ChassisGeometry.centerPoseFromShovelFrontTarget` 反推使铲尖到位、车头朝取球点的中心位姿；
 3. 途经点由 `HiveRoutePlanner.waypoints(..., throughHive=true)` 生成；
 4. 到达后 `onComplete()` 调用 `EatPointTracker.markVisited(pointIndex)`。
 

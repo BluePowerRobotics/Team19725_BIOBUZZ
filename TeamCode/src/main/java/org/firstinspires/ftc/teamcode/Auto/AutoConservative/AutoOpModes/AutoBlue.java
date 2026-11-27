@@ -204,6 +204,7 @@ public class AutoBlue extends LinearOpMode {
                         break;
 
                     case TO_SHOOT_AREA:
+                        sweeper.raiseShovelIfNotUp();  // 前往发射区域途中升起铲子（已升起则不改变）
                         boolean toFirst = false;
                         int mode = areaCycleMode();
                         if (mode != AutoStartOptions.AREA_CYCLE_MODE_OFF) {
@@ -223,6 +224,7 @@ public class AutoBlue extends LinearOpMode {
                         break;
 
                     case AIM_SHOOT:
+                        sweeper.raiseShovelIfNotUp();  // 到达发射位置后升起铲子（已升起则不改变）
                         // 到达发射区后先检查抬升侧：不在抬升侧则改去另一发射区域再瞄准发射
                         actionRunner.add(new LiftedSideAimShootAction(teamColor, drive, turret, false, false));
                         currentState = AutoState.CYCLE_END;
@@ -238,6 +240,7 @@ public class AutoBlue extends LinearOpMode {
                         break;
 
                     case PARKING:
+                        sweeper.raiseShovelIfNotUp();  // 两次循环结束后升起铲子（已升起则不改变）
                         currentState = AutoState.STOP;
                         break;
 

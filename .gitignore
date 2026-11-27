@@ -99,3 +99,16 @@ lint/tmp/
 /tools/tuning/analyze_generations.py
 /tools/tuning/__pycache__/
 __pycache__/
+# 2026-11-06：除《飞轮控制系统演化工程笔记》docx/pdf 外，其余本地产物一律不入库
+/doc/figs_flywheel/
+/tools/md2docx.py
+/tools/tuning/analyze_generations.py
+/tools/tuning/__pycache__/
+__pycache__/
+/doc/ppt/
+/sketch.py
+/_mltest.png
+/_siteprobe.png
+/make_ppt.py
+/pptkit.py
+

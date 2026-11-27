@@ -14,10 +14,13 @@ import com.acmerobotics.roadrunner.PoseVelocity2dDual;
 import com.acmerobotics.roadrunner.Time;
 import com.qualcomm.robotcore.eventloop.opmode.Autonomous;
 import com.qualcomm.robotcore.eventloop.opmode.LinearOpMode;
+import com.qualcomm.robotcore.hardware.DcMotor;
 import com.qualcomm.robotcore.hardware.DcMotorEx;
+import com.qualcomm.robotcore.hardware.Servo;
 import com.qualcomm.robotcore.util.ElapsedTime;
 import com.qualcomm.robotcore.util.RobotLog;
 
+import org.firstinspires.ftc.teamcode.Controllers.Chassis.Chassis;
 import org.firstinspires.ftc.teamcode.Parameter.TeamColor;
 import org.firstinspires.ftc.teamcode.Processors.RobotPosition.RobotPosition;
 import org.firstinspires.ftc.teamcode.RoadRunner.Localizer;
@@ -58,11 +61,18 @@ import java.util.Locale;
  * <pre>
  *   IDLE(按 START) → SVA_RAMP → KA → FB_AXIAL → FB_LATERAL → FB_HEADING → ACCEL_SLIP → ANG → DONE
  * </pre>
- * 手柄：{@code A}=开始（Init 阶段），{@code B}=跳过当前阶段，{@code Y}=立即急停终止。
+ * 手柄：{@code B}=跳过当前阶段，{@code Y}=立即急停终止。
  * 前置条件：机器人四周留出足够空间（加速 / 阶跃阶段会移动约 10~40 英寸）。
  *
- * <p><b>注意</b>：本程序通过 {@link RobotPosition#RobotPositioninit} 初始化，依赖
- * {@code limelight} 与 Pinpoint 融合定位器提供地面真值速度，用于打滑判据。
+ * <p><b>硬件容错</b>：
+ * <ul>
+ *   <li>启动时自动解除机械刹车舵机（{@code brakeServo}，不存在则跳过）——
+ *       不解除时电机转但机器人不动，表现为「标定无法启动」；</li>
+ *   <li>定位优先使用 {@link RobotPosition}（Pinpoint + Limelight + EKF 融合）；
+ *       若融合初始化失败（如未接 Limelight），自动退回 {@code MecanumDrive} 内置轮式里程计，
+ *       此时禁用打滑判据但 SVA / 反馈 / 约束仍可标定；</li>
+ *   <li>初始化异常不再让 OpMode 直接崩溃，而是在 Init 界面显示失败原因。</li>
+ * </ul>
  */
 @Autonomous(name = "Cal: Chassis SVA/PID", group = "Calibration")
 public class AutomaticChassisCalibration extends LinearOpMode {
@@ -142,6 +152,12 @@ public class AutomaticChassisCalibration extends LinearOpMode {
     private DcMotorEx lf, lb, rb, rf;
     private Localizer localizer;
     private FtcDashboard dashboard;
+    /** 机械刹车舵机（可缺省）：标定前必须解除，否则电机转但车不动 */
+    private Servo brakeServo;
+    /** 刹车舵机设备名（与 Chassis 保持一致） */
+    private static final String BRAKE_SERVO_NAME = "brakeServo";
+    /** true = 融合定位可用（打滑判据有效）；false = 退回内置里程计（禁用打滑判据） */
+    private boolean fusionAvailable;
 
     // ---- 计时与估计 ----
     private final ElapsedTime phaseTimer = new ElapsedTime();
@@ -177,15 +193,33 @@ public class AutomaticChassisCalibration extends LinearOpMode {
         telemetry = new MultipleTelemetry(telemetry, dashboard.getTelemetry());
 
         // ================= Init =================
-        initHardware();
+        String initError = null;
+        try {
+            initHardware();
+        } catch (Throwable t) {
+            // 不向上抛：在不同机器人配置上缺设备时不至于整个 OpMode 无法启动
+            initError = t.getClass().getSimpleName()
+                    + (t.getMessage() != null ? ": " + t.getMessage() : "");
+            RobotLog.ee("Cal", "初始化失败: " + initError, t);
+        }
 
         while (!isStarted() && !isStopRequested()) {
             telemetry.addLine("==== 底盘 SVA / PID 自动标定 ====");
+            if (initError != null) {
+                telemetry.addLine("!! 初始化失败，无法开始标定 !!");
+                telemetry.addLine(initError);
+                telemetry.addLine("请检查配置：fL/bL/bR/fR、imu、limelight、brakeServo");
+                telemetry.update();
+                continue;
+            }
             telemetry.addLine("标定对象：RoadRunner 底盘链路（前馈 kS/kV/kA + 反馈 pos/vel 增益）");
             telemetry.addLine("结果不写回 PARAMS，仅 Dashboard 显示 + CSV/SVG 导出");
             telemetry.addLine();
-            telemetry.addLine("ASTART 后请勿触碰机器人；四周留出 ≥ 4 英尺空间");
+            telemetry.addLine("按 START 开始；开始后请勿触碰机器人，四周留出 ≥ 4 英尺空间");
             telemetry.addLine("B = 跳过当前阶段    Y = 急停终止");
+            telemetry.addLine();
+            telemetry.addLine("定位：" + (fusionAvailable ? "融合定位（含打滑判据）" : "内置里程计（打滑判据已禁用）"));
+            telemetry.addLine("刹车舵机：" + (brakeServo != null ? "已解除" : "未找到（若车被机械刹车抱死请检查配置）"));
             telemetry.addLine();
             telemetry.addLine("当前 PARAMS：kS=" + fmt(MecanumDrive.PARAMS.kS)
                     + " kV=" + fmt(MecanumDrive.PARAMS.kV)
@@ -196,11 +230,11 @@ public class AutomaticChassisCalibration extends LinearOpMode {
                     + "/" + fmt(MecanumDrive.PARAMS.lateralVelGain));
             telemetry.update();
         }
-        if (isStopRequested()) {
+        if (isStopRequested() || initError != null) {
             return;
         }
 
-        RobotPosition.getInstance().update();
+        updatePose();
         warmUp();
         sessionDir = CalibrationExporter.newSessionDir();
 
@@ -225,7 +259,7 @@ public class AutomaticChassisCalibration extends LinearOpMode {
             if (abortRequested) {
                 break;
             }
-            RobotPosition.getInstance().update();
+            updatePose();
             showSuggestionTelemetry(true);
             TelemetryPacket packet = new TelemetryPacket();
             packet.put("cal_done", 1);
@@ -234,6 +268,10 @@ public class AutomaticChassisCalibration extends LinearOpMode {
             sleep(50);
         }
         stopMotors();
+        // 标定结束：重新落下机械刹车，避免机器人被推动
+        if (brakeServo != null) {
+            brakeServo.setPosition(Chassis.BrakeDownPos);
+        }
     }
 
     // ==================================================================================
@@ -241,13 +279,79 @@ public class AutomaticChassisCalibration extends LinearOpMode {
     // ==================================================================================
 
     private void initHardware() {
-        RobotPosition.RobotPositioninit(hardwareMap, new Pose2d(0, 0, 0), TeamColor.RED);
-        drive = RobotPosition.getInstance().getDrive();
+        // 1) 机械刹车舵机（可缺省）：必须先解除，否则电机转但车不动
+        try {
+            brakeServo = hardwareMap.get(Servo.class, BRAKE_SERVO_NAME);
+            brakeServo.setPosition(Chassis.BrakeUpPos);
+        } catch (RuntimeException e) {
+            brakeServo = null;
+            RobotLog.ee("Cal", "未找到 brakeServo，跳过刹车释放：" + e.getMessage());
+        }
+
+        // 2) 定位：优先融合定位；失败则退回 MecanumDrive 内置轮式里程计
+        try {
+            RobotPosition.RobotPositioninit(hardwareMap, new Pose2d(0, 0, 0), TeamColor.RED);
+            drive = RobotPosition.getInstance().getDrive();
+            if (drive == null) {
+                throw new IllegalStateException("RobotPositioninit 未创建 drive");
+            }
+            fusionAvailable = true;
+        } catch (RuntimeException e) {
+            RobotLog.ee("Cal", "融合定位初始化失败，退回内置里程计：" + e.getMessage(), e);
+            drive = new MecanumDrive(hardwareMap, new Pose2d(0, 0, 0));
+            fusionAvailable = false;
+        }
+
         localizer = drive.localizer;
         lf = drive.leftFront;
         lb = drive.leftBack;
         rb = drive.rightBack;
         rf = drive.rightFront;
+        for (DcMotorEx m : new DcMotorEx[]{lf, lb, rb, rf}) {
+            m.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.BRAKE);
+            m.setMode(DcMotor.RunMode.RUN_WITHOUT_ENCODER);
+        }
+        drive.updatePoseEstimate();
+    }
+
+    /** 单帧推进定位：融合模式走 RobotPosition，回退模式直接推进 MecanumDrive。 */
+    private void updatePose() {
+        if (fusionAvailable) {
+            RobotPosition.getInstance().update();
+        } else {
+            drive.updatePoseEstimate();
+        }
+    }
+
+    /** 当前位姿航向（rad）。 */
+    private double headingRad() {
+        return localizer.getPose().heading.toDouble();
+    }
+
+    /** 场地系 x 速度（in/s）：由机体轮速按当前航向旋转得到。 */
+    private double fieldVx() {
+        PoseVelocity2d v = drive.getLastVelocity();
+        if (v == null) {
+            return 0;
+        }
+        double h = headingRad();
+        return v.linearVel.x * Math.cos(h) - v.linearVel.y * Math.sin(h);
+    }
+
+    /** 场地系 y 速度（in/s）。 */
+    private double fieldVy() {
+        PoseVelocity2d v = drive.getLastVelocity();
+        if (v == null) {
+            return 0;
+        }
+        double h = headingRad();
+        return v.linearVel.x * Math.sin(h) + v.linearVel.y * Math.cos(h);
+    }
+
+    /** 当前角速度（rad/s）。 */
+    private double omegaRadps() {
+        PoseVelocity2d v = drive.getLastVelocity();
+        return v == null ? 0 : v.angVel;
     }
 
     /** 前进预热：小幅正向前进一小段，让定位器与轮速估计进入稳态。 */
@@ -255,7 +359,7 @@ public class AutomaticChassisCalibration extends LinearOpMode {
         phaseTimer.reset();
         resetEstimators();
         while (opModeIsActive() && phaseTimer.seconds() < Cal.WARMUP_TIME) {
-            RobotPosition.getInstance().update();
+            updatePose();
             setForwardPower(Cal.WARMUP_POWER);
             updateEstimators();
         }
@@ -268,7 +372,7 @@ public class AutomaticChassisCalibration extends LinearOpMode {
      * @return {@code false} 表示本阶段应立即结束（跳过或急停）
      */
     private boolean tick() {
-        RobotPosition.getInstance().update();
+        updatePose();
         pollGamepad();
         if (abortRequested || skipRequested) {
             stopMotors();
@@ -314,7 +418,7 @@ public class AutomaticChassisCalibration extends LinearOpMode {
     private void updateEstimators() {
         long nowMs = (long) phaseTimer.milliseconds();
         double pos = wheelForwardTicks();
-        double om = drive.getLastVelocity().angVel;
+        double om = omegaRadps();
 
         if (!estInit) {
             estInit = true;
@@ -393,10 +497,9 @@ public class AutomaticChassisCalibration extends LinearOpMode {
 
     /** 记录一个采样点（同时写入总表与阶段表）。 */
     private void record(String phase, double t, double power, List<CalibrationSample> phaseSink) {
-        RobotPosition rp = RobotPosition.getInstance();
         double batt = battVolts();
         CalibrationSample s = new CalibrationSample(phase, t, batt, power, power * batt,
-                wheelVelTicks, wheelAccelTicks, rp.getVx(), rp.getVy(), rp.getOmega());
+                wheelVelTicks, wheelAccelTicks, fieldVx(), fieldVy(), omegaRadps());
         allSamples.add(s);
         if (phaseSink != null) {
             phaseSink.add(s);
@@ -405,6 +508,9 @@ public class AutomaticChassisCalibration extends LinearOpMode {
 
     /** 当前是否打滑：轮速折算的机器人速度与地面真值速度相对偏差超容差。 */
     private boolean slipping() {
+        if (!fusionAvailable) {
+            return false;  // 回退到内置里程计时没有独立地面真值，禁用打滑判据
+        }
         double wheelImplied = wheelVelTicks * MecanumDrive.PARAMS.inPerTick;
         double ground = Math.hypot(lastVx, lastVy);
         return ConstraintIdentifier.isSlipping(wheelImplied, ground, Cal.SLIP_TOL);
@@ -413,9 +519,8 @@ public class AutomaticChassisCalibration extends LinearOpMode {
     private double lastVx, lastVy;
 
     private void captureGroundVelocity() {
-        RobotPosition rp = RobotPosition.getInstance();
-        lastVx = rp.getVx();
-        lastVy = rp.getVy();
+        lastVx = fieldVx();
+        lastVy = fieldVy();
     }
 
     private static double clamp(double x, double lo, double hi) {

@@ -158,6 +158,7 @@ public class AutoBlueRoutine extends LinearOpMode {
                         break;
 
                     case AIM:
+                        sweeper.raiseShovelIfNotUp();  // 到达发射位置后升起铲子（已升起则不改变）
                         actionRunner.add(new AutoAimAction(drive, turret));
                         if (round == 1) {
                             round = 2;
@@ -168,6 +169,7 @@ public class AutoBlueRoutine extends LinearOpMode {
                         break;
 
                     case TO_SHOOT_2:
+                        sweeper.raiseShovelIfNotUp();  // 前往发射区域途中升起铲子（已升起则不改变）
                         boolean toFirst = false;
                         int mode = areaCycleMode();
                         if (mode != AutoStartOptions.AREA_CYCLE_MODE_OFF) {
@@ -188,6 +190,7 @@ public class AutoBlueRoutine extends LinearOpMode {
                         break;
 
                     case PARKING:
+                        sweeper.raiseShovelIfNotUp();  // 两次循环结束后升起铲子（已升起则不改变）
                         if (!parkScheduled) {
                             startParking();
                         } else {
@@ -223,10 +226,10 @@ public class AutoBlueRoutine extends LinearOpMode {
         chassis.update(0, 0, 0);
     }
 
-    /** 固定取球位姿：前端 intake 落在指定取球点，车头朝该点。 */
+    /** 固定取球位姿：放下铲子的最前端（铲尖）落在指定取球点，车头朝该点。 */
     private Pose2d fixedEatPose(Vector2D eatPoint) {
         Pose2d current = RobotPosition.getInstance().getPose2d();
-        return ChassisGeometry.centerPoseFromIntakeTarget(
+        return ChassisGeometry.centerPoseFromShovelFrontTarget(
                 eatPoint.getX(), eatPoint.getY(),
                 current.position.x, current.position.y);
     }

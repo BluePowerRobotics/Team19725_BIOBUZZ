@@ -210,7 +210,7 @@ public abstract class HiveRouteAction implements Action {
         Pose2d current = RobotPosition.getInstance().getPose2d();
         int index = EatPointTracker.nearestUnvisitedIndex(teamColor, current.position.x, current.position.y);
         Vector2D point = EatPointTracker.eatPoint(teamColor, index);
-        return ChassisGeometry.centerPoseFromIntakeTarget(
+        return ChassisGeometry.centerPoseFromShovelFrontTarget(
                 point.getX(), point.getY(), current.position.x, current.position.y);
     }
 

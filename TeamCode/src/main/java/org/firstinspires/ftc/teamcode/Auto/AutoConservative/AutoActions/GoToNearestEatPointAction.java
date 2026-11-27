@@ -62,8 +62,8 @@ public class GoToNearestEatPointAction implements Action {
         double d2 = Math.hypot(p2.getX() - cx, p2.getY() - cy);
         this.targetEatPoint = (d1 <= d2) ? p1 : p2;
 
-        // 由 intake 目标点反推底盘中心目标位姿（含朝向）
-        this.targetPose = ChassisGeometry.centerPoseFromIntakeTarget(
+        // 由取球点反推底盘中心目标位姿（机器前端按「放下铲子的最前端」计算）
+        this.targetPose = ChassisGeometry.centerPoseFromShovelFrontTarget(
                 targetEatPoint.getX(), targetEatPoint.getY(), cx, cy);
 
         this.trajectoryAction = drive.actionBuilder(currentPose)

@@ -210,6 +210,7 @@ public class AutoRed extends LinearOpMode {
                         break;
 
                     case TO_SHOOT_AREA:
+                        sweeper.raiseShovelIfNotUp();  // 前往发射区域途中升起铲子（已升起则不改变）
                         boolean toFirst = false;
                         int mode = areaCycleMode();
                         if (mode != AutoStartOptions.AREA_CYCLE_MODE_OFF) {
@@ -233,6 +234,7 @@ public class AutoRed extends LinearOpMode {
                         break;
 
                     case AIM_SHOOT:
+                        sweeper.raiseShovelIfNotUp();  // 到达发射位置后升起铲子（已升起则不改变）
                         actionRunner.add(new AutoAimAction(drive, turret));
                         currentState = AutoState.CYCLE_END;
                         break;
@@ -247,6 +249,7 @@ public class AutoRed extends LinearOpMode {
                         break;
 
                     case PARKING:
+                        sweeper.raiseShovelIfNotUp();  // 两次循环结束后升起铲子（已升起则不改变）
                         currentState = AutoState.STOP;
                         break;
 
