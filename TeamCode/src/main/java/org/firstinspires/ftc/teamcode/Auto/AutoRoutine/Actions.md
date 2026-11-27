@@ -98,8 +98,9 @@ START_SHOOT ──(发完 START_SHOTS 或开局关闭)──> TO_EAT ──> EAT
 
 **位姿计算**（均为固定值，不做就近选点）：
 
-- `fixedEatPose(Vector2D eatPoint)`：`ChassisGeometry.centerPoseFromIntakeTarget(...)`，
-  按「前端 intake 落在取球点」反推底盘中心位姿，车头朝向该点。
+- `fixedEatPose(Vector2D eatPoint)`：`ChassisGeometry.centerPoseFromShovelFrontTarget(...)`，
+  按「放下铲子的最前端（铲尖）落在取球点」反推底盘中心位姿，车头朝向该点
+  （中心到铲尖距离 = `chassisHalfLengthIn + shovelDownExtraIn`；其余动作仍按 `chassisHalfLengthIn`）。
 - `fixedShootPose(ConvexPolygon area)`：取该区域中**距场地原点 (0,0) 最近**的顶点作为停靠点，
   航向 `atan2(fixedGoal.y - y, fixedGoal.x - x)`（`fixedGoal` = `RedAudienceUp` / `BlueAudienceUp`）。
 

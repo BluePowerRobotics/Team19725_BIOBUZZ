@@ -94,6 +94,26 @@ public class HypParams {
     public static double chassisHalfLengthIn = 9.0;
 
     /**
+     * 铲子放下后，铲尖超出「底盘最前端中点」的距离（英寸）。
+     *
+     * <p>前往取球点的动作以<b>放下铲子的最前端</b>作为机器前端基准：
+     * 中心到铲尖的距离 = {@link #chassisHalfLengthIn} + 本值。其余动作（停靠、发射区域、
+     * 外接矩形等）仍按 {@link #chassisHalfLengthIn} 计算，不受本值影响。
+     *
+     * todo: 实机测量标定
+     */
+    public static double shovelDownExtraIn = 4.0;
+
+    /**
+     * 铲子放下时，底盘中心到铲尖的距离（英寸）。
+     *
+     * @return {@link #chassisHalfLengthIn} + {@link #shovelDownExtraIn}
+     */
+    public static double shovelDownHalfLengthIn() {
+        return chassisHalfLengthIn + shovelDownExtraIn;
+    }
+
+    /**
      * 第一个取球点（intake 目标点，单位：英寸）。
      */
     public static Vector2D EatPoint1 = new Vector2D(24, -72);

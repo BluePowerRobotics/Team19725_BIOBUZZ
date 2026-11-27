@@ -8,6 +8,7 @@ import com.acmerobotics.roadrunner.Action;
 import com.acmerobotics.roadrunner.Pose2d;
 import com.acmerobotics.roadrunner.SequentialAction;
 import com.acmerobotics.roadrunner.TrajectoryActionBuilder;
+import com.acmerobotics.roadrunner.InstantAction;
 
 import org.firstinspires.ftc.teamcode.Controllers.Sweeper.Sweeper;
 import org.firstinspires.ftc.teamcode.Controllers.Turret.Turret;
@@ -117,6 +118,8 @@ public class AutoCycleAction implements Action {
 
         steps.add(new DeferredAction(() -> new GoToUnvisitedEatPointAvoidHiveAction(teamColor, sweeper)));
         steps.add(new EatAction(sweeper));
+        // 吃球结束、前往发射区域前抬起铲子（已抬起则不改变当前铲子位置）
+        steps.add(new InstantAction(() -> sweeper.raiseShovelIfNotUp()));
 
         // 计算回程目标发射区域
         Pose2d shootTarget;

@@ -5,6 +5,7 @@ import androidx.annotation.NonNull;
 import com.acmerobotics.dashboard.config.Config;
 import com.acmerobotics.dashboard.telemetry.TelemetryPacket;
 import com.acmerobotics.roadrunner.Action;
+import com.acmerobotics.roadrunner.InstantAction;
 import com.acmerobotics.roadrunner.Pose2d;
 import com.acmerobotics.roadrunner.SequentialAction;
 
@@ -129,6 +130,8 @@ public class AutoCycleAction implements Action {
 
         steps.add(new DeferredAction(() -> new GoToUnvisitedEatPointAvoidHiveAction(teamColor, sweeper)));
         steps.add(new EatAction(sweeper));
+        // 吃球结束、前往发射区域前抬起铲子（已抬起则不改变当前铲子位置）
+        steps.add(new InstantAction(() -> sweeper.raiseShovelIfNotUp()));
 
         // 计算回程发射区域的目标 Pose2d 与实际 areaIndex
         Pose2d shootTarget;

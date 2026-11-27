@@ -168,6 +168,7 @@ public class AutoRedContinuous extends LinearOpMode {
                         cycleCount++;
                         break;
                     case PARKING:
+                        sweeper.raiseShovelIfNotUp();  // 两次循环结束后升起铲子（已升起则不改变）
                         currentState = AutoState.STOP;
                         break;
                     default:

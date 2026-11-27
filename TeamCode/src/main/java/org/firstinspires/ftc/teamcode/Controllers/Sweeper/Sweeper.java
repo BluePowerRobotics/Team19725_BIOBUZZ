@@ -134,6 +134,24 @@ public class Sweeper {
         targetShovelPos = ShovelDownPos;
     }
 
+    /** @return 铲子当前目标位置是否为「抬起」 */
+    public boolean isShovelUp() {
+        return Math.abs(targetShovelPos - ShovelUpPos) < 1e-6;
+    }
+
+    /**
+     * 若铲子尚未抬起则抬起；已抬起时<b>不改变</b>当前目标位置（幂等）。
+     *
+     * <p>只写舵机位置，不动吸球电机目标速度，可在任意帧安全调用。
+     */
+    public void raiseShovelIfNotUp() {
+        if (isShovelUp()) {
+            return;
+        }
+        setShovelUp();
+        shovelServo.setPosition(targetShovelPos);
+    }
+
     public void update() {
         // 球道保护：只在"吸球"（setEat）且球道已满时强制停吸。
         // 供料（setGiveBall）与反向吐球（setOutput）不受限，

@@ -70,10 +70,46 @@ public class ChassisGeometry {
      */
     public static Pose2d centerPoseFromIntakeTarget(double intakeX, double intakeY,
                                                     double currentCx, double currentCy) {
-        double heading = Math.atan2(intakeY - currentCy, intakeX - currentCx);
-        double l = HypParams.chassisHalfLengthIn;
-        double cx = intakeX - l * Math.cos(heading);
-        double cy = intakeY - l * Math.sin(heading);
+        return centerPoseFromFrontTarget(intakeX, intakeY, currentCx, currentCy,
+                HypParams.chassisHalfLengthIn);
+    }
+
+    /**
+     * 由「铲尖目标点」反推底盘中心位姿：机器前端取<b>放下铲子的最前端</b>。
+     *
+     * <p>中心到铲尖的距离为 {@link HypParams#shovelDownHalfLengthIn()}，
+     * 用于「移动到取球点」类动作，使铲尖（而不是底盘前端）对准取球点。
+     * 其余动作仍应使用 {@link #centerPoseFromIntakeTarget} 或
+     * {@link #frontMidpointFromCenter}（按底盘半长计算）。
+     *
+     * @param shovelX   铲尖目标点 x（英寸）
+     * @param shovelY   铲尖目标点 y（英寸）
+     * @param currentCx 当前底盘中心 x（用于确定逼近航向）
+     * @param currentCy 当前底盘中心 y
+     * @return 目标底盘中心位姿（位置 + 朝向）
+     */
+    public static Pose2d centerPoseFromShovelFrontTarget(double shovelX, double shovelY,
+                                                         double currentCx, double currentCy) {
+        return centerPoseFromFrontTarget(shovelX, shovelY, currentCx, currentCy,
+                HypParams.shovelDownHalfLengthIn());
+    }
+
+    /**
+     * 通用版：由「前端目标点」反推底盘中心位姿，前端距离由调用方指定。
+     *
+     * @param frontX        前端目标点 x（英寸）
+     * @param frontY        前端目标点 y（英寸）
+     * @param currentCx     当前底盘中心 x（用于确定逼近航向）
+     * @param currentCy     当前底盘中心 y
+     * @param frontHalfDistance 底盘中心到前端基准点的距离（英寸）
+     * @return 目标底盘中心位姿（位置 + 朝向）
+     */
+    public static Pose2d centerPoseFromFrontTarget(double frontX, double frontY,
+                                                   double currentCx, double currentCy,
+                                                   double frontHalfDistance) {
+        double heading = Math.atan2(frontY - currentCy, frontX - currentCx);
+        double cx = frontX - frontHalfDistance * Math.cos(heading);
+        double cy = frontY - frontHalfDistance * Math.sin(heading);
         return new Pose2d(cx, cy, heading);
     }
 
