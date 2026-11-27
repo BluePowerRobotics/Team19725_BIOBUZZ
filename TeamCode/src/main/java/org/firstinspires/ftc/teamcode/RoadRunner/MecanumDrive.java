@@ -80,11 +80,11 @@ public final class MecanumDrive {
         // 驱动模型参数
         public double inPerTick = 0.001999;
         public double lateralInPerTick = inPerTick;
-        public double trackWidthTicks = 5765.723859478465;
+        public double trackWidthTicks = 5769.302607716144;
 
         // 电机前馈参数（tick 单位）
-        public double kS = 1.2019792244145228;
-        public double kV = 0.00035261972751626935666666666666667;
+        public double kS = 1.1492249729462065;
+        public double kV = 0.0003562855020852027;
         public double kA = 0.00007;
 
         // 路径规划参数（英寸单位）
