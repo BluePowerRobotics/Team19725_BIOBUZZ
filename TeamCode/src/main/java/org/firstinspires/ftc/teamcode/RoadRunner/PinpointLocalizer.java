@@ -23,8 +23,8 @@ public final class PinpointLocalizer implements Localizer {
      * Pinpoint 定位器的参数配置类
      */
     public static class Params {
-        public double parYTicks = 2460; // 平行编码器的 y 位置（tick 单位）
-        public double perpXTicks = -1970; // 垂直编码器的 x 位置（tick 单位）
+        public double parYTicks = 2474.23161186906; // 平行编码器的 y 位置（tick 单位）
+        public double perpXTicks = -1957.405971257366; // 垂直编码器的 x 位置（tick 单位）
     }
 
     /**
