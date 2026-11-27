@@ -1,4 +1,4 @@
-package org.firstinspires.ftc.teamcode.Auto.AutoActions;
+package org.firstinspires.ftc.teamcode.Auto.AutoFullFeatured.AutoActions;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -92,8 +92,15 @@ public class HiveRouteActionsTest {
             GoToOtherShootAreaViaHiveAction action =
                     new GoToOtherShootAreaViaHiveAction(TeamColor.RED, HypParams.RedAudienceUp);
             assertTrue(action.run(new TelemetryPacket()));
+
+            // 行驶段由 ShootAreaApproachAction 按三等分拆成多段：
+            // 每段结束时返回 true，最后一段结束时返回 false
             when(m.trajectoryAction.run(any(TelemetryPacket.class))).thenReturn(false);
-            assertFalse(action.run(new TelemetryPacket()));
+            boolean running = true;
+            for (int i = 0; i < 10 && running; i++) {
+                running = action.run(new TelemetryPacket());
+            }
+            assertFalse("全部行驶段结束后应返回 false", running);
         }
     }
 }

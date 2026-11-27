@@ -1,4 +1,4 @@
-package org.firstinspires.ftc.teamcode.Auto.AutoActions;
+package org.firstinspires.ftc.teamcode.Auto.AutoFullFeatured.AutoActions;
 
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
@@ -25,19 +25,23 @@ public class GoToShootAreaNearestVerticesActionTest {
     }
 
     @Test
-    public void run_delegatesToSingleTrajectory() {
+    public void run_delegatesToTrajectory() {
         Pose2d start = new Pose2d(81, -12, 0);
         try (MockRobot m = new MockRobot(start)) {
             when(m.trajectoryAction.run(any(TelemetryPacket.class))).thenReturn(true);
             GoToShootAreaNearestVerticesAction action =
                     new GoToShootAreaNearestVerticesAction(TeamColor.RED, HypParams.RedAudienceUp);
 
-            // 单段连续轨迹：运行中返回 true
+            // 行驶段由 ShootAreaApproachAction 按三等分拆成多段：运行中返回 true
             assertTrue(action.run(new TelemetryPacket()));
 
-            // 轨迹结束后返回 false（无第二段中途停顿）
+            // 全部行驶段结束后返回 false
             when(m.trajectoryAction.run(any(TelemetryPacket.class))).thenReturn(false);
-            assertFalse(action.run(new TelemetryPacket()));
+            boolean running = true;
+            for (int i = 0; i < 10 && running; i++) {
+                running = action.run(new TelemetryPacket());
+            }
+            assertFalse("全部行驶段结束后应返回 false", running);
         }
     }
 }

@@ -120,6 +120,9 @@ public class ChassisTesterRed extends LinearOpMode {
             telemetry.addData("Vx (in/s)", "%.2f", RobotPosition.getInstance().getVx());
             telemetry.addData("Vy (in/s)", "%.2f", RobotPosition.getInstance().getVy());
             telemetry.addData("Omega (deg/s)", "%.2f", Math.toDegrees(RobotPosition.getInstance().getOmega()));
+            // 纯里程计位姿（未经 EKF/视觉融合）：用于区分「Pinpoint 自身绕圈」与「速度融合链路绕圈」
+            telemetry.addData("Pinpoint pose",
+                    formatPose(RobotPosition.getInstance().getFusionLocalizer().getOdom().getPose()));
             telemetry.addData("MT1 usable", mt1Usable);
 
             // ---- 遥测：RobotPosition 的 HIVE 状态跟踪 ----
@@ -166,6 +169,7 @@ public class ChassisTesterRed extends LinearOpMode {
         }
 
         chassis.stop();
+        chassis.update(0, 0, 0);
     }
 
     // ==================== 视觉校准 ====================
@@ -191,6 +195,7 @@ public class ChassisTesterRed extends LinearOpMode {
 
         while (opModeIsActive()) {
             chassis.stop();
+            chassis.update(0, 0, 0);
             RobotPosition.getInstance().update();
 
             Pose2d pose = mt1.getPose();

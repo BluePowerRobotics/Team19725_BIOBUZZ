@@ -27,21 +27,21 @@ public class HypParams {
      * todo:红队初始姿态（单位：英寸，弧度）
      * 包含初始位置(x, y)和初始朝向(theta)
      */
-    public static Pose2d startPoseRed = new Pose2d(-41.3, 55,0);
+    public static Pose2d startPoseRed = new Pose2d(-41.3, -55,0);
 
     /**
      * todo:蓝队初始姿态（单位：英寸，弧度）
      * 包含初始位置(x, y)和初始朝向(theta)
      */
-    public static Pose2d startPoseBlue = new Pose2d(-41.3, -55, 0);
+    public static Pose2d startPoseBlue = new Pose2d(-41.3, 55, 0);
     /**
      * todo:蓝队自动停车姿态（单位：英寸，弧度）
      */
-    public static Pose2d StopPoseBlue = new Pose2d(0, -24, Math.PI);
+    public static Pose2d StopPoseBlue = new Pose2d(0, 24, Math.PI);
     /**
      * todo:红队自动停车姿态（单位：英寸，弧度）
      */
-    public static Pose2d StopPoseRed = new Pose2d(0, 24, Math.PI);
+    public static Pose2d StopPoseRed = new Pose2d(0, -24, Math.PI);
     /**
      * 红队首个自动发射区域（单位：英寸，凸多边形顶点）。
      * 顶点：(24,-12)、(48,-30)、(48,-3)、(72,-30)、(72,-3)。
@@ -94,6 +94,26 @@ public class HypParams {
     public static double chassisHalfLengthIn = 9.0;
 
     /**
+     * 铲子放下后，铲尖超出「底盘最前端中点」的距离（英寸）。
+     *
+     * <p>前往取球点的动作以<b>放下铲子的最前端</b>作为机器前端基准：
+     * 中心到铲尖的距离 = {@link #chassisHalfLengthIn} + 本值。其余动作（停靠、发射区域、
+     * 外接矩形等）仍按 {@link #chassisHalfLengthIn} 计算，不受本值影响。
+     *
+     * todo: 实机测量标定
+     */
+    public static double shovelDownExtraIn = 4.0;
+
+    /**
+     * 铲子放下时，底盘中心到铲尖的距离（英寸）。
+     *
+     * @return {@link #chassisHalfLengthIn} + {@link #shovelDownExtraIn}
+     */
+    public static double shovelDownHalfLengthIn() {
+        return chassisHalfLengthIn + shovelDownExtraIn;
+    }
+
+    /**
      * 第一个取球点（intake 目标点，单位：英寸）。
      */
     public static Vector2D EatPoint1 = new Vector2D(24, -72);
@@ -101,6 +121,27 @@ public class HypParams {
      * 第二个取球点（intake 目标点，单位：英寸）。
      */
     public static Vector2D EatPoint2 = new Vector2D(-72, -24);
+
+    /**
+     * 地面吸球路线起点（底盘中心位姿，红队）：到达该点后开始「边前进边吸球」。
+     * todo: 实机标定
+     */
+    public static Pose2d GroundSweepStartRed = new Pose2d(36, -48, Math.PI);
+    /**
+     * 地面吸球路线终点（底盘中心位姿，红队）。
+     * todo: 实机标定
+     */
+    public static Pose2d GroundSweepEndRed = new Pose2d(-36, -48, Math.PI);
+    /**
+     * 地面吸球路线起点（底盘中心位姿，蓝队）：红队起点的中心对称 (x,y)->(-x,-y)。
+     * todo: 实机标定
+     */
+    public static Pose2d GroundSweepStartBlue = new Pose2d(-36, 48, 0);
+    /**
+     * 地面吸球路线终点（底盘中心位姿，蓝队）：红队终点的中心对称 (x,y)->(-x,-y)。
+     * todo: 实机标定
+     */
+    public static Pose2d GroundSweepEndBlue = new Pose2d(36, 48, 0);
 
     /**
      * 底盘半宽（英寸）：底盘中心到左右侧中点的距离。

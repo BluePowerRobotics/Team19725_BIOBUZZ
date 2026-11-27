@@ -24,7 +24,7 @@ public class SweeperTester extends LinearOpMode {
             if (gamepad1.aWasPressed()) {
                 sweeper.setEat();
             } else if (gamepad1.bWasPressed()) {
-                sweeper.setGiveArtifact();
+                sweeper.setGiveBall();
             } else if (gamepad1.yWasPressed()) {
                 sweeper.setOutput();
             } else if (gamepad1.xWasPressed()) {

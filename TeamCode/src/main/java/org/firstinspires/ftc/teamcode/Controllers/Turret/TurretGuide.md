@@ -135,12 +135,13 @@ BIG_PARAMS.pitchModels = new PitchModel[]{
 选择规则（[selectPitchModel](file:///F:/github/BIOBUZZ/TeamCode/src/main/java/org/firstinspires/ftc/teamcode/Controllers/Turret/Shooter.java#L388-L434)，三步）：
 
 1. **优先**：所有 `covers(d)`（`minRange ≤ d ≤ maxRange`）的档位中，取 `speedFor(d)` **转速最小**的一档（射程重叠区避免用高速档空耗）。
-2. **滞回**：若当前已选中的档位虽然不再是"最优"，但射程仍落在 `[minRange − pitchSwitchMargin, maxRange + pitchSwitchMargin]` 内，则**保持原档**（`pitchSwitchMargin = 5.0 in`）。目的是防止射程在档位边界抖动时，俯仰目标与转速目标逐帧跳变——那会不断重置 `pitchSettleTime` 计时与飞轮稳态计数，导致 `isReady()` 永远不成立。
+2. **滞回**：只在「射程**已越出**当前档区间、但还没超出 `pitchSwitchMargin`」时保持原档（`pitchSwitchMargin = 5.0 in`）。区间**内**允许换到所需转速更小的档（2026-11 修正：旧实现把区间内也一并保持，使第 1 步的"取转速最小"在首次选档后基本失效，射程落在两档重叠区时永远不再切换）。目的是防止射程在档位边界抖动时，俯仰目标与转速目标逐帧跳变——那会不断重置 `pitchSettleTime` 计时与飞轮稳态计数，导致 `isReady()` 永远不成立。
 3. **无覆盖**：超出所有档位区间时，取**射程区间距离最近**的一档（距离定义为到最近端点的间隔）。
 
 **契约与陷阱**：
 
-- 表**必须按 `pitchPos` 升序**：`getMinPitch()` / `getMaxPitch()` 直接取 `models[0]` / `models[n-1]` 作为预载的两个安全姿态，未排序时静默给出错误仰角（代码中无断言）。
+- 表**不要求**按 `pitchPos` 排序：`getMinPitch()` / `getMaxPitch()` 取全表最小/最大值（2026-11 修正，旧实现直接取 `models[0]` / `models[n-1]`，排序错误会静默给出错误的预载安全姿态）。
+- 档位的 `pitchPos` 必须落在机械行程 `[pitchMin, pitchMax]` 内（实机为舵机全行程 **0~1**）：`solve()` 会把档位位置钳进该区间，越界填错不会下发到舵机，但**名义档位与真实姿态会不一致**，标定后仍需人工核对。
 - 允许射程区间**重叠**，重叠区按「所需转速最小」选档：占位表里第二档斜率更大，60~70 in 的重叠区会选中第一档（更低仰角），因此"距离越远仰角越高"的直觉在重叠区**不成立**。标定完成后需检查档位选择随距离是否连续。
 - **滞回只锁俯仰，不锁转速模型**：第 2 步保持旧档时，射程可能已越出该档的标定区间（最多 `pitchSwitchMargin = 5 in`）。因此 `solve()` 里查转速模型前会把射程**钳回区间端点**（`clampToModelInterval`），即"区间外取边界值"，**不做线性外推**——外推会得到未经标定的转速，偏大时还会顶到 `speedMax`，使 `isSettled()` 永不成立、该档位附近发不出去。
 
@@ -433,8 +434,9 @@ onTarget   = 连续 onTargetFrames 帧 positionOk && rateOk;
 | 参数 | 默认 | 作用 |
 | --- | --- | --- |
 | `speedDeadband` | 20 tick/s | 目标差小于该值不刷新目标，避免位姿噪声反复清零稳态计数（≈0.6 in 射程，是"行驶中打不了"的直接原因，见 §4.3） |
-| `pitchModels` | 3 个占位档 | 仰角档位表；**必须按 `pitchPos` 升序**，空表 ⇒ 永不自动发射 |
-| `pitchSwitchMargin` | 5 in | 档位切换滞回裕量，防止射程在边界抖动导致俯仰目标逐帧跳变 |
+| `pitchModels` | 3 个占位档 | 仰角档位表；**不要求排序**（min/max 取全表），`pitchPos` 须在 `[pitchMin, pitchMax]` 内，空表 ⇒ 永不自动发射 |
+| `pitchMin` / `pitchMax` | 0.0 / 1.0 | 机械行程（实机即舵机全行程 0~1）：手动摇杆映射到该区间，自动档位位置也被钳进该区间 |
+| `pitchSwitchMargin` | 5 in | 档位切换滞回裕量：只在射程越出档区间后仍在该裕量内时保持原档 |
 | `preSpeedMax` | 2000 tick/s | 预载转速上限；解算超过它就退化为「该转速 + 最高仰角」 |
 | `pitchSettleTime` | 0.25 s | 俯仰目标变更后的近似到位时间（舵机无位置反馈） |
 | `triggerOnPos` / `triggerOffPos` | 1.0 / 0.0 | 扳机释放 / 关闭的舵机位置 |
@@ -616,15 +618,17 @@ OpMode：[TeleOpMainBase](file:///F:/github/BIOBUZZ/TeamCode/src/main/java/org/f
 | **Y** | 切换预载（`preload`） |
 | **LT / RT（按住）** | 手动选择炮台球门：红方 LT = AudienceDown / RT = AudienceUp，蓝方相反；仅在本帧 MT1 无有效（非 MIDDLE）读数时生效，并保持到下一次有效读数 |
 | **X** | 循环手动模式 `RELATIVE → ABSOLUTE → GOAL` |
-| **A（按住）** | 自动模式：允许发射（松开即取消，扳机立即关闭） |
-| RB（按住） | **两个扳机共用的唯一释放键**：自动模式下强制释放大球与小球（无视就绪与平转）；手动模式下同时释放两个扳机 |
-| 左摇杆 X | 手动平转角速度（满偏 = ±120°/s） |
-| 左摇杆 Y | 小球俯仰（`axisToRange` 映射到 `pitchMin..pitchMax`） |
-| 右摇杆 Y | 大球俯仰 |
+| **A（按住）** | **发射键**（自动 / 手动都是它，需已武装）：自动模式 = 允许发射（松开即取消，扳机立即关闭）；手动模式 = 同时释放两个扳机。**切模式后必须先松开 A 再按下**（见下） |
+| RB（按住） | **仅自动模式**：强制释放大球与小球（无视就绪与平转，也不受武装限制） |
+| 左摇杆 X | 手动平转角速度（满偏 = ±120°/s，回中停在当前角度） |
+| 左摇杆 Y | 小球俯仰**速率**（`pitchRatePerSec = 0.8 行程/s`，回中即停在当前角度） |
+| 右摇杆 Y | 大球俯仰**速率**（同上） |
 | 十字键 上/下 | 大球目标转速 ±100 tick/s |
 | 十字键 左/右 | 小球目标转速 ±100 tick/s |
 
-自动模式调用 `turret.update(allowFire, preload, forceBig, forceSmall)`；手动模式调用 `turret.updateManual(...)`。两种模式都把 GP2.RB 同时传给大球与小球两个参数。
+自动模式调用 `turret.update(allowFire, preload, forceBig, forceSmall)`；手动模式调用 `turret.updateManual(...)`。自动模式的 `forceBig/forceSmall` 都来自 GP2.RB；手动模式的扳机来自 GP2.A。
+
+**扳机武装（A 键）**：`TeleOpMainBase.fireArmed` 在**启动时**与**每次 B 切模式后**清零，只有 A 松开过一次才重新置位。原因：手动路径的扳机不带就绪门控（`Turret.updateManual` 直接 `setTrigger`），若切换瞬间 A 仍按住，会在飞轮未转起来、俯仰未到位时立刻出扳机（空打/卡球）。遥测 `Fire armed (A re-press)` 显示当前状态。
 
 **发射结束清空球道计数**：自动/手动两条路径都在扳机 `true → false` 下降沿调用 `RobotPosition.resetBallCount()`；自动路径用 `TriggerGate.justReleased()`（与扳机决策同一真值来源），手动路径用按键边沿。`BallCounter.reset()` 在光路仍被遮挡时把计数置 1 而不是 0，避免该球永久漏计。
 
@@ -704,7 +708,7 @@ OpMode：[TeleOpMainBase](file:///F:/github/BIOBUZZ/TeamCode/src/main/java/org/f
 | 5 | 自动模式每帧对扳机写两次（先 `update(..., false)`，后 `setTrigger(true)`） | `Shooter.updateMechanisms` + `Turret.update` 末尾统一写一次 | **已修**：机构更新与扳机分离，每帧只写一次；末次生效语义不变 |
 | 6 | `Turret.measuredYaw()` 直接读电机编码器，绕过"硬件只在 update 内采样"的约定 | `YawController.getMeasuredYaw()` | **已修**：读数下沉到 `YawController`，并保留独立于 `getCurrentYaw()`（后者读缓存，首帧为 0，不能用于手动首帧初始化） |
 | 7 | `Vector2D.normalizeAngle` 用 while 循环逐次 ±2π，末尾还有一次 `fromPolar(...).getRadian()` 冗余往返 | `Vector2D.java:178-190` | 当前所有调用点输入有界，暂不触发；若把未限幅的积分量传进来，极小概率长时间空转 |
-| 8 | `getMinPitch()` / `getMaxPitch()` 依赖档位表按 `pitchPos` 升序，无校验 | `Shooter.java:432-449` | 表未排序时静默给出错误的预载安全姿态 |
+| 8 | ~~`getMinPitch()` / `getMaxPitch()` 依赖档位表按 `pitchPos` 升序，无校验~~ | `Shooter.java`（`getMinPitch` / `getMaxPitch` / `clampPitch`） | **已修（2026-11）**：取全表最小/最大值，不再依赖顺序；`pitchPos` 统一钳进 `[pitchMin, pitchMax]`（机械行程 0~1），越界填错不再下发到舵机 |
 | 9 | TeleOp 球门有三条入口：MT1 非 MIDDLE 观测、GP2.LT/RT 手动设置、GP1.LT/RT 车头独立选门 | `RobotPosition.java`、`TeleOpMainBase.java` | 前两者写入同一个共享球门（MT1 本帧观测优先，否则保持含手动输入）；GP1 只在按住扳机时改车头目标，不写回共享球门，故车头/炮口可暂时指向不同门（有意设计） |
 
 ### 本次文档同步的改动

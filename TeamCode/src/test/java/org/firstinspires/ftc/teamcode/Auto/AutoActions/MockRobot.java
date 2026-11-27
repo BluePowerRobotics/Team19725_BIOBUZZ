@@ -1,4 +1,4 @@
-package org.firstinspires.ftc.teamcode.Auto.AutoActions;
+package org.firstinspires.ftc.teamcode.Auto.AutoFullFeatured.AutoActions;
 
 import com.acmerobotics.roadrunner.Action;
 import com.acmerobotics.roadrunner.Pose2d;
@@ -30,6 +30,9 @@ import static org.mockito.Mockito.when;
  */
 public class MockRobot implements AutoCloseable {
 
+    /** 哨兵球门位姿：仅 x 符号参与「抬升侧」判定，故取场地中心即可 */
+    private static final Pose2d GOAL_POSE = new Pose2d(0, 0, 0);
+
     public final MockedStatic<RobotPosition> robotStatic;
     public final RobotPosition robotPosition;
     public final MecanumDrive drive;
@@ -48,7 +51,12 @@ public class MockRobot implements AutoCloseable {
             robotStatic.when(RobotPosition::getInstance).thenReturn(robotPosition);
             when(robotPosition.getDrive()).thenReturn(drive);
             when(robotPosition.getPose2d()).thenReturn(startPose);
+            // 「前往发射区域」类 Action 会在构造/运行期读取实时球门（判定抬升侧与航向），
+            // 未打桩时返回 null 会抛 NullPointerException
+            when(robotPosition.getGoalPose()).thenReturn(GOAL_POSE);
             when(drive.actionBuilder(any(Pose2d.class))).thenReturn(builder);
+            // HiveRouteAction 使用带首尾速度的重载，两个重载都要打桩，否则返回 null
+            when(drive.actionBuilder(any(Pose2d.class), anyDouble())).thenReturn(builder);
             when(builder.strafeToLinearHeading(any(), anyDouble())).thenReturn(builder);
             when(builder.build()).thenReturn(trajectoryAction);
         } catch (RuntimeException e) {

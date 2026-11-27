@@ -148,6 +148,29 @@ public final class HiveRoutePlanner {
         return ChassisGeometry.footprintPolygon(pose).IntersectsSegment(line[0], line[1]);
     }
 
+    // ==================== Hive 面向侧（供「行进中面向 Hive」检查点使用） ====================
+
+    /**
+     * 位于 {@code (x, y)}、车头朝向<b>最近一次有效判定的 Hive 一侧</b>的位姿。
+     *
+     * <p>Hive 矩形沿 x 方向有两个面：{@code +x} 面对应 AudienceUp 侧、{@code -x} 面对应
+     * AudienceDown 侧。<b>以 AudienceUp 侧为正例</b>：{@code audienceUpSide = true}
+     * 面向 AudienceUp 侧（{@code +x} 面），否则面向 AudienceDown 侧（{@code -x} 面）；
+     * 瞄准点取该面上<b>距机器人最近</b>的点（把机器人 y 夹到该面的 y 区间内）。
+     *
+     * @param audienceUpSide 最近一次有效判定是否为 AudienceUp 侧（为 true 时优先面向 Up 侧）
+     */
+    public static Pose2d hiveSideFacingPose(TeamColor team, double x, double y, boolean audienceUpSide) {
+        double faceX = audienceUpSide ? hiveRectHalfWidthX(team) : -hiveRectHalfWidthX(team);
+        double sign = ySign(team);
+        double outerY = sign * hiveRectOuterAbsY(team);
+        double innerY = sign * hiveRectInnerAbsY(team);
+        double lo = Math.min(outerY, innerY);
+        double hi = Math.max(outerY, innerY);
+        double aimY = Math.max(lo, Math.min(hi, y));
+        return new Pose2d(x, y, Math.atan2(aimY - y, faceX - x));
+    }
+
     /**
      * 生成中转途经点列表：按顺序依次为各中转点，最后一项为 {@code finalPose}。
      *

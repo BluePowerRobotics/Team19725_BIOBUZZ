@@ -16,6 +16,7 @@ import org.firstinspires.ftc.teamcode.Controllers.Turret.Turret;
 import org.firstinspires.ftc.teamcode.Parameter.HypParams;
 import org.firstinspires.ftc.teamcode.Parameter.TeamColor;
 import org.firstinspires.ftc.teamcode.Processors.RobotPosition.RobotPosition;
+import org.firstinspires.ftc.teamcode.Processors.VisionLocalizer.MT1Localizer;
 import org.firstinspires.ftc.teamcode.utility.ActionRunner;
 import org.firstinspires.ftc.teamcode.utility.Algebra.LinearStatistics;
 import org.firstinspires.ftc.teamcode.utility.Vector2D;
@@ -40,22 +41,29 @@ import java.util.Locale;
  *   <li>左摇杆 → 底盘平移；右摇杆 X → 底盘旋转</li>
  *   <li>LB / RB → 集球器吃球 / 输出</li>
  *   <li>A / B → 把最近一发「大球 / 小球」标为命中（未标记的样本不参与回归）</li>
- *   <li>X → 位姿重置到本方的 {@link HypParams#ResetPoseRed} / {@link HypParams#ResetPoseBlue}</li>
+ *   <li>X → 重新做 {@link #CALIB_DURATION_MS} 毫秒视觉均值校准并重置定位
+ *       （与 {@code FullTest} 相同；无有效视觉帧时保持原位姿，不退回 ResetPose）</li>
  *   <li>Y → 撤销最近一条样本（两个发射器按时间取最新）</li>
  * </ul>
  *
  * <p><b>副控（gamepad2）</b>
  * <ul>
- *   <li>左摇杆 X → 平转<b>角速度</b>（摇杆回中即停在当前角度），与底盘的速度控制同构</li>
- *   <li>X → 循环平转模式 RELATIVE → ABSOLUTE → GOAL（相对朝向 / 绝对朝向 / 与球门夹角）</li>
  *   <li>方向键 上/下 → 大球目标转速 ±{@link #speedStep}；左/右 → 小球目标转速 ±{@link #speedStep}</li>
- *   <li>RB / LB → 大球 / 小球扳机（按住释放；每次上升沿记一发）</li>
+ *   <li>A（按住） → 同时释放大球与小球扳机（启动后需先松开一次 A 才允许发射）；
+ *       每次上升沿两个发射器各记一发</li>
  * </ul>
+ * 炮台平转角速度<b>恒为 0</b>（不接受手柄控制，平转角保持在上电/切模式时的位置）。
+ * 送球联动与 {@code FullTest} 相同：扳机释放期间集球器强制 {@code setGiveBall()}，
+ * 忽略一操的吃球/吐出；扳机复位后恢复 GP1 LB 吃球 &gt; RB 吐出 &gt; 均未按则停转。
  * 仰角舵机位置由 Dashboard 的 {@link #targetPitchBig} / {@link #targetPitchSmall} 直接设置
  * （与 {@code TurretManualTest} 一致，手柄不控制仰角）；标定时请把它们设成现有档位的
  * {@code pitchPos}，否则该发样本匹配不到档位、不参与回归。
  *
- * <p><b>现场流程</b>：Dashboard → Logging → Start → 打点 → Stop → 导出 CSV；
+ * <p><b>启动流程</b>：{@code waitForStart()} 之后先执行一次与 {@code FullTest} 完全相同的
+ * 强制视觉均值校准——按 A 触发，采集 {@link #CALIB_DURATION_MS} 毫秒的 MT1 有效位姿并
+ * 用均值覆盖当前定位；采样窗口内没有有效帧时提示重按 A，不进入打点主循环。
+ *
+ * <p><b>现场流程</b>：Dashboard → Logging → Start → 按 A 做视觉校准 → 打点 → Stop → 导出 CSV；
  * 同时检查 Driver Station 上的 {@code >>>} 建议行，按格式抄回 {@code Shooter} 静态块。
  */
 @Config
@@ -72,13 +80,13 @@ public class AimModelCalibrationTuner extends LinearOpMode {
     /** true = 只接受发射瞬间飞轮已稳定（{@code Shooter.isReady()}）的样本 */
     public static boolean requireSettled = true;
 
-    /** 手动平转角速度上限（度/秒）；摇杆满偏对应此速率，回中即停止 */
-    public static double maxYawRateDegPerSec = 120.0;
-
     /** 大球仰角舵机目标位置 [0,1]，由 Dashboard 直接设置 */
     public static double targetPitchBig = 0.5;
     /** 小球仰角舵机目标位置 [0,1]，由 Dashboard 直接设置 */
     public static double targetPitchSmall = 0.5;
+
+    /** 视觉校准采样时长（毫秒），GP1.X 触发 */
+    public static int CALIB_DURATION_MS = 2000;
 
     /** 俯仰舵机位置匹配到现有档位的容差（舵机单位） */
     public static double pitchMatchTol = 0.02;
@@ -118,14 +126,15 @@ public class AimModelCalibrationTuner extends LinearOpMode {
     private boolean lastB = false;
     private boolean lastX = false;
     private boolean lastY = false;
-    private boolean lastX2 = false;
+    /** 扳机"已武装"：启动后必须先松开 A 再按下，才允许发射（原 GP2.X 平转模式切换已移除） */
+    private boolean fireArmed = false;
 
     @Override
     public void runOpMode() {
         telemetry = new MultipleTelemetry(telemetry, FtcDashboard.getInstance().getTelemetry());
 
         ActionRunner actionRunner = new ActionRunner();
-        // 初始位姿与 X 重同步使用同一个参照点：上电时请把车放在 ResetPose 位置
+        // 初始位姿是视觉校准失败/未采到有效帧时的回退值：上电时请把车放在 ResetPose 位置
         chassis = new Chassis(hardwareMap, teamColor, actionRunner, telemetry, resetPose());
         sweeper = new Sweeper(hardwareMap, telemetry);
         turret = new Turret(hardwareMap, telemetry);
@@ -134,33 +143,29 @@ public class AimModelCalibrationTuner extends LinearOpMode {
         turret.stop();
 
         telemetry.addLine("AimModelCalibration: team=" + teamColor);
-        telemetry.addLine("GP1: drive | LB/RB eat/output | A/B mark HIT big/small | X reset pose | Y undo");
-        telemetry.addLine("GP2: LstickX yaw RATE | X cycle yaw mode | Dpad UD big speed | Dpad LR small speed | RB/LB trigger");
-        telemetry.addLine("Pitch is set on Dashboard (targetPitchBig/Small), not by sticks");
+        telemetry.addLine("A (after start): forced 2 s vision calibration");
+        telemetry.addLine("GP1: drive | LB/RB eat/output | A/B mark HIT big/small | X vision recalibrate | Y undo");
+        telemetry.addLine("GP2: Dpad UD big speed | Dpad LR small speed | A trigger (forces feed)");
+        telemetry.addLine("Turret yaw rate fixed at 0; pitch set on Dashboard (targetPitchBig/Small)");
         telemetry.update();
 
         waitForStart();
+
+        // ==== 强制视觉均值校准（与 FullTest 启动逻辑相同）====
+        Pose2d calibratedPose = calibrateViaVision();
+        RobotPosition.getInstance().ResetPoseTo(calibratedPose);
+
+        // 校准结束时若 A 仍被按住，需等其松开，避免主循环的 A 上升沿误标「命中」
+        while (opModeIsActive() && gamepad1.a) {
+            idle();
+        }
 
         while (opModeIsActive()) {
             // ---- 定位（单帧推进点）----
             Pose2d pose = RobotPosition.getInstance().update();
 
-            // ---- 底盘与集球器 ----
+            // ---- 底盘 ----
             chassis.update(gamepad1.left_stick_x, gamepad1.left_stick_y, gamepad1.right_stick_x);
-            if (gamepad1.left_bumper) {
-                sweeper.setEat();
-            } else if (gamepad1.right_bumper) {
-                sweeper.setOutput();
-            } else {
-                sweeper.setStop();
-            }
-
-            // ---- 平转角速度：摇杆回中即停在当前角度（模式由 GP2.X 循环切换）----
-            double yawRate = -gamepad2.left_stick_x * Math.toRadians(maxYawRateDegPerSec);
-            if (gamepad2.x && !lastX2) {
-                turret.cycleManualYawMode();
-            }
-            lastX2 = gamepad2.x;
 
             // ---- 飞轮目标转速步进 ----
             int v = vertical.step(gamepad2.dpad_down, gamepad2.dpad_up, repeatPeriodMs);
@@ -170,11 +175,25 @@ public class AimModelCalibrationTuner extends LinearOpMode {
             targetSpeedSmall = clamp(targetSpeedSmall + h * speedStep,
                     0, Shooter.SMALL_PARAMS.flywheel.speedMax);
 
-            // ---- 下发炮台目标 ----
-            boolean triggerBig = gamepad2.right_bumper;
-            boolean triggerSmall = gamepad2.left_bumper;
-            turret.updateManual(yawRate, targetPitchBig, targetPitchSmall,
+            // ---- 下发炮台目标：A 松开过一次才武装，按住 A 同时释放两个扳机（与 FullTest 一致）----
+            if (!gamepad2.a) {
+                fireArmed = true;
+            }
+            boolean triggerBig = gamepad2.a && fireArmed;
+            boolean triggerSmall = triggerBig;
+            turret.updateManual(0.0, targetPitchBig, targetPitchSmall,
                     targetSpeedBig, targetSpeedSmall, triggerBig, triggerSmall);
+
+            // ---- 送球联动：扳机释放 → 强制供球，其余时间由 GP1 LB/RB 控制（与 FullTest 一致）----
+            if (triggerBig) {
+                sweeper.setGiveBall();
+            } else if (gamepad1.left_bumper) {
+                sweeper.setEat();
+            } else if (gamepad1.right_bumper) {
+                sweeper.setOutput();
+            } else {
+                sweeper.setStop();
+            }
             sweeper.update();
 
             // ---- 扳机上升沿：记一发 ----
@@ -187,7 +206,7 @@ public class AimModelCalibrationTuner extends LinearOpMode {
             lastTriggerBig = triggerBig;
             lastTriggerSmall = triggerSmall;
 
-            // ---- 命中标记 / 撤销 / 位姿重同步 ----
+            // ---- 命中标记 / 撤销 / 视觉重同步 ----
             if (gamepad1.a && !lastA) {
                 markLastHit(shotsBig);
             }
@@ -198,7 +217,12 @@ public class AimModelCalibrationTuner extends LinearOpMode {
                 undoLatest();
             }
             if (gamepad1.x && !lastX) {
-                RobotPosition.getInstance().ResetPoseTo(resetPose());
+                // 与 FullTest 相同：采集 CALIB_DURATION_MS 的视觉均值覆盖当前定位；
+                // 无有效视觉帧时保持原位姿（不退回 ResetPose）
+                Pose2d calibrated = sampleVisionMean();
+                if (calibrated != null) {
+                    RobotPosition.getInstance().ResetPoseTo(calibrated);
+                }
             }
             lastA = gamepad1.a;
             lastB = gamepad1.b;
@@ -225,6 +249,7 @@ public class AimModelCalibrationTuner extends LinearOpMode {
 
         // ---- 结束：再算一次最终建议（不再访问硬件）----
         chassis.stop();
+        chassis.update(0, 0, 0);
         turret.stop();
         BandFit[] finalBig = fitBands(shotsBig, Shooter.BIG_PARAMS);
         BandFit[] finalSmall = fitBands(shotsSmall, Shooter.SMALL_PARAMS);
@@ -569,6 +594,129 @@ public class AimModelCalibrationTuner extends LinearOpMode {
             }
         }
         return n;
+    }
+
+    // ==================== 视觉校准（与 FullTest 相同） ====================
+
+    /**
+     * 启动阶段的强制视觉均值校准：等待按 A 后采集 {@link #CALIB_DURATION_MS} 毫秒内的 MT1
+     * 均值位姿（位置算术平均，朝向圆周平均）。
+     *
+     * <p>采样窗口内没有任何有效帧时提示重按 A，不会退回 {@link #resetPose()}。
+     * 校准期间底盘保持静止，但仍每帧调用 {@link RobotPosition#update()}，
+     * 由融合定位器内部推进 Pinpoint 并拉取最新 MT1 结果。
+     */
+    private Pose2d calibrateViaVision() {
+        MT1Localizer mt1 = RobotPosition.getInstance().getFusionLocalizer().getMT1();
+        List<Pose2d> samples = new ArrayList<>();
+        boolean prevA = false;
+
+        while (opModeIsActive()) {
+            chassis.stop();
+            chassis.update(0, 0, 0);
+            RobotPosition.getInstance().update();
+
+            boolean usable = mt1.isValid() && mt1.isHiveEstimated();
+            addCalibrationTelemetry(mt1, usable ? mt1.getPose() : null, samples, -1);
+
+            boolean a = gamepad1.a;
+            if (a && !prevA) {
+                Pose2d mean = sampleVisionMean();
+                if (mean != null) {
+                    telemetry.addData("Calibrated start pose", formatPose(mean));
+                    telemetry.update();
+                    return mean;
+                }
+                telemetry.addLine("No valid samples, press A to retry");
+            }
+            prevA = a;
+            telemetry.update();
+        }
+        // OpMode 被停止时才会执行到这里
+        return resetPose();
+    }
+
+    /**
+     * 立即采集 {@link #CALIB_DURATION_MS} 毫秒的视觉均值位姿（不等待按键）。
+     *
+     * <p>采样期间底盘保持静止，但仍每帧调用 {@link RobotPosition#update()}，由融合定位器
+     * 内部推进 Pinpoint 并拉取最新 MT1 结果。
+     *
+     * @return 位置算术平均 / 朝向圆周平均的位姿；采样窗口内无任何 HIVE 有效帧时返回
+     *         {@code null}（调用方应保持原位姿）
+     */
+    private Pose2d sampleVisionMean() {
+        MT1Localizer mt1 = RobotPosition.getInstance().getFusionLocalizer().getMT1();
+        List<Pose2d> samples = new ArrayList<>();
+        long startMs = System.currentTimeMillis();
+
+        while (opModeIsActive()) {
+            // 采样期间底盘必须静止：持续下发零速并推进里程计
+            chassis.stop();
+            chassis.update(0, 0, 0);
+            RobotPosition.getInstance().update();
+
+            long elapsed = System.currentTimeMillis() - startMs;
+            boolean usable = mt1.isValid() && mt1.isHiveEstimated();
+            if (usable && elapsed < CALIB_DURATION_MS) {
+                samples.add(mt1.getPose());
+            }
+            addCalibrationTelemetry(mt1, usable ? mt1.getPose() : null, samples, elapsed);
+
+            if (elapsed >= CALIB_DURATION_MS) {
+                break;
+            }
+            telemetry.update();
+        }
+        return samples.isEmpty() ? null : computeMeanPose(samples);
+    }
+
+    /**
+     * 校准界面遥测。
+     *
+     * @param usablePose 本帧可用的 MT1 位姿，不可用传 {@code null}
+     * @param elapsedMs  采样已进行的毫秒数；{@code < 0} 表示尚未开始采样
+     */
+    private void addCalibrationTelemetry(MT1Localizer mt1, Pose2d usablePose,
+                                         List<Pose2d> samples, long elapsedMs) {
+        telemetry.addLine("=== Vision Calibration (MT1) ===");
+        if (usablePose != null) {
+            telemetry.addData("Live pose", formatPose(usablePose));
+        } else {
+            telemetry.addLine("No valid pose (need valid + hiveEstimated)");
+        }
+        telemetry.addData("Tag Count", mt1.getTagCount());
+        telemetry.addData("Tag Ids", mt1.getTagIds());
+        telemetry.addData("Ambiguity (m)", "%.4f", mt1.getAmbiguity());
+        telemetry.addData("Hive State", mt1.getHiveState());
+        telemetry.addData("Hive Angle (deg)", "%.2f", Math.toDegrees(mt1.getHiveAngle()));
+        telemetry.addData("Pitch Check Err (deg)", "%.2f", mt1.getHivePitchCheckErrDeg());
+        if (elapsedMs < 0) {
+            telemetry.addLine("Press A to start 2 s sampling");
+        } else {
+            telemetry.addData("Recording", "Active");
+            telemetry.addData("Samples", samples.size());
+            telemetry.addData("Time left (ms)", Math.max(0, CALIB_DURATION_MS - elapsedMs));
+        }
+    }
+
+    /** 位置算术平均，朝向圆周平均。 */
+    private static Pose2d computeMeanPose(List<Pose2d> samples) {
+        double sumX = 0, sumY = 0;
+        double sumSin = 0, sumCos = 0;
+        for (Pose2d p : samples) {
+            sumX += p.position.x;
+            sumY += p.position.y;
+            sumSin += Math.sin(p.heading.toDouble());
+            sumCos += Math.cos(p.heading.toDouble());
+        }
+        return new Pose2d(sumX / samples.size(), sumY / samples.size(), Math.atan2(sumSin, sumCos));
+    }
+
+    private static String formatPose(Pose2d pose) {
+        return String.format(Locale.US, "(%.2f, %.2f, %.1f°)",
+                pose.position.x, pose.position.y,
+                Math.toDegrees(pose.heading.toDouble()));
     }
 
     // ==================== 工具 ====================
