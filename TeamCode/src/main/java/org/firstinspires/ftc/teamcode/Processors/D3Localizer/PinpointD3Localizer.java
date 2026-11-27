@@ -42,7 +42,8 @@ public class PinpointD3Localizer implements Localizer {
      * Pinpoint 定位器的参数配置类
      */
     public static class Params {
-        public double parYTicks = 2460;   // 平行编码器的 y 位置（tick 单位）
+        // 与 PinpointLocalizer 同一约定：平行方向为 REVERSED，故该 offset 取旧调参值的相反数
+        public double parYTicks = -2460;   // 平行编码器的 y 位置（tick 单位）
         public double perpXTicks = -1970; // 垂直编码器的 x 位置（tick 单位）
     }
 
